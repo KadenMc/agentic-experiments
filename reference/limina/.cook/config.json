@@ -1,0 +1,8 @@
+{
+  "agent": "claude",
+  "sandbox": "agent",
+  "steps": {
+    "work": {},
+    "review": {}
+  }
+}

@@ -1,0 +1,64 @@
+[project]
+name = "agentic-experiments"
+version = "0.1.0"
+description = "Git-first, hypothesis-forcing experiment tracking for agent-driven ML research. Vendors Limina as the research harness, uses signac for local execution/run state, and bridges to W&B for remote observability."
+authors = [
+    {name = "Kaden McKeen", email = "mckeenkaden@gmail.com"}
+]
+license = {text = "MIT"}
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "signac (>=2.3.0,<3.0.0)",
+    "python-frontmatter (>=1.1.0,<2.0.0)",
+    "pydantic (>=2.5,<3.0)",
+    "pyyaml (>=6.0,<7.0)",
+    "typer (>=0.12,<1.0)",
+    "rich (>=13.0,<15.0)",
+]
+
+[project.optional-dependencies]
+wandb = ["wandb (>=0.16,<1.0)"]
+
+[project.scripts]
+agentic-experiments = "agentic_experiments.cli:app"
+aex = "agentic_experiments.cli:app"
+
+[project.urls]
+Repository = "https://github.com/kadenmc/agentic-experiments"
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[dependency-groups]
+dev = [
+    "pytest (>=8.0,<9.0)",
+    "pytest-cov (>=5.0,<7.0)",
+    "ruff (>=0.6,<1.0)",
+    "mypy (>=1.11,<2.0)",
+]
+
+[tool.poetry]
+packages = [{include = "agentic_experiments", from = "src"}]
+
+[tool.poetry.dependencies]
+# Mirror of [project.dependencies] so Poetry resolves them from the same source.
+# Poetry 2.x reads PEP 621 deps, but a redundant [tool.poetry.dependencies] is harmless
+# and matches the electricrag pattern.
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["agentic_experiments"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
