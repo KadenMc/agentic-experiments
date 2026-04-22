@@ -168,8 +168,13 @@ def _detect_conda_env_name(python_exe: str | None = None) -> str:
     if env and env != "base":
         return env
     exe = python_exe or sys.executable
-    # Look for .../envs/<name>/... anywhere in the path.
-    parts = Path(exe).parts
+    # Look for .../envs/<name>/... anywhere in the path. Split on both
+    # separators so a Windows-style path parses correctly on Linux (and vice
+    # versa) — `pathlib.Path` uses the host OS's rules and won't split on
+    # the foreign separator.
+    import re
+
+    parts = [p for p in re.split(r"[\\/]", exe) if p]
     for i, part in enumerate(parts):
         if part == "envs" and i + 1 < len(parts):
             candidate = parts[i + 1]
