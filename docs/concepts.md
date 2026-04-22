@@ -1,17 +1,18 @@
 # Concepts
 
-`agentic-experiments` is a **fusion layer**, not a new framework. It vendors
-a fork of [Limina](https://github.com/KadenMc/limina) for the research harness,
-uses [signac](https://signac.readthedocs.io) for local execution/run state,
+`agentic-experiments` is a **fusion layer**, not a new framework. It builds
+on [Limina](https://github.com/KadenMc/limina) for the research-graph
+primitives (H→E→F artifact model, templates, methodology skills), uses
+[signac](https://signac.readthedocs.io) for local execution and run state,
 and bridges to W&B for optional remote observability.
 
 ## Three layers
 
-| Layer | Owner | What lives here | Artifacts |
-|---|---|---|---|
-| **Research harness** | Vendored Limina | `kb/` artifact graph — Hypothesis → Experiment → Finding, plus Literature / Challenge Review / Strategic Review; templates; Claude Code hooks enforcing the H→E→F chain | `kb/research/hypotheses/H###-*.md`, `kb/research/experiments/E###-*.md`, `kb/research/findings/F###-*.md` |
-| **Local execution / run state** | signac | `.runs/.signac/` + one workspace dir per run. Identity via **state point**, mutable metadata in **job document** | `.runs/workspace/<job_id>/` |
-| **Observability mirror** | W&B (optional) | Remote runs grouped deterministically from Limina context | W&B project + group |
+| Layer | What lives here | Artifacts |
+|---|---|---|
+| **Research grammar** | `kb/` artifact graph — Hypothesis → Experiment → Finding, plus Literature / Challenge Review / Strategic Review; artifact templates; Claude Code hooks enforcing the H→E→F chain | `kb/research/hypotheses/H###-*.md`, `kb/research/experiments/E###-*.md`, `kb/research/findings/F###-*.md` |
+| **Local run state** (signac) | `.runs/.signac/` + one workspace dir per run. Identity via **state point**, mutable metadata in **job document** | `.runs/workspace/<job_id>/` |
+| **Observability** (W&B, optional) | Remote runs grouped deterministically from the `(hypothesis, experiment, condition)` slug | W&B project + group |
 
 ## The hermeneutic loop this enables
 
@@ -58,21 +59,27 @@ A *batch* is NOT a Limina artifact. It's a slice over `.runs/` defined by shared
 
 ```
 consumer-repo/
-  kb/                            # from vendored Limina
+  kb/                            # scaffolded by `aexp install`
     ACTIVE.md, DASHBOARD.md
     mission/CHALLENGE.md
     research/{hypotheses,experiments,findings,literature,data}/
     reports/                     # CR + SR
     lessons/
-  templates/                     # Limina artifact templates
-  scripts/                       # vendored Python hooks + kb_* tools
-  .claude/settings.json          # hooks -> python scripts/hooks/*.py
+  templates/                     # H/E/F/L/CR/SR/report artifact templates
+  .claude/
+    settings.json                # hooks -> "<python_exe>" -m aexp.hooks.<name>
+    skills/                      # 4 research-methodology skills
+  .mcp.json                      # `aexp` MCP server, uvx-invoked
   .runs/                         # signac project (configurable at install time)
     .signac/
     workspace/<job_id>/
   .aexp/
-    installed.json               # version + run_store_path + limina_vendor_sha
+    installed.json               # version + run_store_path + python_exe + vendor sha
 ```
+
+Hook scripts and validator code live inside the installed `aexp`
+package — they never land in the consumer repo. Upgrades happen via
+`pip install -U agentic-experiments`.
 
 ## Two validators, two scopes
 
@@ -80,20 +87,23 @@ There are two pieces of validation machinery, and they check different things:
 
 | Validator | Runs when | Scope | Exit code surfaces |
 |---|---|---|---|
-| `scripts/kb_validate.py` (vendored Limina) | `PostToolUse` on every kb-write (via `kb_write_guard.py`) and `Stop` at turn end (via `stop_validate.py`) | **KB structural only** — frontmatter required fields, filename format, ID aliases, wikilinks resolve, bidirectional backlinks (H↔E↔F), required H2 sections. | Claude Code hook (blocks turn / write) |
-| `aexp.validate.validate_repo()` / `aexp validate` | Manually by the user or agent | **Everything above** (by subprocessing `kb_validate.py`) **plus** run-link integrity (`doc["limina"]`), `supporting_runs` citation checks, hypothesis-consistency between run and experiment. | CLI exit code 1 |
+| `aexp.kb_validate.validate_kb()` | `PostToolUse` on every kb-write (via `aexp.hooks.kb_write_guard`) and `Stop` at turn end (via `aexp.hooks.stop_validate`) | **KB structural only** — frontmatter required fields, filename format, ID aliases, wikilinks resolve, bidirectional backlinks (H↔E↔F), required H2 sections. | Claude Code hook (blocks turn / write) |
+| `aexp.validate.validate_repo()` / `aexp validate` | Manually by the user or agent | **Everything above** (calls `validate_kb()` in-process) **plus** run-link integrity (`doc["limina"]`), `supporting_runs` citation checks, hypothesis-consistency between run and experiment. | CLI exit code 1 |
 
 **Practical implication:** a Claude Code session can end cleanly (Stop hook
 passes) while still containing broken `supporting_runs` citations. The
 Stop hook does not catch them. Run `python -m aexp validate`
 explicitly before considering a session "complete."
 
-## Why vendoring (not a dependency) for Limina
+## Why fork, not depend, on Limina
 
-Limina is a template-clone system; its upstream setup flow (`clone + rm .git + re-init`) doesn't compose with "apply to an existing repo". So the project ships a vendored fork:
+Limina upstream ships a template-clone flow (`clone + rm .git + re-init`) that doesn't compose with *applying* a harness to an existing repo. So `aexp` forks the pieces it needs:
 
-- `src/aexp/vendor/limina/` — the fork we install (hooks ported to Python, `claude_settings.json` uses `python` commands, no bash dependency).
-- `reference/limina/` at the repo root — the pristine upstream snapshot, committed once for diff provenance. Maintainers can `diff -r reference/limina src/.../vendor/limina` to see every customization. One-time vendor — no resync.
+- Hook behavior has been ported into `aexp.hooks.*` and is invoked as Python modules from the installed package.
+- The KB structural validator lives at `aexp.kb_validate` — in-process, no subprocess dance.
+- `src/aexp/vendor/` retains the research-graph data assets that *do* belong in every consumer repo: the `kb/` scaffold, artifact `templates/`, and the four methodology skills (`experiment-rigor`, `exploratory-sota-research`, `research-devil-advocate`, `build-maintainable-software`). These are the parts the agent actually reads and writes; keeping them checked into `aexp` lets `aexp install` drop them in verbatim, with merge policies that preserve user customizations.
+
+One-time fork — no resync.
 
 ## Why no Weave / OpenTelemetry in v1
 
