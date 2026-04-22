@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+venv/
+.venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Data (large files - track separately or use git-lfs)
+kb/research/data/*.csv
+kb/research/data/*.parquet
+kb/research/data/*.json
+kb/research/data/*.pkl
+kb/research/data/*.h5
+!kb/research/data/.gitkeep
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Environment
+.env
+*.log
+.cook/logs/
+
+# Notion sync state (contains Notion page IDs, session-specific)
+kb/.notion-sync.json
+
+# Model artifacts (too large for git)
+models/
+checkpoints/
+*.pt
+*.pth
+*.onnx
+*.safetensors
+wandb/
