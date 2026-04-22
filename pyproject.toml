@@ -1,0 +1,122 @@
+[project]
+name = "agentic-experiments"
+version = "0.1.0"
+description = "Git-first, hypothesis-forcing experiment tracking for agent-driven ML research. Vendors Limina as the research harness, uses signac for local execution/run state, and bridges to W&B for remote observability."
+authors = [
+    {name = "Kaden McKeen", email = "mckeenkaden@gmail.com"}
+]
+license = {text = "MIT"}
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+keywords = [
+    "agents",
+    "claude",
+    "claude-code",
+    "experiment-tracking",
+    "hypothesis",
+    "limina",
+    "mcp",
+    "mlops",
+    "research",
+    "signac",
+    "wandb",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Logging",
+    "Typing :: Typed",
+]
+dependencies = [
+    "signac (>=2.3.0,<3.0.0)",
+    "python-frontmatter (>=1.1.0,<2.0.0)",
+    "pydantic (>=2.5,<3.0)",
+    "pyyaml (>=6.0,<7.0)",
+    "typer (>=0.12,<1.0)",
+    "rich (>=13.0,<15.0)",
+]
+
+[project.optional-dependencies]
+wandb = ["wandb (>=0.16,<1.0)"]
+mcp = ["mcp (>=1.2,<2.0)"]
+
+[project.scripts]
+aexp = "aexp.cli:app"
+# MCP server entry point. Invoked via ``uvx --from agentic-experiments[mcp] aexp-mcp-server``
+# from .mcp.json so Claude Code can spawn it without any env-specific setup.
+aexp-mcp-server = "aexp.mcp_server:main"
+
+[project.urls]
+Homepage = "https://github.com/kadenmc/agentic-experiments"
+Repository = "https://github.com/kadenmc/agentic-experiments"
+Issues = "https://github.com/kadenmc/agentic-experiments/issues"
+Changelog = "https://github.com/kadenmc/agentic-experiments/blob/main/CHANGELOG.md"
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[dependency-groups]
+dev = [
+    "pytest (>=8.0,<9.0)",
+    "pytest-cov (>=5.0,<7.0)",
+    "ruff (>=0.6,<1.0)",
+    "mypy (>=1.11,<2.0)",
+]
+
+[tool.poetry]
+packages = [{include = "aexp", from = "src"}]
+# Files to include in the source distribution beyond the package tree.
+include = [
+    { path = "LICENSE", format = ["sdist", "wheel"] },
+    { path = "README.md", format = ["sdist", "wheel"] },
+    { path = "CHANGELOG.md", format = ["sdist"] },
+    { path = "docs/**/*.md", format = ["sdist"] },
+]
+# Everything under reference/ is dev-only diff provenance, never shipped.
+exclude = [
+    "reference/**",
+    "**/__pycache__",
+    "**/*.pyc",
+    "**/.pytest_cache",
+]
+
+[tool.poetry.dependencies]
+# PEP 621 deps live in [project.dependencies]; this block stays present
+# (and empty) only so tooling that expects it doesn't choke.
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+# `reference/` is the pristine upstream Limina snapshot (dev-only, never shipped).
+# `src/aexp/vendor/` is the forked Limina vendor tree — we preserve upstream style
+# for diff clarity against reference/. Neither should be linted as our own code.
+extend-exclude = ["reference", "src/aexp/vendor"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests contain long literal artifact-body strings used as fixtures; breaking
+# them up hurts readability without any real benefit.
+"tests/*" = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["aexp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "slow: end-to-end smoke tests; run with `pytest -m slow`",
+]
