@@ -1,4 +1,4 @@
-"""Shared pytest fixtures for agentic_experiments tests."""
+"""Shared pytest fixtures for aexp tests."""
 from __future__ import annotations
 
 import shutil
@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
-VENDOR_LIMINA = PACKAGE_ROOT / "src" / "agentic_experiments" / "vendor" / "limina"
+VENDOR_LIMINA = PACKAGE_ROOT / "src" / "aexp" / "vendor" / "limina"
 
 
 @pytest.fixture

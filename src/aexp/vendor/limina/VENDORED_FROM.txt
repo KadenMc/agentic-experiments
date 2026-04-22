@@ -1,0 +1,24 @@
+Limina source snapshot vendored into agentic-experiments.
+
+Upstream version:          0.1.0  (see ./VERSION)
+Vendored on:               2026-04-20
+Vendored from archive at:  C:\Vaults\SecondBrain\repos\agentic-experiments\reference\limina\
+Vendor policy:             One-time fork. Not resynced from upstream.
+
+Files under this directory are the forked copy; the pristine snapshot is
+preserved at ``reference/limina/`` at the repo root for diff provenance.
+
+Changes applied during vendoring:
+- Replaced the 4 shell hooks with cross-platform Python ports:
+    scripts/hooks/session_start.sh       -> session_start.py
+    scripts/hooks/enforce_hef_chain.sh   -> enforce_hef_chain.py
+    scripts/hooks/kb_write_guard.sh      -> kb_write_guard.py
+    scripts/hooks/stop_validate.sh       -> stop_validate.py
+- Refactored scripts/hooks/_parse_hook_input.py into an importable module
+  (preserved CLI fallback for backward compatibility).
+- Translated .claude/settings.json into ./claude_settings.json with the
+  hook commands rewritten from `bash ...sh` to `python ...py`.
+- Dropped upstream setup.sh (its clone-and-reinit flow is replaced by
+  aexp.install.install_limina).
+- Dropped upstream requirements.txt (the sole entry, python-frontmatter,
+  is now a first-class dependency in agentic-experiments' pyproject.toml).
