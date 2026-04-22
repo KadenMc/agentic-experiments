@@ -76,6 +76,40 @@ def version() -> None:
     typer.echo(__version__)
 
 
+_INSTALL_HEADS_UP = """\
+[bold]`aexp install` is about to modify the current repo:[/bold]
+
+  - [cyan]kb/[/cyan]                     research-graph scaffold (hypotheses, experiments, findings)
+  - [cyan]templates/[/cyan]              artifact templates (you can edit these)
+  - [cyan].claude/settings.json[/cyan]   JSON-merge: our hooks added, your hooks + permissions preserved
+  - [cyan].claude/skills/[/cyan]         4 research-methodology skills
+  - [cyan].mcp.json[/cyan]               JSON-merge: our `aexp` MCP server added, your other servers preserved
+  - [cyan]AGENTS.md[/cyan], [cyan]CLAUDE.md[/cyan]       block-merge: your content outside our `<!-- agentic-experiments:begin/end -->` markers is preserved
+  - [cyan].runs/[/cyan]                  signac project (idempotent; initialised if missing)
+  - [cyan].aexp/installed.json[/cyan]   install marker with interpreter path + vendor sha
+
+By default, conflicting existing files are [yellow]skipped with a warning[/yellow] — pass [bold]--force[/bold] to overwrite.
+Hook scripts and validator code live inside the installed `aexp` package; no Python you didn't write lands in your repo.
+"""
+
+
+def _print_actions(actions: list, *, dry_run: bool) -> None:
+    kinds: dict[str, int] = {}
+    for a in actions:
+        kinds[a.kind] = kinds.get(a.kind, 0) + 1
+        if a.kind == "skipped_conflict":
+            console.print(f"[yellow]{a.kind}[/yellow] {a.path}: {a.detail}")
+        elif a.kind in ("merged_json", "merged_block", "wrote_marker", "initialized_runs"):
+            console.print(f"[green]{a.kind}[/green] {a.path}")
+    title = "dry-run plan" if dry_run else "install summary"
+    table = Table(title=title, show_header=True)
+    table.add_column("kind")
+    table.add_column("count", justify="right")
+    for k in sorted(kinds):
+        table.add_row(k, str(kinds[k]))
+    console.print(table)
+
+
 @app.command()
 def install(
     run_store: str = typer.Option(".runs", "--run-store", help="Path for signac project."),
@@ -83,23 +117,50 @@ def install(
     assert_git: bool = typer.Option(
         True, "--require-git/--no-require-git", help="Require a .git dir at repo root."
     ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        "-n",
+        help="Preview what would change without writing anything.",
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Skip the pre-install confirmation prompt.",
+    ),
 ) -> None:
-    """Install the vendored Limina harness into the current repo."""
+    """Install the aexp harness into the current repo.
+
+    By default, shows a summary of what will be modified and asks for
+    confirmation before making any changes. Use ``--yes`` to skip the
+    prompt (for scripted / CI use) or ``--dry-run`` to preview only.
+    """
+    import sys as _sys
+
     cwd = Path.cwd()
+
+    if dry_run:
+        console.print(_INSTALL_HEADS_UP)
+        actions = install_limina(
+            cwd, run_store=run_store, force=force, assert_git=assert_git, dry_run=True
+        )
+        _print_actions(actions, dry_run=True)
+        return
+
+    if not yes:
+        console.print(_INSTALL_HEADS_UP)
+        if not _sys.stdin.isatty():
+            console.print(
+                "[yellow]No TTY attached; rerun with --yes to confirm or --dry-run to preview.[/yellow]"
+            )
+            raise typer.Exit(code=1)
+        if not typer.confirm("Proceed with install?", default=False):
+            console.print("[yellow]Aborted.[/yellow]")
+            raise typer.Exit(code=1)
+
     actions = install_limina(cwd, run_store=run_store, force=force, assert_git=assert_git)
-    kinds = {}
-    for a in actions:
-        kinds[a.kind] = kinds.get(a.kind, 0) + 1
-        if a.kind in ("skipped_conflict",):
-            console.print(f"[yellow]{a.kind}[/yellow] {a.path}: {a.detail}")
-        elif a.kind in ("merged_json", "merged_block", "wrote_marker", "initialized_runs"):
-            console.print(f"[green]{a.kind}[/green] {a.path}")
-    table = Table(title="install summary", show_header=True)
-    table.add_column("kind")
-    table.add_column("count", justify="right")
-    for k in sorted(kinds):
-        table.add_row(k, str(kinds[k]))
-    console.print(table)
+    _print_actions(actions, dry_run=False)
 
 
 # ---------------------------------------------------------------------------

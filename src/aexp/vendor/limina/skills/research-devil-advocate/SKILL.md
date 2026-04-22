@@ -113,14 +113,12 @@ Also state:
 
 If `kb/` exists, persist the review as a `CR` note in `kb/reports/`.
 
-Prefer:
-```bash
-python3 scripts/kb_new_artifact.py CR "<review title>" --target "<review target>" --target-id <ARTIFACT_ID>
-```
+Create `kb/reports/CR###-<slug>.md` using `templates/challenge-review.md`
+as the starter. Allocate the next free `CR###` by scanning the directory.
+If the review is broader than one artifact, omit `target_id` and link the
+relevant notes manually in `## Links`.
 
-If the review is broader than one artifact, omit `--target-id` and link the relevant notes manually.
-
-Fill the current Limina challenge-review template:
+Fill the challenge-review template:
 - `Summary`: the central criticism or decision
 - `Critical Issues`: what must change before trusting the direction
 - `Alternative Explanations`: what else could explain the observed result
@@ -136,7 +134,7 @@ If a local project keeps a decision log outside the Limina core, update it only 
 
 Run:
 ```bash
-python3 scripts/kb_validate.py
+python -m aexp validate
 ```
 before treating the review as complete.
 

@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -80,22 +79,20 @@ def test_e2e_fresh_repo_full_happy_path(tmp_path: Path, monkeypatch: pytest.Monk
     monkeypatch.chdir(repo)
 
     # 1. aex install
-    r = runner.invoke(app, ["install"])
+    r = runner.invoke(app, ["install", "--yes"])
     assert r.exit_code == 0, r.stdout
     assert (repo / "kb" / "ACTIVE.md").is_file()
-    assert (repo / "scripts" / "hooks" / "session_start.py").is_file()
     assert (repo / ".claude" / "settings.json").is_file()
+    assert (repo / ".mcp.json").is_file()
     assert (repo / ".runs").is_dir()
     assert (repo / ".aexp" / "installed.json").is_file()
+    # Hook scripts and kb_validate no longer land in the consumer repo —
+    # they live inside the installed aexp package and are invoked from there.
+    assert not (repo / "scripts").exists()
 
-    # 2. Vendored kb_validate should be green right out of the box.
-    validate = subprocess.run(
-        [sys.executable, str(repo / "scripts" / "kb_validate.py"), "--kb-root", str(repo / "kb")],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert validate.returncode == 0, (validate.stdout, validate.stderr)
+    # 2. aexp.kb_validate should report the freshly-installed kb/ as clean.
+    from aexp.kb_validate import validate_kb as _validate_kb
+    assert _validate_kb(repo / "kb").ok
 
     # 3. Create H001 + E001 via the vendored artifact creator (non-interactively).
     # kb_new_artifact.py expects interactive prompts; bypass by hand-crafting the files
@@ -138,13 +135,7 @@ def test_e2e_fresh_repo_full_happy_path(tmp_path: Path, monkeypatch: pytest.Monk
     )
 
     # kb_validate should remain green with the new artifacts.
-    validate2 = subprocess.run(
-        [sys.executable, str(repo / "scripts" / "kb_validate.py"), "--kb-root", str(repo / "kb")],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert validate2.returncode == 0, (validate2.stdout, validate2.stderr)
+    assert _validate_kb(repo / "kb").ok
 
     # 4. aex new-run + aex list-runs
     r = runner.invoke(

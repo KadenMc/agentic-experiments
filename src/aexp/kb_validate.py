@@ -1,13 +1,11 @@
-#!/usr/bin/env python3
-"""
-Validate the slim Limina knowledge base.
+"""KB structural validator — frontmatter, aliases, wikilinks, H->E->F chain.
 
-The validator covers the research graph:
-- kb/ACTIVE.md
-- kb/mission/CHALLENGE.md
-- kb/DASHBOARD.md when present
-- H / E / F / L / CR / SR artifacts
-- wikilinks and parent backlinks in ## Links sections
+Ported from the vendored Limina ``kb_validate.py`` into the package. Callable
+in-process via :func:`validate_kb`; :func:`main` preserves a ``python -m
+aexp.kb_validate`` CLI for parity with the old script invocation.
+
+Upstream Limina's optional telemetry hooks are intentionally dropped — ``aexp``
+does not emit to Limina's telemetry sink.
 """
 
 from __future__ import annotations
@@ -15,7 +13,6 @@ from __future__ import annotations
 import argparse
 import ast
 import json
-import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,17 +23,6 @@ try:
     HAS_FRONTMATTER = True
 except ImportError:
     HAS_FRONTMATTER = False
-
-if os.environ.get("LIMINA_TELEMETRY_INTERNAL") != "1":
-    try:
-        from telemetry import emit_event as telemetry_emit_event
-        from telemetry import ensure_consent as telemetry_ensure_consent
-    except Exception:  # pragma: no cover - telemetry must not block validation
-        telemetry_emit_event = None
-        telemetry_ensure_consent = None
-else:  # pragma: no cover - internal telemetry calls skip recursion
-    telemetry_emit_event = None
-    telemetry_ensure_consent = None
 
 
 META_RE = re.compile(r"^>\s+\*\*(.+?)\*\*:\s*(.+?)\s*$")
@@ -129,44 +115,6 @@ class ValidationResult:
             "error_count": len(self.errors),
             "errors": self.errors,
         }
-
-
-def should_prompt_telemetry(args: argparse.Namespace) -> bool:
-    if telemetry_ensure_consent is None:
-        return False
-    if args.format == "json":
-        return False
-    if args.check_file:
-        return False
-    return True
-
-
-def maybe_prompt_telemetry(args: argparse.Namespace) -> None:
-    if not should_prompt_telemetry(args):
-        return
-    try:
-        telemetry_ensure_consent("kb_validate")
-    except Exception:
-        return
-
-
-def maybe_emit_validation_failure(result: ValidationResult) -> None:
-    if telemetry_emit_event is None or result.ok:
-        return
-    error_codes = sorted({str(error["check"]) for error in result.errors})
-    if not error_codes:
-        return
-    try:
-        telemetry_emit_event(
-            "limina_kb_validation_failed",
-            emitter="kb_validate",
-            properties={
-                "result_code": error_codes[0],
-                "count_validation_errors": len(result.errors),
-            },
-        )
-    except Exception:
-        return
 
 
 def parse_args() -> argparse.Namespace:
@@ -631,56 +579,83 @@ def format_text(result: ValidationResult) -> str:
     return "\n".join(lines)
 
 
-def main() -> int:
-    args = parse_args()
-    maybe_prompt_telemetry(args)
-    kb_root = Path(args.kb_root).resolve()
+def validate_kb(
+    kb_root: Path | str,
+    *,
+    check_file: Path | str | None = None,
+) -> ValidationResult:
+    """Validate a Limina ``kb/`` tree (or a single file inside it).
+
+    Pure in-process entry point — no I/O beyond reading the KB tree, no CLI
+    side effects. Hooks, ``aexp validate``, and tests all call this directly.
+
+    Parameters
+    ----------
+    kb_root
+        Path to the ``kb/`` directory to validate.
+    check_file
+        If provided, validate only this single file (must live under
+        ``kb_root`` and be one of the recognised artifact kinds).
+
+    Returns
+    -------
+    ValidationResult
+        Collected errors. ``result.ok`` is ``True`` iff no errors were found.
+    """
+    kb_root = Path(kb_root).resolve()
     result = ValidationResult()
 
     if not kb_root.exists():
         result.add("filesystem", f"kb root not found: {kb_root}")
-    else:
-        active_path = kb_root / SPECIAL_NOTES["ACTIVE"]["path"]
-        challenge_path = kb_root / SPECIAL_NOTES["CHALLENGE"]["path"]
-        if not active_path.exists():
-            result.add("filesystem", "Missing kb/ACTIVE.md.", active_path)
-        if not challenge_path.exists():
-            result.add("filesystem", "Missing kb/mission/CHALLENGE.md.", challenge_path)
+        return result
 
-        special_notes = collect_special_notes(kb_root)
-        lessons = collect_lessons(kb_root)
-        artifacts = collect_artifacts(kb_root, result)
-        note_index = build_note_index(special_notes, artifacts, lessons, result)
+    active_path = kb_root / SPECIAL_NOTES["ACTIVE"]["path"]
+    challenge_path = kb_root / SPECIAL_NOTES["CHALLENGE"]["path"]
+    if not active_path.exists():
+        result.add("filesystem", "Missing kb/ACTIVE.md.", active_path)
+    if not challenge_path.exists():
+        result.add("filesystem", "Missing kb/mission/CHALLENGE.md.", challenge_path)
 
-        if args.check_file:
-            target_path = Path(args.check_file).resolve()
-            if not target_path.exists():
-                result.add("filesystem", "File does not exist.", target_path)
-            else:
-                note = find_note_for_path(target_path, kb_root, special_notes, artifacts, lessons)
-                if note is None:
-                    result.add(
-                        "scope",
-                        "File is not part of the validated research graph. Only ACTIVE.md, mission/CHALLENGE.md, DASHBOARD.md, and H/E/F/L/CR/SR artifacts are validated.",
-                        target_path,
-                    )
-                else:
-                    validate_note(note, artifacts, note_index, result)
+    special_notes = collect_special_notes(kb_root)
+    lessons = collect_lessons(kb_root)
+    artifacts = collect_artifacts(kb_root, result)
+    note_index = build_note_index(special_notes, artifacts, lessons, result)
+
+    if check_file is not None:
+        target_path = Path(check_file).resolve()
+        if not target_path.exists():
+            result.add("filesystem", "File does not exist.", target_path)
         else:
-            for required_name in ("ACTIVE", "CHALLENGE"):
-                if required_name in special_notes:
-                    validate_note(special_notes[required_name], artifacts, note_index, result)
-            if "DASHBOARD" in special_notes:
-                validate_note(special_notes["DASHBOARD"], artifacts, note_index, result)
-            for artifact_id in sorted(artifacts):
-                validate_note(artifacts[artifact_id], artifacts, note_index, result)
+            note = find_note_for_path(target_path, kb_root, special_notes, artifacts, lessons)
+            if note is None:
+                result.add(
+                    "scope",
+                    "File is not part of the validated research graph. Only ACTIVE.md, mission/CHALLENGE.md, DASHBOARD.md, and H/E/F/L/CR/SR artifacts are validated.",
+                    target_path,
+                )
+            else:
+                validate_note(note, artifacts, note_index, result)
+    else:
+        for required_name in ("ACTIVE", "CHALLENGE"):
+            if required_name in special_notes:
+                validate_note(special_notes[required_name], artifacts, note_index, result)
+        if "DASHBOARD" in special_notes:
+            validate_note(special_notes["DASHBOARD"], artifacts, note_index, result)
+        for artifact_id in sorted(artifacts):
+            validate_note(artifacts[artifact_id], artifacts, note_index, result)
+
+    return result
+
+
+def main() -> int:
+    args = parse_args()
+    result = validate_kb(args.kb_root, check_file=args.check_file)
 
     if args.format == "json":
         print(json.dumps(result.as_json(), indent=2))
     elif not result.ok or not args.quiet:
         print("KB validation passed." if result.ok else format_text(result))
 
-    maybe_emit_validation_failure(result)
     return 0 if result.ok else 1
 
 

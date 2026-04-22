@@ -34,7 +34,7 @@ When you use this skill inside a Limina repo:
 3. Open only the linked artifacts you need next.
 4. Persist serious external sources as `L` notes in `kb/research/literature/`.
 5. If the landscape changes the direction, update or create the relevant `H`, `CR`, `SR`, and `ACTIVE.md` entries instead of leaving the conclusion only in chat.
-6. Prefer `python3 scripts/kb_new_artifact.py ...` when a new core artifact is needed.
+6. New core artifacts go under the matching `kb/research/...` path using the relevant `templates/` starter; allocate the next free id by scanning the target directory.
 
 The goal is not just to produce a good survey. The goal is to change the research graph in a grounded way.
 

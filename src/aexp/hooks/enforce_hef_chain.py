@@ -1,34 +1,23 @@
-#!/usr/bin/env python3
-"""PreToolUse hook: enforce the H -> E -> F chain.
+"""PreToolUse hook: enforce the H -> E -> F chain on kb/ writes.
 
-Blocks experiment creation without a hypothesis reference, and finding
-creation without an experiment reference. Exit code 2 signals a blocking
-error to Claude Code (stderr is surfaced back to the agent).
+Blocks:
 
-Port of ``enforce_hef_chain.sh``. Behavior matches the shell version:
+- Creating an experiment without a ``hypothesis:`` reference (or a live
+  hypothesis file to back it)
+- Creating a finding without an ``experiment:`` reference (or a live
+  experiment file to back it)
 
-- File path patterns are ``kb/research/experiments/E{NNN}-*.md`` and
-  ``kb/research/findings/F{NNN}-*.md``.
-- The referenced field is extracted from YAML frontmatter OR from a
-  blockquote line like ``> **Hypothesis**: H012``.
-- If the reference exists but the target file is missing in
-  ``kb/research/hypotheses/`` / ``kb/research/experiments/``, this is
-  also a blocking error.
+Exit code ``2`` tells Claude Code to block the tool use and surface the
+stderr message to the agent. Claude Code invokes this hook with ``cwd`` set
+to the consumer repo root.
 """
 from __future__ import annotations
 
 import re
-import subprocess
 import sys
 from pathlib import Path
 
-# Use package-relative import for the parser.
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _parse_hook_input import parse_hook_input  # noqa: E402
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-KB_ROOT = PROJECT_ROOT / "kb"
-TELEMETRY_SCRIPT = PROJECT_ROOT / "scripts" / "telemetry.py"
+from aexp.hooks._parse_hook_input import parse_hook_input
 
 EXPERIMENT_PATH_RE = re.compile(r"kb/research/experiments/E\d{3}-.*\.md$")
 FINDING_PATH_RE = re.compile(r"kb/research/findings/F\d{3}-.*\.md$")
@@ -42,52 +31,8 @@ except ImportError:
     _HAS_FRONTMATTER = False
 
 
-def _emit_block(code: str) -> None:
-    """Emit a telemetry event for a blocked write; silence all errors."""
-    if not TELEMETRY_SCRIPT.is_file():
-        return
-    try:
-        subprocess.run(
-            [
-                sys.executable,
-                str(TELEMETRY_SCRIPT),
-                "emit",
-                "limina_hef_blocked",
-                "--runtime-family",
-                "claude",
-                "--emitter",
-                "claude_hef_guard",
-                "--property",
-                f"result_code={code}",
-                "--flush",
-            ],
-            check=False,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=5,
-        )
-    except Exception:
-        pass
-
-
 def extract_meta_ref(content: str, field: str, ref_pattern: str) -> str | None:
-    """Extract a metadata reference from frontmatter or blockquote metadata.
-
-    Parameters
-    ----------
-    content : str
-        Full post-edit file content.
-    field : str
-        Metadata field name (case-insensitive), e.g. ``"hypothesis"``.
-    ref_pattern : str
-        Regex pattern matching the reference, e.g. ``r"H\\d{3}"``.
-
-    Returns
-    -------
-    str | None
-        The matched reference (e.g. ``"H012"``) or ``None``.
-    """
+    """Extract a metadata reference from frontmatter or blockquote metadata."""
     field_lower = field.lower()
     ref_re = re.compile(f"({ref_pattern})")
 
@@ -112,7 +57,6 @@ def extract_meta_ref(content: str, field: str, ref_pattern: str) -> str | None:
 
 
 def _find_existing_artifact(directory: Path, artifact_id: str) -> Path | None:
-    """Find a file in ``directory`` matching ``<artifact_id>-*.md``."""
     if not directory.is_dir():
         return None
     for p in directory.glob(f"{artifact_id}-*.md"):
@@ -129,14 +73,15 @@ def main() -> int:
     if not fp:
         return 0
 
-    # Normalize to forward slashes for pattern matching (consistent with shell).
+    repo_root = Path.cwd()
+    kb_root = repo_root / "kb"
+
+    # Normalize to forward slashes for pattern matching.
     normalized = fp.replace("\\", "/")
 
-    # Experiment creation
     if EXPERIMENT_PATH_RE.search(normalized):
         hypo_id = extract_meta_ref(content, "hypothesis", r"H\d{3}")
         if not hypo_id:
-            _emit_block("missing_hypothesis_ref")
             print(
                 "BLOCKED: Cannot create experiment without a hypothesis reference.",
                 file=sys.stderr,
@@ -148,9 +93,8 @@ def main() -> int:
             )
             return 2
 
-        hypo_file = _find_existing_artifact(KB_ROOT / "research" / "hypotheses", hypo_id)
+        hypo_file = _find_existing_artifact(kb_root / "research" / "hypotheses", hypo_id)
         if hypo_file is None:
-            _emit_block("missing_hypothesis_file")
             print(
                 f"BLOCKED: Experiment references {hypo_id}, but no hypothesis file found "
                 "in kb/research/hypotheses/.",
@@ -163,11 +107,9 @@ def main() -> int:
             )
             return 2
 
-    # Finding creation
     if FINDING_PATH_RE.search(normalized):
         exp_id = extract_meta_ref(content, "experiment", r"E\d{3}")
         if not exp_id:
-            _emit_block("missing_experiment_ref")
             print(
                 "BLOCKED: Cannot create finding without an experiment reference.",
                 file=sys.stderr,
@@ -179,9 +121,8 @@ def main() -> int:
             )
             return 2
 
-        exp_file = _find_existing_artifact(KB_ROOT / "research" / "experiments", exp_id)
+        exp_file = _find_existing_artifact(kb_root / "research" / "experiments", exp_id)
         if exp_file is None:
-            _emit_block("missing_experiment_file")
             print(
                 f"BLOCKED: Finding references {exp_id}, but no experiment file found "
                 "in kb/research/experiments/.",

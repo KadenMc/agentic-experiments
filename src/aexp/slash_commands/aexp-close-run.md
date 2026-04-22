@@ -24,16 +24,13 @@ Flow:
 1. Ask the user for the `<job_id>` (short or full). Use
    `python -m aexp show-run <job_id>` to confirm the run
    exists and what experiment/hypothesis it's linked to.
-2. Run the vendored artifact creator to mint a new Finding id:
-
-   ```
-   python scripts/kb_new_artifact.py finding
-   ```
-
-   When it prompts for `hypothesis` and `experiment`, fill them from the
-   run's `doc["limina"]` (read them from
-   `python -m aexp show-run`). Slug should be short and
-   descriptive — often `<experiment>-verdict` is fine.
+2. Pick the next Finding id by scanning `kb/research/findings/F*.md` —
+   use the smallest unused `F###`. Create the file at
+   `kb/research/findings/F###-<slug>.md` from `templates/finding.md`.
+   Fill `hypothesis:` and `experiment:` from the run's `doc["limina"]`
+   (read via `python -m aexp show-run`). The `PreToolUse` hook will
+   reject a finding that doesn't name an existing experiment. Slug
+   should be short and descriptive — often `<experiment>-verdict`.
 3. Open the newly created `kb/research/findings/F###-*.md` and:
    - Add `supporting_runs:` to the YAML frontmatter as a **list of
      mappings** — never bare strings. Single-run form:

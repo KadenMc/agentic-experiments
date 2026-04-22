@@ -34,21 +34,19 @@ Open Claude Code in the repo. The `SessionStart` hook fires and injects your `kb
 
 ## 2. Frame a hypothesis
 
-Creation goes through the vendored Limina script (since it handles ID allocation + templates):
+Artifact files live under `kb/research/hypotheses/<ID>-<slug>.md`. Templates sit in `templates/` — copy the hypothesis template, fill it in, and save with an allocated ID.
 
-```powershell
-python scripts/kb_new_artifact.py hypothesis
-```
+Inside Claude Code, the easiest path is to ask the agent: "Create hypothesis H001 for <topic>, using the template at templates/hypothesis.md." The `PreToolUse` hook enforces the expected path and frontmatter; the `PostToolUse` hook runs KB validation so you'll see any issues immediately.
 
-Interactive prompts: slug, initial text. This creates `kb/research/hypotheses/H001-<slug>.md` from the Limina template. Fill in the `## Statement`, `## Mechanism`, `## Test Plan`, etc.
+From a shell, the same file-creation by hand works — YAML frontmatter plus the `## Statement`, `## Mechanism`, `## Test Plan` sections from the template.
+
+> CLI verbs for artifact creation (`aexp new-hypothesis` / `new-experiment` / `new-finding`) are on the v1.1 roadmap so this step becomes a single command.
 
 ## 3. Frame an experiment
 
-```powershell
-python scripts/kb_new_artifact.py experiment
-```
+Same pattern: `templates/experiment.md` → `kb/research/experiments/E001-<slug>.md`. The experiment **must** reference a live hypothesis — the `PreToolUse` hook blocks experiment creation without a `hypothesis: "H001"` frontmatter key (or `> **Hypothesis**: H001` blockquote).
 
-When asked, link to `H001`. Creates `kb/research/experiments/E001-<slug>.md`. If you want narrower framings within this experiment, add:
+If you want narrower framings within this experiment, add:
 
 ```yaml
 sub_hypotheses: ["H002", "H003"]
