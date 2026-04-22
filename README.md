@@ -179,96 +179,28 @@ The **canonical Python API** (`aexp.*`) is the narrow waist. MCP, CLI, and slash
 
 ## Quick Start
 
-### Using an `aexp`-enabled repo (clone and go)
+**Prerequisites:** Python 3.11+ and [`uv`](https://docs.astral.sh/uv/) on `PATH` (Claude Code uses `uvx` to run the MCP server).
 
-If you're joining a repo that already has a committed `.mcp.json`, the only prerequisite is [`uv`](https://docs.astral.sh/uv/):
-
-```powershell
-# Windows
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-```
-```bash
-# macOS / Linux
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-Then:
+From inside your research repo, with a virtual environment active:
 
 ```bash
-git clone <repo-url>
-cd <repo>
-claude
-# /mcp inside the session shows `aexp · ✓ connected`
-# tools like new_run, list_runs, validate are available
-```
-
-`uvx` fetches `agentic-experiments[mcp]` from PyPI on first use and caches it — no project Python environment needed just to use MCP.
-
-### Setting up a new research repo
-
-From an empty (or existing) git repo:
-
-```powershell
-# 1. Create a conda env (Python 3.12)
-conda create -n agentic-exp python=3.12 -y
-conda activate agentic-exp
-
-# 2. Install agentic-experiments + extras
 pip install "agentic-experiments[wandb,mcp]"
-
-# 3. Install the harness into the current repo
 aexp install
-
-# 4. Sanity check
 aexp --help
 ```
 
-`aexp install` writes `.mcp.json` with the `uvx` invocation, `.claude/settings.json` with hooks + permissions, `.claude/skills/` with the four research skills, a `kb/` scaffold with templates, and `.aexp/installed.json` recording the env for slash commands.
+> **Heads up — `aexp install` will modify your repo.** It creates `.mcp.json`, **merges into** any existing `.claude/settings.json` (hooks + permissions are additive; yours are preserved), adds `.claude/skills/` with four research-methodology skills, copies a `kb/` scaffold plus `templates/` and vendored Limina `scripts/` into the repo root, initializes `.runs/` as a signac project, and records the interpreter path in `.aexp/installed.json`. Run it in a clean working tree so you can diff and revert if anything surprises you.
 
-Open Claude Code in the repo and try:
+See [docs/quickstart.md](docs/quickstart.md) for a full worked example — hypothesis → experiment → runs → finding.
 
-```
-> I want to test the harness. Propose a toy hypothesis H001 about [toy
-  domain], design experiment E001, and create a run using the aexp MCP tools.
-  Validate at the end.
-```
+### Extras
 
-See [docs/quickstart.md](docs/quickstart.md) for a worked example.
-
----
-
-## Installation (maintainer + researcher)
-
-For running experiments locally, use Poetry + conda (the MCP server runs independently via `uvx`):
-
-```powershell
-# One-time global tooling
-python -m pip install --user pipx
-python -m pipx ensurepath
-pipx install poetry
-```
-
-```powershell
-# Per-project
-conda create -n agentic-exp python=3.12 -y
-conda activate agentic-exp
-python -m pip install --upgrade pip
-
-cd <your-repo>
-poetry install --with dev --extras "wandb mcp"
-
-aexp version                # 0.1.0
-python -c "import aexp, signac, frontmatter, pydantic, typer, mcp; print('ok')"
-```
-
-### Dependency groups + extras
-
-| Group | Installs | When to use |
+| Extra | Installs | When to use |
 |---|---|---|
-| `main` (default) | signac, python-frontmatter, pydantic, pyyaml, typer, rich | Always |
-| `--with dev` | pytest, pytest-cov, ruff, mypy | Developing the package |
-| `--extras wandb` | wandb | W&B tracker adapter |
-| `--extras mcp` | mcp | MCP server for Claude Code |
+| `mcp` | `mcp` | Claude Code MCP server (almost always wanted) |
+| `wandb` | `wandb` | W&B tracker adapter for remote observability |
+
+`pip install agentic-experiments` alone gets you the CLI and Python API. The extras are additive.
 
 ### Invoking the CLI from inside Claude Code
 
@@ -346,7 +278,18 @@ If you run ML experiments with Claude Code and find yourself wanting a harness t
 
 For bugs and feature requests, [open an issue](https://github.com/KadenMc/agentic-experiments/issues).
 
-Development setup is the maintainer install above (`poetry install --with dev --extras "wandb mcp"`). Run the test suite with `poetry run pytest` and the linter with `poetry run ruff check .`.
+To hack on the package itself, clone the repo and use Poetry:
+
+```bash
+git clone https://github.com/KadenMc/agentic-experiments.git
+cd agentic-experiments
+poetry install --with dev --extras "wandb mcp"
+
+poetry run pytest              # 202 tests; `-m "not slow"` skips e2e
+poetry run ruff check .
+```
+
+Python 3.11, 3.12, and 3.13 are all exercised in CI on Ubuntu and Windows.
 
 ---
 
