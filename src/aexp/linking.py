@@ -20,7 +20,7 @@ from typing import Any
 
 import signac
 
-from aexp.runs import find_runs, get_run_store, open_run
+from aexp.runs import find_runs, open_run
 from aexp.schema import (
     BatchSummary,
     RunLink,
@@ -115,7 +115,7 @@ def list_batches(
     summaries: list[BatchSummary] = []
     for key, batch_jobs in sorted(groups.items()):
         exp = key[0]
-        sel = {k: v for k, v in zip(selector_keys, key[1:])}
+        sel = dict(zip(selector_keys, key[1:], strict=True))
         first = batch_jobs[0]
         hyp = first.sp.get("hypothesis_id") or first.doc.get("limina", {}).get("hypothesis_id")
         cond = sel.get("condition")

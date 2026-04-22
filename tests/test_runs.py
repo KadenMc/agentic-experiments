@@ -19,7 +19,6 @@ from aexp.runs import (
     run_lifecycle,
 )
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -72,7 +71,7 @@ def test_init_run_store_is_idempotent(tmp_path: Path) -> None:
 
 def test_get_run_store_without_marker_raises(tmp_path: Path) -> None:
     # Bare dir with no .git, no marker.
-    with pytest.raises(Exception):  # RepoRootNotFound or RunStoreNotInitialized
+    with pytest.raises(RuntimeError):  # RepoRootNotFound or RunStoreNotInitialized
         get_run_store(tmp_path)
 
 

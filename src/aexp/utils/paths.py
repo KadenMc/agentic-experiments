@@ -9,7 +9,7 @@ present, otherwise defaulting to ``.runs/``.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TypedDict
 
@@ -126,11 +126,10 @@ def write_installed_marker(
     Path
         The absolute path of the written marker.
     """
-    import os
     import sys
 
     if installed_at is None:
-        installed_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        installed_at = datetime.now(UTC).isoformat(timespec="seconds")
     if python_exe is None:
         python_exe = sys.executable
     if conda_env_name is None:

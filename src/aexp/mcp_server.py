@@ -26,19 +26,29 @@ except ImportError as exc:  # pragma: no cover
         "Install with: pip install agentic-experiments[mcp]"
     ) from exc
 
-from aexp import __version__
 from aexp.linking import (
     link_to_experiment as _link_to_experiment,
+)
+from aexp.linking import (
     list_batches as _list_batches,
+)
+from aexp.linking import (
     show_batch as _show_batch,
+)
+from aexp.linking import (
     summarize_run as _summarize_run,
 )
 from aexp.runs import (
     create_run as _create_run,
+)
+from aexp.runs import (
     find_runs as _find_runs,
+)
+from aexp.runs import (
     open_run as _open_run,
 )
-from aexp.trackers import NoopAdapter, TrackerInitError, bind_tracker as _bind_tracker
+from aexp.trackers import NoopAdapter, TrackerInitError
+from aexp.trackers import bind_tracker as _bind_tracker
 from aexp.validate import validate_repo as _validate_repo
 
 mcp = FastMCP("aexp")

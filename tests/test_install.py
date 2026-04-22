@@ -16,10 +16,8 @@ from aexp.install import (
     merge_claude_settings,
 )
 from aexp.utils.paths import (
-    INSTALLED_MARKER_REL,
     read_installed_marker,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

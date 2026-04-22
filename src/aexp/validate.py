@@ -24,14 +24,12 @@ import sys
 from pathlib import Path
 from typing import Any, Literal
 
-import signac
-
-from aexp.linking import list_batches
 from aexp.limina_io import (
     ArtifactNotFoundError,
     find_artifact_path,
     list_kb_artifacts,
 )
+from aexp.linking import list_batches
 from aexp.runs import get_run_store
 from aexp.schema import Issue, RunStatus
 from aexp.utils.paths import find_repo_root

@@ -9,7 +9,7 @@ from __future__ import annotations
 import subprocess
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -154,7 +154,7 @@ class WandbAdapter(TrackerAdapter):
                     tags=tuple(getattr(run, "tags", []) or []),
                     state=str(getattr(run, "state", "") or ""),
                     summary=dict(getattr(run, "summary", {}) or {}),
-                    created_at=created.astimezone(timezone.utc) if created else None,
+                    created_at=created.astimezone(UTC) if created else None,
                 )
             )
         return records

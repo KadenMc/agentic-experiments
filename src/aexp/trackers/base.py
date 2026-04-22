@@ -16,8 +16,6 @@ from typing import Any
 import signac
 
 from aexp.limina_io import (
-    ArtifactNotFoundError,
-    find_artifact_path,
     load_experiment,
     load_hypothesis,
 )

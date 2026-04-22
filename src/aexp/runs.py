@@ -12,10 +12,11 @@ directly — we do *not* hide them — while owning two conventions:
 """
 from __future__ import annotations
 
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from time import perf_counter
-from typing import Any, Iterator
+from typing import Any
 
 import signac
 
@@ -23,7 +24,6 @@ from aexp.schema import RunLink, RunStatus, iso_utc_now
 from aexp.utils.git import get_git_provenance
 from aexp.utils.paths import (
     find_repo_root,
-    read_installed_marker,
     resolve_run_store_path,
 )
 
