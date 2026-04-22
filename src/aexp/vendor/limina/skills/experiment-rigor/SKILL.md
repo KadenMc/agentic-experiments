@@ -43,7 +43,7 @@ Use the reference files on demand:
 4. Separate invalid test, implementation failure, insufficient signal, and true negative result.
 5. Reject a hypothesis only after a method-valid test with enough signal. Otherwise mark it inconclusive and design the next experiment.
 6. Keep `kb/` as canonical memory. Narrative belongs in `H/E/F`; raw metrics belong in structured files under `kb/research/data/`.
-7. Use the current Limina templates and keep `## Links` valid. Prefer `python3 scripts/kb_new_artifact.py ...` when a new core artifact is needed.
+7. Use the current templates from `templates/` and keep `## Links` valid. New core artifacts go under `kb/research/{hypotheses,experiments,findings,literature}/` or `kb/reports/` with an allocated `H###` / `E###` / `F###` / `L###` / `CR###` / `SR###` id; the `PreToolUse` hook enforces chain integrity on write.
 8. Use `CR` or `SR` only when the direction is blocked, invalidated, plateaued, or strategically changing. Do not trigger them on a fixed cadence.
 
 ## Workflow

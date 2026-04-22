@@ -37,7 +37,15 @@ from aexp.utils.paths import (
 VENDOR_LIMINA = Path(__file__).resolve().parent / "vendor" / "limina"
 
 # Subdirectories of the vendor tree that get copied verbatim into the consumer repo.
-_TREES_VERBATIM: tuple[str, ...] = ("kb", "templates", "scripts")
+#
+# Intentionally does NOT include ``scripts/``. Hook scripts, kb_validate, and
+# other package code live inside ``aexp.*`` and are invoked via
+# ``<python_exe> -m aexp.hooks.<name>`` — they upgrade through
+# ``pip install -U agentic-experiments`` rather than by re-running install.
+# The consumer repo ends up with kb/ data and templates they can edit, plus
+# the generated .mcp.json / .claude/settings.json / .aexp/installed.json —
+# no Python code they did not write.
+_TREES_VERBATIM: tuple[str, ...] = ("kb", "templates")
 
 # Top-level files that get merged (not copied) when the target already exists.
 _MERGE_FILES: tuple[str, ...] = ("AGENTS.md", "CLAUDE.md")
@@ -114,7 +122,7 @@ def _files_identical(a: Path, b: Path) -> bool:
     return a.read_bytes() == b.read_bytes()
 
 
-def _copy_file(src: Path, dst: Path, *, force: bool) -> InstallAction:
+def _copy_file(src: Path, dst: Path, *, force: bool, dry_run: bool = False) -> InstallAction:
     """Copy ``src`` -> ``dst`` atomically, respecting existing-file conflicts.
 
     Rules
@@ -123,6 +131,9 @@ def _copy_file(src: Path, dst: Path, *, force: bool) -> InstallAction:
     - Target identical -> skip, record ``skipped_identical``.
     - Target differs + ``force=False`` -> skip, record ``skipped_conflict``.
     - Target differs + ``force=True`` -> overwrite, record ``copied``.
+
+    ``dry_run=True`` suppresses the actual write while still returning the
+    planned action — callers can preview the full side-effect list safely.
     """
     rel = _display_relpath(dst)
     if _files_identical(src, dst):
@@ -133,7 +144,8 @@ def _copy_file(src: Path, dst: Path, *, force: bool) -> InstallAction:
             rel,
             "target exists with different content; rerun with force=True to overwrite",
         )
-    atomic_write(dst, src.read_bytes())
+    if not dry_run:
+        atomic_write(dst, src.read_bytes())
     return InstallAction("copied", rel)
 
 
@@ -209,18 +221,75 @@ def merge_claude_settings(
     return merged
 
 
-def _merge_or_write_json(src: Path, dst: Path) -> InstallAction:
-    """Write ``src`` verbatim if ``dst`` is missing, else JSON-merge into it.
+def _build_claude_settings(python_exe: str) -> dict[str, Any]:
+    """Build the ``.claude/settings.json`` hook block that ``aexp`` manages.
 
-    Used for ``.claude/settings.json`` (hooks + permissions). The merge
-    appends our hook definitions to existing user hooks without clobbering.
+    Each hook invokes a Python module inside the installed ``aexp`` package
+    via the recorded interpreter path (``{python_exe} -m aexp.hooks.<name>``).
+    This means hooks upgrade with ``pip install -U agentic-experiments`` —
+    no re-running ``aexp install``, no stale script copies in the consumer
+    repo.
+
+    ``python_exe`` is quoted with double quotes so paths containing spaces
+    (e.g. ``C:\\Program Files\\...``) work under every shell Claude Code
+    might spawn.
+    """
+    def cmd(mod: str) -> str:
+        return f'"{python_exe}" -m aexp.hooks.{mod}'
+
+    return {
+        "hooks": {
+            "SessionStart": [
+                {
+                    "matcher": "",
+                    "hooks": [
+                        {"type": "command", "command": cmd("session_start"), "timeout": 15}
+                    ],
+                }
+            ],
+            "PreToolUse": [
+                {
+                    "matcher": "Write|Edit|MultiEdit",
+                    "hooks": [
+                        {"type": "command", "command": cmd("enforce_hef_chain"), "timeout": 5}
+                    ],
+                }
+            ],
+            "PostToolUse": [
+                {
+                    "matcher": "Write|Edit|MultiEdit",
+                    "hooks": [
+                        {"type": "command", "command": cmd("kb_write_guard"), "timeout": 15}
+                    ],
+                }
+            ],
+            "Stop": [
+                {
+                    "matcher": "",
+                    "hooks": [
+                        {"type": "command", "command": cmd("stop_validate"), "timeout": 30}
+                    ],
+                }
+            ],
+        }
+    }
+
+
+def _merge_or_write_claude_settings(
+    dst: Path, python_exe: str, *, dry_run: bool = False
+) -> InstallAction:
+    """Write (or merge) our hook block into ``<repo>/.claude/settings.json``.
+
+    Preserves any existing user hooks, permissions, and other top-level keys;
+    only appends our hook matchers (deduplicating on ``(matcher, command)``).
     """
     rel = _display_relpath(dst)
-    vendor = json.loads(src.read_text(encoding="utf-8"))
+    vendor = _build_claude_settings(python_exe)
 
     if not dst.exists():
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write(dst, json.dumps(vendor, indent=2) + "\n")
+        if not dry_run:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write(dst, json.dumps(vendor, indent=2) + "\n")
         return InstallAction("copied", rel)
 
     try:
@@ -237,11 +306,14 @@ def _merge_or_write_json(src: Path, dst: Path) -> InstallAction:
     if merged == existing:
         return InstallAction("skipped_identical", rel)
 
-    atomic_write(dst, json.dumps(merged, indent=2) + "\n")
+    if not dry_run:
+        atomic_write(dst, json.dumps(merged, indent=2) + "\n")
     return InstallAction("merged_json", rel)
 
 
-def _merge_or_write_mcp_json(dst: Path, repo_root: Path) -> InstallAction:
+def _merge_or_write_mcp_json(
+    dst: Path, repo_root: Path, *, dry_run: bool = False
+) -> InstallAction:
     """Write (or merge) our MCP server entry into ``<repo>/.mcp.json``.
 
     Claude Code reads project-scope MCP servers from ``.mcp.json`` at the
@@ -253,7 +325,8 @@ def _merge_or_write_mcp_json(dst: Path, repo_root: Path) -> InstallAction:
     payload = {"mcpServers": our_entry}
 
     if not dst.exists():
-        atomic_write(dst, json.dumps(payload, indent=2) + "\n")
+        if not dry_run:
+            atomic_write(dst, json.dumps(payload, indent=2) + "\n")
         return InstallAction("copied", rel)
 
     try:
@@ -279,7 +352,8 @@ def _merge_or_write_mcp_json(dst: Path, repo_root: Path) -> InstallAction:
     if merged == existing:
         return InstallAction("skipped_identical", rel)
 
-    atomic_write(dst, json.dumps(merged, indent=2) + "\n")
+    if not dry_run:
+        atomic_write(dst, json.dumps(merged, indent=2) + "\n")
     return InstallAction("merged_json", rel)
 
 
@@ -364,13 +438,14 @@ def block_merge_markdown(existing: str, vendor: str) -> str:
     return f"{existing}{separator}{block}"
 
 
-def _merge_or_copy_markdown(src: Path, dst: Path) -> InstallAction:
+def _merge_or_copy_markdown(src: Path, dst: Path, *, dry_run: bool = False) -> InstallAction:
     """Copy or block-merge a Markdown file based on whether target exists."""
     rel = _display_relpath(dst)
     vendor_text = src.read_text(encoding="utf-8")
 
     if not dst.exists():
-        atomic_write(dst, vendor_text)
+        if not dry_run:
+            atomic_write(dst, vendor_text)
         return InstallAction("copied", rel)
 
     existing_text = dst.read_text(encoding="utf-8")
@@ -378,7 +453,8 @@ def _merge_or_copy_markdown(src: Path, dst: Path) -> InstallAction:
     if merged == existing_text:
         return InstallAction("skipped_identical", rel)
 
-    atomic_write(dst, merged)
+    if not dry_run:
+        atomic_write(dst, merged)
     return InstallAction("merged_block", rel)
 
 
@@ -387,7 +463,7 @@ def _merge_or_copy_markdown(src: Path, dst: Path) -> InstallAction:
 # ---------------------------------------------------------------------------
 
 
-def _install_skills(root: Path, *, force: bool) -> list[InstallAction]:
+def _install_skills(root: Path, *, force: bool, dry_run: bool = False) -> list[InstallAction]:
     """Copy vendored Limina skills into ``<root>/.claude/skills/``.
 
     - ``vendor/limina/skill/`` (singular, the top-level "limina" skill) →
@@ -405,7 +481,7 @@ def _install_skills(root: Path, *, force: bool) -> list[InstallAction]:
     top_src = VENDOR_LIMINA / "skill"
     if top_src.is_dir():
         dst = dst_skills / _SKILL_TOPLEVEL_NAME
-        tree_actions = _copy_tree(top_src, dst, force=force)
+        tree_actions = _copy_tree(top_src, dst, force=force, dry_run=dry_run)
         actions.extend(tree_actions)
         if any(a.kind == "copied" for a in tree_actions):
             actions.append(
@@ -420,7 +496,7 @@ def _install_skills(root: Path, *, force: bool) -> list[InstallAction]:
     if skills_src.is_dir():
         for skill_dir in sorted(p for p in skills_src.iterdir() if p.is_dir()):
             dst = dst_skills / skill_dir.name
-            tree_actions = _copy_tree(skill_dir, dst, force=force)
+            tree_actions = _copy_tree(skill_dir, dst, force=force, dry_run=dry_run)
             actions.extend(tree_actions)
             if any(a.kind == "copied" for a in tree_actions):
                 actions.append(
@@ -435,7 +511,7 @@ def _install_skills(root: Path, *, force: bool) -> list[InstallAction]:
 
 
 def _copy_tree(
-    src_root: Path, dst_root: Path, *, force: bool
+    src_root: Path, dst_root: Path, *, force: bool, dry_run: bool = False
 ) -> list[InstallAction]:
     """Copy every file under ``src_root`` into ``dst_root``."""
     actions: list[InstallAction] = []
@@ -444,7 +520,7 @@ def _copy_tree(
     for src in sorted(p for p in src_root.rglob("*") if p.is_file()):
         rel = src.relative_to(src_root)
         dst = dst_root / rel
-        actions.append(_copy_file(src, dst, force=force))
+        actions.append(_copy_file(src, dst, force=force, dry_run=dry_run))
     return actions
 
 
@@ -459,6 +535,7 @@ def install_limina(
     run_store: str = ".runs",
     force: bool = False,
     assert_git: bool = True,
+    dry_run: bool = False,
 ) -> list[InstallAction]:
     """Install the vendored Limina harness into ``repo_root``.
 
@@ -474,11 +551,16 @@ def install_limina(
     assert_git : bool, optional
         If ``True`` (default), require ``repo_root`` to contain a ``.git`` dir;
         pass ``False`` in tests that want to install into a plain folder.
+    dry_run : bool, optional
+        Compute and return the full action plan without actually writing any
+        files or touching signac. Callers can preview the side effects safely
+        and then re-invoke with ``dry_run=False`` to commit.
 
     Returns
     -------
     list[InstallAction]
-        Chronological record of every path touched.
+        Chronological record of every path touched (or that *would* be
+        touched, under ``dry_run=True``).
 
     Raises
     ------
@@ -519,41 +601,51 @@ def install_limina(
 
     # 1. Copy verbatim trees.
     for name in _TREES_VERBATIM:
-        actions.extend(_copy_tree(VENDOR_LIMINA / name, root / name, force=force))
+        actions.extend(
+            _copy_tree(VENDOR_LIMINA / name, root / name, force=force, dry_run=dry_run)
+        )
 
     # 2. Copy / block-merge top-level Markdown docs.
     for name in _MERGE_FILES:
         src = VENDOR_LIMINA / name
         if not src.is_file():
             continue
-        actions.append(_merge_or_copy_markdown(src, root / name))
+        actions.append(_merge_or_copy_markdown(src, root / name, dry_run=dry_run))
 
-    # 3a. JSON-merge hooks into .claude/settings.json.
+    # 3a. Write (or JSON-merge) our hook block into .claude/settings.json.
+    #     Hooks run the installed aexp package via the current interpreter
+    #     (`{python_exe} -m aexp.hooks.<name>`), so we need the interpreter
+    #     path locked in before we generate the command strings.
     #     (mcpServers is NOT read from this file by Claude Code — it lives
     #     in .mcp.json at repo root; see step 3c.)
-    claude_src = VENDOR_LIMINA / "claude_settings.json"
+    import sys as _sys
     claude_dst = root / ".claude" / "settings.json"
-    if claude_src.is_file():
-        actions.append(_merge_or_write_json(claude_src, claude_dst))
+    actions.append(
+        _merge_or_write_claude_settings(claude_dst, _sys.executable, dry_run=dry_run)
+    )
 
     # 3c. Write project-scope MCP servers to .mcp.json at repo root.
     #     This is the file Claude Code actually reads for project-scope
     #     servers (shared with the team via version control).
-    actions.append(_merge_or_write_mcp_json(root / ".mcp.json", root))
+    actions.append(_merge_or_write_mcp_json(root / ".mcp.json", root, dry_run=dry_run))
 
     # 3b. Install Limina's Claude Code skills into <repo>/.claude/skills/.
     # AGENTS.md references skills like $experiment-rigor; without this step
     # those references are broken for every consumer repo.
-    actions.extend(_install_skills(root, force=force))
+    actions.extend(_install_skills(root, force=force, dry_run=dry_run))
 
     # 4. Initialize signac project.
     run_store_path = (root / run_store).resolve()
-    _ensure_signac_project(run_store_path)
+    if not dry_run:
+        _ensure_signac_project(run_store_path)
     actions.append(
         InstallAction("initialized_runs", run_store, f"signac project at {run_store_path}")
     )
 
     # 5. Write install marker.
+    if dry_run:
+        actions.append(InstallAction("wrote_marker", str(INSTALLED_MARKER_REL.as_posix())))
+        return actions
     marker_path = write_installed_marker(
         root,
         version=__version__,
@@ -575,9 +667,15 @@ def _ensure_signac_project(path: Path) -> signac.Project:
 
 
 def is_limina_installed(repo_root: str | Path) -> bool:
-    """True if ``repo_root`` has an install marker AND the vendor tree is present."""
+    """True if ``repo_root`` has an install marker AND the expected tree shape.
+
+    We check for ``kb/`` and ``.claude/settings.json`` — the two consumer-repo
+    artifacts that ``aexp install`` always produces. Hook scripts no longer
+    land in the consumer repo (they live in the installed ``aexp`` package),
+    so the old ``scripts/hooks/`` check was dropped.
+    """
     root = Path(repo_root)
     marker = read_installed_marker(root)
     if marker is None:
         return False
-    return (root / "kb").is_dir() and (root / "scripts" / "hooks").is_dir()
+    return (root / "kb").is_dir() and (root / ".claude" / "settings.json").is_file()

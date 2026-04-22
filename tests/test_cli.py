@@ -79,10 +79,42 @@ def test_cli_install_fresh_repo(runner: CliRunner, tmp_path: Path, monkeypatch: 
     repo.mkdir()
     _git_commit(repo)
     monkeypatch.chdir(repo)
-    result = runner.invoke(app, ["install"])
+    result = runner.invoke(app, ["install", "--yes"])
     assert result.exit_code == 0, (result.exit_code, result.stdout, result.stderr)
     assert (repo / "kb" / "ACTIVE.md").is_file()
     assert (repo / ".runs").is_dir()
+
+
+def test_cli_install_dry_run_writes_nothing(
+    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--dry-run prints the plan but leaves the repo untouched."""
+    repo = tmp_path / "dry"
+    repo.mkdir()
+    _git_commit(repo)
+    monkeypatch.chdir(repo)
+    result = runner.invoke(app, ["install", "--dry-run"])
+    assert result.exit_code == 0, (result.exit_code, result.stdout, result.stderr)
+    assert "dry-run plan" in result.stdout
+    # Nothing landed.
+    assert not (repo / "kb").exists()
+    assert not (repo / ".claude").exists()
+    assert not (repo / ".mcp.json").exists()
+    assert not (repo / ".aexp").exists()
+
+
+def test_cli_install_no_tty_without_yes_aborts(
+    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Non-interactive run without --yes or --dry-run aborts with exit code 1."""
+    repo = tmp_path / "abort"
+    repo.mkdir()
+    _git_commit(repo)
+    monkeypatch.chdir(repo)
+    # CliRunner defaults to non-tty stdin; no --yes, no --dry-run.
+    result = runner.invoke(app, ["install"])
+    assert result.exit_code == 1
+    assert "rerun with --yes" in result.stdout or "Aborted" in result.stdout
 
 
 # ---------------------------------------------------------------------------

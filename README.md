@@ -189,7 +189,7 @@ aexp install
 aexp --help
 ```
 
-> **Heads up — `aexp install` will modify your repo.** It creates `.mcp.json`, **merges into** any existing `.claude/settings.json` (hooks + permissions are additive; yours are preserved), adds `.claude/skills/` with four research-methodology skills, copies a `kb/` scaffold plus `templates/` and vendored Limina `scripts/` into the repo root, initializes `.runs/` as a signac project, and records the interpreter path in `.aexp/installed.json`. Run it in a clean working tree so you can diff and revert if anything surprises you.
+> **Heads up — `aexp install` will modify your repo.** It creates `.mcp.json`, **merges into** any existing `.claude/settings.json` (hooks + permissions are additive; yours are preserved), adds `.claude/skills/` with four research-methodology skills, copies a `kb/` scaffold plus `templates/` into the repo root, initializes `.runs/` as a signac project, and records the interpreter path in `.aexp/installed.json`. It prints the plan and asks for confirmation before writing — pass `--yes` to skip the prompt or `--dry-run` to preview only. **No Python code you didn't write lands in your repo**: hook scripts and validator logic live inside the installed `aexp` package and upgrade via `pip install -U`.
 
 See [docs/quickstart.md](docs/quickstart.md) for a full worked example — hypothesis → experiment → runs → finding.
 
@@ -244,19 +244,20 @@ src/aexp/
   __init__.py           # public API re-exports
   cli.py                # Typer app (aexp)
   __main__.py           # python -m aexp → CLI
-  install.py            # install_limina (apply vendored Limina into a consumer repo)
+  install.py            # install_limina (apply harness into a consumer repo)
   runs.py               # signac wrappers: create_run, open_run, find_runs, run_lifecycle
   linking.py            # batch queries + retroactive Limina-signac linking
   limina_io.py          # typed read wrappers for H/E/F/L/CR/SR artifacts
   validate.py           # composes kb_validate + run-link + citation integrity
+  kb_validate.py        # KB structural validator (frontmatter, aliases, chain)
   schema.py             # pydantic + dataclass types
   mcp_server.py         # FastMCP server — optional [mcp] extra
+  hooks/                # Claude Code hooks (session_start, enforce_hef_chain, kb_write_guard, stop_validate)
   slash_commands/       # /aexp-* templates
   trackers/             # TrackerAdapter ABC + noop + wandb adapters
   utils/                # paths, git, atomic writes
-  vendor/limina/        # forked Limina snapshot (hooks Python-ported, skills included)
-reference/limina/       # pristine upstream snapshot — dev-only diff provenance
-tests/                  # pytest suite — 202 tests, CI on Ubuntu + Windows
+  vendor/limina/        # forked Limina snapshot — kb/, templates/, skills/ only
+tests/                  # pytest suite; CI on Ubuntu + Windows × Py 3.11/3.12/3.13
 docs/                   # concepts, quickstart, cli, mcp, mapping, tracker-adapters
 ```
 

@@ -1,9 +1,10 @@
 """Typed read wrappers over Limina ``kb/`` artifacts.
 
 Reads parse the YAML frontmatter with ``python-frontmatter`` and return a
-:class:`~aexp.schema.LiminaArtifactRef`. Everything here is
-read-only in v1; creation of artifacts goes through the vendored
-``scripts/kb_new_artifact.py``.
+:class:`~aexp.schema.LiminaArtifactRef`. Everything here is read-only;
+artifact creation happens by writing from ``templates/`` (v1) or via the
+planned ``aexp new-hypothesis`` / ``new-experiment`` / ``new-finding``
+CLI verbs (v1.1).
 """
 from __future__ import annotations
 

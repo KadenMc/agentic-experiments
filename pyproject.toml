@@ -110,6 +110,12 @@ select = ["E", "F", "W", "I", "B", "UP"]
 # Tests contain long literal artifact-body strings used as fixtures; breaking
 # them up hurts readability without any real benefit.
 "tests/*" = ["E501"]
+# Ported near-verbatim from the vendored Limina kb_validate.py; keeping the
+# upstream line-break style makes future diffs against upstream intelligible.
+"src/aexp/kb_validate.py" = ["E501"]
+# The install command's multi-line heads-up text contains intentionally wide
+# lines for visual column alignment in the user-facing output.
+"src/aexp/cli.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.12"
