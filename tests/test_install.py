@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from agentic_experiments.install import (
+from aexp.install import (
     InstallAction,
     block_merge_markdown,
     compute_vendor_sha,
@@ -15,7 +15,7 @@ from agentic_experiments.install import (
     is_limina_installed,
     merge_claude_settings,
 )
-from agentic_experiments.utils.paths import (
+from aexp.utils.paths import (
     INSTALLED_MARKER_REL,
     read_installed_marker,
 )
@@ -198,6 +198,11 @@ def test_install_writes_valid_marker(fresh_git_repo: Path) -> None:
     assert marker["version"]
     assert marker["run_store_path"] == ".runs"
     assert len(marker["limina_vendor_sha"]) == 64
+    # Cross-platform invocation fields written by default.
+    assert "python_exe" in marker
+    assert Path(marker["python_exe"]).exists()
+    # conda_env_name is present (may be "" when running under a venv).
+    assert "conda_env_name" in marker
     assert is_limina_installed(fresh_git_repo)
 
 
@@ -330,6 +335,7 @@ def test_install_action_kinds_are_expected(fresh_git_repo: Path) -> None:
         "merged_json",
         "merged_block",
         "initialized_runs",
+        "installed_skill",
         "wrote_marker",
         "already_installed",
     }
@@ -337,3 +343,180 @@ def test_install_action_kinds_are_expected(fresh_git_repo: Path) -> None:
         assert isinstance(a, InstallAction)
         assert a.kind in valid_kinds, a
         assert a.path, a
+
+
+def test_install_copies_limina_skills_to_claude_skills(fresh_git_repo: Path) -> None:
+    """All vendored Limina skills must land under <repo>/.claude/skills/.
+
+    Without these, the AGENTS.md references like $experiment-rigor are broken
+    on every consumer repo.
+    """
+    install_limina(fresh_git_repo)
+    skills_root = fresh_git_repo / ".claude" / "skills"
+    assert skills_root.is_dir()
+    # Top-level "limina" skill (from vendor/limina/skill/)
+    assert (skills_root / "limina" / "SKILL.md").is_file()
+    # Research-methodology skills (from vendor/limina/skills/)
+    expected = {
+        "experiment-rigor",
+        "exploratory-sota-research",
+        "research-devil-advocate",
+        "build-maintainable-software",
+    }
+    installed = {p.name for p in skills_root.iterdir() if p.is_dir()}
+    assert expected.issubset(installed), (expected, installed)
+    for name in expected:
+        assert (skills_root / name / "SKILL.md").is_file(), name
+
+
+def test_install_skills_emits_installed_skill_actions(fresh_git_repo: Path) -> None:
+    actions = install_limina(fresh_git_repo)
+    skill_actions = [a for a in actions if a.kind == "installed_skill"]
+    # 4 research skills + 1 top-level "limina" skill = 5 installed_skill entries.
+    assert len(skill_actions) == 5, [a.path for a in skill_actions]
+    paths = {Path(a.path).name for a in skill_actions}
+    assert "limina" in paths
+    assert "experiment-rigor" in paths
+
+
+# ---------------------------------------------------------------------------
+# MCP server registration
+# ---------------------------------------------------------------------------
+
+
+def test_install_writes_mcp_json_at_repo_root(fresh_git_repo: Path) -> None:
+    """``.mcp.json`` at the repo root must contain an ``mcpServers.aexp`` entry.
+
+    This is the file Claude Code reads for project-scope MCP servers;
+    ``.claude/settings.json`` does NOT drive MCP config.
+    """
+    install_limina(fresh_git_repo)
+    mcp_path = fresh_git_repo / ".mcp.json"
+    assert mcp_path.is_file(), "install must write .mcp.json at repo root"
+    mcp = json.loads(mcp_path.read_text("utf-8"))
+    assert "mcpServers" in mcp
+    assert "aexp" in mcp["mcpServers"]
+    entry = mcp["mcpServers"]["aexp"]
+    assert entry["command"]
+    # The command reaches the aexp-mcp-server entry point (added to
+    # [project.scripts] in pyproject.toml) via uvx.
+    combined = [entry["command"]] + list(entry["args"])
+    assert "aexp-mcp-server" in combined, combined
+
+
+def test_install_does_not_write_mcp_servers_to_settings_json(
+    fresh_git_repo: Path,
+) -> None:
+    """``mcpServers`` must NOT end up in ``.claude/settings.json`` — Claude
+    Code would ignore it there. All MCP config belongs in ``.mcp.json``.
+    """
+    install_limina(fresh_git_repo)
+    settings = json.loads(
+        (fresh_git_repo / ".claude" / "settings.json").read_text("utf-8")
+    )
+    assert "mcpServers" not in settings, (
+        "mcpServers leaked into settings.json; it must live in .mcp.json"
+    )
+
+
+def test_install_mcp_entry_uses_uvx(fresh_git_repo: Path) -> None:
+    """MCP command must use ``uvx`` — portable, no absolute paths.
+
+    This is the canonical pattern for Python MCP servers (see
+    modelcontextprotocol/servers reference implementations + Anthropic's
+    MCP quickstart). It lets ``.mcp.json`` be committed to git because
+    every teammate with ``uv`` installed gets the same invocation.
+    """
+    install_limina(fresh_git_repo)
+    mcp = json.loads((fresh_git_repo / ".mcp.json").read_text("utf-8"))
+    entry = mcp["mcpServers"]["aexp"]
+    assert entry["command"] == "uvx"
+    # --from <spec> aexp-mcp-server. The spec must name the PyPI
+    # distribution with the [mcp] extra so uvx installs the server's deps.
+    assert "--from" in entry["args"]
+    from_idx = entry["args"].index("--from")
+    spec = entry["args"][from_idx + 1]
+    assert spec.startswith("agentic-experiments")
+    assert "mcp" in spec  # [mcp] extra
+    # The entry-point script name (matches pyproject [project.scripts]).
+    assert "aexp-mcp-server" in entry["args"]
+    # PYTHONUNBUFFERED=1 still set as belt-and-suspenders for stdio.
+    assert entry["env"].get("PYTHONUNBUFFERED") == "1"
+
+
+def test_install_mcp_entry_is_env_independent(
+    fresh_git_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The uvx invocation must be identical regardless of which env the
+    installer was run from — no conda-env name, no absolute python path,
+    no user home directory leaked into .mcp.json.
+    """
+    import sys
+
+    # Set a distinctive conda env to confirm we DON'T leak it.
+    monkeypatch.setenv("CONDA_DEFAULT_ENV", "some-distinctive-env-name")
+    install_limina(fresh_git_repo)
+    content = (fresh_git_repo / ".mcp.json").read_text("utf-8")
+    # No env-specific strings should appear anywhere in the written file.
+    assert "some-distinctive-env-name" not in content
+    assert sys.executable not in content
+    assert "miniforge3" not in content
+    assert "miniconda" not in content
+    assert "conda" not in content  # neither "conda run" nor env prefix paths
+    # And no Users-style absolute home directory.
+    assert "Users\\" not in content
+    assert "/home/" not in content
+
+
+def test_install_preserves_user_mcp_servers_in_mcp_json(
+    fresh_git_repo: Path,
+) -> None:
+    """User-defined servers in ``.mcp.json`` must survive the merge."""
+    user_mcp = fresh_git_repo / ".mcp.json"
+    user_mcp.write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "user-mcp": {
+                        "command": "node",
+                        "args": ["my-server.js"],
+                        "env": {},
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    install_limina(fresh_git_repo)
+    merged = json.loads(user_mcp.read_text("utf-8"))
+    assert "user-mcp" in merged["mcpServers"]
+    assert "aexp" in merged["mcpServers"]
+
+
+def test_install_overwrites_stale_aexp_mcp_entry_on_reinstall(
+    fresh_git_repo: Path,
+) -> None:
+    """A stale ``aexp`` entry in ``.mcp.json`` gets refreshed on install."""
+    user_mcp = fresh_git_repo / ".mcp.json"
+    user_mcp.write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "aexp": {
+                        "command": "python",
+                        "args": ["-m", "stale_module"],
+                        "env": {},
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    install_limina(fresh_git_repo)
+    mcp = json.loads(user_mcp.read_text("utf-8"))
+    combined = (
+        [mcp["mcpServers"]["aexp"]["command"]]
+        + mcp["mcpServers"]["aexp"]["args"]
+    )
+    assert "aexp-mcp-server" in combined
+    assert "stale_module" not in combined

@@ -8,6 +8,33 @@ authors = [
 license = {text = "MIT"}
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
+keywords = [
+    "agents",
+    "claude",
+    "claude-code",
+    "experiment-tracking",
+    "hypothesis",
+    "limina",
+    "mcp",
+    "mlops",
+    "research",
+    "signac",
+    "wandb",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Logging",
+    "Typing :: Typed",
+]
 dependencies = [
     "signac (>=2.3.0,<3.0.0)",
     "python-frontmatter (>=1.1.0,<2.0.0)",
@@ -19,13 +46,19 @@ dependencies = [
 
 [project.optional-dependencies]
 wandb = ["wandb (>=0.16,<1.0)"]
+mcp = ["mcp (>=1.2,<2.0)"]
 
 [project.scripts]
-agentic-experiments = "agentic_experiments.cli:app"
-aex = "agentic_experiments.cli:app"
+aexp = "aexp.cli:app"
+# MCP server entry point. Invoked via ``uvx --from agentic-experiments[mcp] aexp-mcp-server``
+# from .mcp.json so Claude Code can spawn it without any env-specific setup.
+aexp-mcp-server = "aexp.mcp_server:main"
 
 [project.urls]
+Homepage = "https://github.com/kadenmc/agentic-experiments"
 Repository = "https://github.com/kadenmc/agentic-experiments"
+Issues = "https://github.com/kadenmc/agentic-experiments/issues"
+Changelog = "https://github.com/kadenmc/agentic-experiments/blob/main/CHANGELOG.md"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
@@ -40,12 +73,25 @@ dev = [
 ]
 
 [tool.poetry]
-packages = [{include = "agentic_experiments", from = "src"}]
+packages = [{include = "aexp", from = "src"}]
+# Files to include in the source distribution beyond the package tree.
+include = [
+    { path = "LICENSE", format = ["sdist", "wheel"] },
+    { path = "README.md", format = ["sdist", "wheel"] },
+    { path = "CHANGELOG.md", format = ["sdist"] },
+    { path = "docs/**/*.md", format = ["sdist"] },
+]
+# Everything under reference/ is dev-only diff provenance, never shipped.
+exclude = [
+    "reference/**",
+    "**/__pycache__",
+    "**/*.pyc",
+    "**/.pytest_cache",
+]
 
 [tool.poetry.dependencies]
-# Mirror of [project.dependencies] so Poetry resolves them from the same source.
-# Poetry 2.x reads PEP 621 deps, but a redundant [tool.poetry.dependencies] is harmless
-# and matches the electricrag pattern.
+# PEP 621 deps live in [project.dependencies]; this block stays present
+# (and empty) only so tooling that expects it doesn't choke.
 
 [tool.ruff]
 line-length = 100
@@ -57,8 +103,11 @@ select = ["E", "F", "W", "I", "B", "UP"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
-packages = ["agentic_experiments"]
+packages = ["aexp"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
+markers = [
+    "slow: end-to-end smoke tests; run with `pytest -m slow`",
+]
