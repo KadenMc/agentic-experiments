@@ -96,9 +96,18 @@ exclude = [
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# `reference/` is the pristine upstream Limina snapshot (dev-only, never shipped).
+# `src/aexp/vendor/` is the forked Limina vendor tree — we preserve upstream style
+# for diff clarity against reference/. Neither should be linted as our own code.
+extend-exclude = ["reference", "src/aexp/vendor"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests contain long literal artifact-body strings used as fixtures; breaking
+# them up hurts readability without any real benefit.
+"tests/*" = ["E501"]
 
 [tool.mypy]
 python_version = "3.12"

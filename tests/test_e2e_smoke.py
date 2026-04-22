@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -89,7 +90,7 @@ def test_e2e_fresh_repo_full_happy_path(tmp_path: Path, monkeypatch: pytest.Monk
 
     # 2. Vendored kb_validate should be green right out of the box.
     validate = subprocess.run(
-        ["python", str(repo / "scripts" / "kb_validate.py"), "--kb-root", str(repo / "kb")],
+        [sys.executable, str(repo / "scripts" / "kb_validate.py"), "--kb-root", str(repo / "kb")],
         capture_output=True,
         text=True,
         check=False,
@@ -138,7 +139,7 @@ def test_e2e_fresh_repo_full_happy_path(tmp_path: Path, monkeypatch: pytest.Monk
 
     # kb_validate should remain green with the new artifacts.
     validate2 = subprocess.run(
-        ["python", str(repo / "scripts" / "kb_validate.py"), "--kb-root", str(repo / "kb")],
+        [sys.executable, str(repo / "scripts" / "kb_validate.py"), "--kb-root", str(repo / "kb")],
         capture_output=True,
         text=True,
         check=False,

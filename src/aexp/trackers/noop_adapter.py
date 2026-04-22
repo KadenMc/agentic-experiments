@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -187,7 +187,7 @@ class NoopAdapter(TrackerAdapter):
             if ts and created_at is None:
                 try:
                     created_at = datetime.fromisoformat(ts.rstrip("Z")).replace(
-                        tzinfo=timezone.utc
+                        tzinfo=UTC
                     )
                 except ValueError:
                     pass

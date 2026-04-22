@@ -16,8 +16,8 @@ Conventions
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
-from typing import Any, Literal, Union
+from datetime import UTC, date, datetime
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -105,7 +105,7 @@ class BatchSelector(BaseModel):
     selector: dict[str, Any] = Field(default_factory=dict)
 
 
-SupportingRun = Union[SupportingJobRun, BatchSelector]
+SupportingRun = SupportingJobRun | BatchSelector
 """Union of the two ways a Finding can cite runs."""
 
 
@@ -211,7 +211,7 @@ def iso_utc_now() -> str:
 
     Separate helper so tests can monkeypatch a deterministic clock.
     """
-    return datetime.now(timezone.utc).replace(microsecond=0, tzinfo=None).isoformat() + "Z"
+    return datetime.now(UTC).replace(microsecond=0, tzinfo=None).isoformat() + "Z"
 
 
 __all__ = [

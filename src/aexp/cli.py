@@ -8,9 +8,7 @@ text when stdout is not a terminal).
 from __future__ import annotations
 
 import shutil
-import sys
 from pathlib import Path
-from typing import Optional
 
 import typer
 from rich.console import Console
@@ -21,7 +19,6 @@ from aexp.install import install_limina
 from aexp.linking import (
     link_to_experiment,
     list_batches,
-    runs_for_experiment,
     show_batch,
     summarize_run,
 )
@@ -113,9 +110,9 @@ def install(
 @app.command("new-run")
 def new_run(
     experiment: str = typer.Option(..., "--experiment", help="Limina E### id."),
-    hypothesis: Optional[str] = typer.Option(None, "--hypothesis"),
-    sub_hypothesis: Optional[str] = typer.Option(None, "--sub-hypothesis"),
-    sp: Optional[str] = typer.Option(None, "--sp", help="KEY=VAL,KEY=VAL state-point params."),
+    hypothesis: str | None = typer.Option(None, "--hypothesis"),
+    sub_hypothesis: str | None = typer.Option(None, "--sub-hypothesis"),
+    sp: str | None = typer.Option(None, "--sp", help="KEY=VAL,KEY=VAL state-point params."),
     no_commit: bool = typer.Option(False, "--no-commit", help="Skip code_commit/code_dirty in sp."),
 ) -> None:
     """Create a signac job linked to a Limina experiment."""
@@ -133,10 +130,10 @@ def new_run(
 
 @app.command("list-runs")
 def list_runs_cmd(
-    experiment: Optional[str] = typer.Option(None, "--experiment"),
-    hypothesis: Optional[str] = typer.Option(None, "--hypothesis"),
-    status: Optional[str] = typer.Option(None, "--status"),
-    sp: Optional[str] = typer.Option(None, "--sp", help="Exact-match filter KEY=VAL,..."),
+    experiment: str | None = typer.Option(None, "--experiment"),
+    hypothesis: str | None = typer.Option(None, "--hypothesis"),
+    status: str | None = typer.Option(None, "--status"),
+    sp: str | None = typer.Option(None, "--sp", help="Exact-match filter KEY=VAL,..."),
 ) -> None:
     """List signac jobs filtered by Limina link + sp."""
     sp_filters = _parse_sp_kv(sp)
@@ -166,7 +163,7 @@ def list_runs_cmd(
 
 @app.command("list-batches")
 def list_batches_cmd(
-    experiment: Optional[str] = typer.Option(None, "--experiment"),
+    experiment: str | None = typer.Option(None, "--experiment"),
 ) -> None:
     """List distinct (experiment, condition) slices over runs."""
     batches = list_batches(experiment_id=experiment)
@@ -207,8 +204,8 @@ def show_run(job_id: str) -> None:
 @app.command("show-batch")
 def show_batch_cmd(
     experiment: str = typer.Option(..., "--experiment"),
-    condition: Optional[str] = typer.Option(None, "--condition"),
-    model: Optional[str] = typer.Option(None, "--model"),
+    condition: str | None = typer.Option(None, "--condition"),
+    model: str | None = typer.Option(None, "--model"),
 ) -> None:
     """Show an aggregate view of a batch slice."""
     selector: dict = {}
@@ -238,8 +235,8 @@ def show_batch_cmd(
 def link(
     job_id: str,
     experiment: str = typer.Option(..., "--experiment"),
-    hypothesis: Optional[str] = typer.Option(None, "--hypothesis"),
-    sub_hypothesis: Optional[str] = typer.Option(None, "--sub-hypothesis"),
+    hypothesis: str | None = typer.Option(None, "--hypothesis"),
+    sub_hypothesis: str | None = typer.Option(None, "--sub-hypothesis"),
 ) -> None:
     """Retroactively stamp ``job.doc['limina']`` onto an existing run."""
     link_to_experiment(
@@ -260,7 +257,7 @@ def link(
 def bind_tracker_cmd(
     job_id: str,
     backend: str = typer.Option("noop", "--backend", help="noop | wandb"),
-    project: Optional[str] = typer.Option(None, "--project"),
+    project: str | None = typer.Option(None, "--project"),
     offline: bool = typer.Option(False, "--offline"),
 ) -> None:
     """Attach a tracker run (e.g. W&B) to an existing signac job."""

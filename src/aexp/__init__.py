@@ -14,17 +14,15 @@ from aexp.install import (
     is_limina_installed,
 )
 
-# signac-backed run store ---------------------------------------------------
-from aexp.runs import (
-    RunNotFound,
-    RunStoreNotInitialized,
-    create_run,
-    find_runs,
-    get_run_store,
-    init_run_store,
-    mark_status,
-    open_run,
-    run_lifecycle,
+# Limina readers ------------------------------------------------------------
+from aexp.limina_io import (
+    ArtifactNotFoundError,
+    ArtifactReadError,
+    list_kb_artifacts,
+    load_artifact,
+    load_experiment,
+    load_finding,
+    load_hypothesis,
 )
 
 # Linking + batch queries ---------------------------------------------------
@@ -36,15 +34,17 @@ from aexp.linking import (
     summarize_run,
 )
 
-# Limina readers ------------------------------------------------------------
-from aexp.limina_io import (
-    ArtifactNotFoundError,
-    ArtifactReadError,
-    list_kb_artifacts,
-    load_artifact,
-    load_experiment,
-    load_finding,
-    load_hypothesis,
+# signac-backed run store ---------------------------------------------------
+from aexp.runs import (
+    RunNotFound,
+    RunStoreNotInitialized,
+    create_run,
+    find_runs,
+    get_run_store,
+    init_run_store,
+    mark_status,
+    open_run,
+    run_lifecycle,
 )
 
 # Schema / types ------------------------------------------------------------
@@ -72,6 +72,9 @@ from aexp.trackers import (
     bind_tracker,
 )
 
+# Validation ----------------------------------------------------------------
+from aexp.validate import ValidateResult, validate_repo
+
 
 def _lazy_wandb_attr(name: str):
     """Lazy accessor for wandb-dependent exports (``WandbAdapter``, sync helpers)."""
@@ -85,8 +88,6 @@ def __getattr__(name: str):
         return _lazy_wandb_attr(name)
     raise AttributeError(f"module 'aexp' has no attribute {name!r}")
 
-# Validation ----------------------------------------------------------------
-from aexp.validate import ValidateResult, validate_repo
 
 __all__ = [
     "__version__",

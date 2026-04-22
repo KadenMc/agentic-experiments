@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from aexp.install import install_limina
 from aexp.linking import (
@@ -108,7 +109,7 @@ def test_list_batches_groups_by_condition(installed_repo: Path) -> None:
 
 
 def test_list_batches_rolls_up_status_counts(installed_repo: Path) -> None:
-    j1 = create_run(
+    create_run(
         experiment_id="E001", statepoint={"condition": "a", "seed": 0}, repo_root=installed_repo
     )
     j2 = create_run(
@@ -193,5 +194,5 @@ def test_link_to_experiment_rejects_bad_id(installed_repo: Path) -> None:
     job = create_run(
         experiment_id="E001", statepoint={"c": "f"}, repo_root=installed_repo
     )
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         link_to_experiment(job.id, experiment_id="bad-id", repo_root=installed_repo)
