@@ -1,9 +1,9 @@
-"""Repo-level validator — composes Limina's kb_validate with run-link checks.
+"""Repo-level validator — composes KB structural checks with run-link checks.
 
 Plan §8 lays out the full set of checks:
 
-1. Run the vendored ``scripts/kb_validate.py`` as a subprocess and surface
-   its errors as ``Issue`` rows (code ``limina.validation_failed``).
+1. Call :func:`aexp.kb_validate.validate_kb` in-process and surface its
+   errors as ``Issue`` rows (code ``limina.validation_failed``).
 2. Walk ``.runs/workspace/*`` and for each job:
    - ``run.orphan`` if ``doc["limina"]`` is missing.
    - ``run.broken_experiment_link`` if the referenced E### file doesn't exist.
@@ -19,11 +19,11 @@ Plan §8 lays out the full set of checks:
 from __future__ import annotations
 
 import re
-import subprocess
-import sys
 from pathlib import Path
 from typing import Any, Literal
 
+from aexp.kb_validate import format_text as _kb_format_text
+from aexp.kb_validate import validate_kb
 from aexp.limina_io import (
     ArtifactNotFoundError,
     find_artifact_path,
@@ -70,61 +70,40 @@ class ValidateResult:
 
 
 # ---------------------------------------------------------------------------
-# Subprocess kb_validate.py
+# In-process KB structural validation
 # ---------------------------------------------------------------------------
 
 
 def _run_kb_validate(repo_root: Path) -> list[Issue]:
-    """Invoke the vendored ``scripts/kb_validate.py`` and parse its output.
+    """Run KB structural validation in-process via :func:`validate_kb`.
 
-    Hardening for MCP-server context:
+    Returns an empty list if there is no ``kb/`` directory (not-installed
+    case — callers decide whether that's worth flagging separately).
 
-    - ``stdin=DEVNULL``: kb_validate.py loads Limina's telemetry module
-      which calls ``ensure_consent()`` — interactive ``input()`` that would
-      otherwise read from the MCP JSON-RPC pipe and hang.
-    - ``LIMINA_TELEMETRY_INTERNAL=1``: disables telemetry imports entirely,
-      so consent is never prompted even if stdin were available.
-    - ``--format json``: avoids the consent prompt path in kb_validate
-      ``maybe_prompt_telemetry`` short-circuits on json output. Belt +
-      suspenders with the env var above.
+    No subprocess, no env manipulation, no telemetry concerns — all three
+    were required back when this shelled out to the vendored
+    ``scripts/kb_validate.py``. That script is now importable as
+    ``aexp.kb_validate``.
     """
-    import os
-
     kb_root = repo_root / "kb"
-    validator = repo_root / "scripts" / "kb_validate.py"
-    if not validator.is_file() or not kb_root.is_dir():
-        # Not installed — defer to the caller to decide whether that's an error.
+    if not kb_root.is_dir():
         return []
 
-    # Belt + suspenders: env var disables telemetry import, stdin=DEVNULL
-    # prevents any interactive prompt from ever finding input.
-    env = {**os.environ, "LIMINA_TELEMETRY_INTERNAL": "1"}
     try:
-        result = subprocess.run(
-            [sys.executable, str(validator), "--kb-root", str(kb_root), "--format", "text"],
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=60,
-            env=env,
-        )
+        result = validate_kb(kb_root)
     except Exception as exc:
         return [
             Issue(
                 code="limina.validator_unavailable",
-                message=f"kb_validate.py could not be invoked: {exc}",
+                message=f"kb_validate could not run: {exc}",
                 severity="error",
             )
         ]
 
-    if result.returncode == 0:
+    if result.ok:
         return []
 
-    # Surface the kb_validate output as a single error issue. The body
-    # includes every validation error with its own code — users see the
-    # raw text in the CLI.
-    message = (result.stdout + result.stderr).strip() or "kb_validate.py reported errors"
+    message = _kb_format_text(result)
     return [
         Issue(
             code="limina.validation_failed",

@@ -27,14 +27,13 @@ Flow:
    ```
 
    to confirm the batch has runs and what their status mix looks like.
-2. Mint a new Finding id via the vendored creator:
-
-   ```
-   python scripts/kb_new_artifact.py finding
-   ```
-
-   Fill `hypothesis` / `experiment` from the batch. Slug should describe
-   the verdict (e.g. `paired-ablation-verdict`).
+2. Pick the next Finding id by scanning `kb/research/findings/F*.md` —
+   use the smallest unused `F###`. Create the file at
+   `kb/research/findings/F###-<slug>.md` from `templates/finding.md`.
+   Fill `hypothesis:` and `experiment:` from the batch. The
+   `PreToolUse` hook will reject a finding that doesn't name an existing
+   experiment. Slug should describe the verdict
+   (e.g. `paired-ablation-verdict`).
 3. Open `kb/research/findings/F###-*.md` and add a **batch** citation in
    `supporting_runs:` — mapping form only, never a bare string:
 

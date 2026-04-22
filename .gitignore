@@ -1,3 +1,6 @@
+# Claude Code runtime state — never commit
+.claude/scheduled_tasks.lock
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

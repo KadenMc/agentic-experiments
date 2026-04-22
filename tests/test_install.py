@@ -163,20 +163,21 @@ def test_install_populates_fresh_repo(fresh_git_repo: Path) -> None:
     assert "initialized_runs" in kinds
     assert "wrote_marker" in kinds
 
-    # Trees landed
+    # Trees landed: kb/ data and templates, but NOT scripts/. Hook scripts
+    # now live inside the installed aexp package and are invoked from there.
     assert (fresh_git_repo / "kb" / "ACTIVE.md").is_file()
     assert (fresh_git_repo / "templates" / "hypothesis.md").is_file()
-    assert (fresh_git_repo / "scripts" / "hooks" / "session_start.py").is_file()
-    assert (fresh_git_repo / "scripts" / "kb_validate.py").is_file()
+    assert not (fresh_git_repo / "scripts").exists()
 
     # Claude settings landed at the expected path (merge path copied a new file)
     settings = json.loads((fresh_git_repo / ".claude" / "settings.json").read_text("utf-8"))
     assert "hooks" in settings
-    # Hooks commands reference Python ports, not bash
+    # Hook commands invoke the installed aexp package — `{python_exe} -m
+    # aexp.hooks.<name>` — not a copied script path.
     for event_groups in settings["hooks"].values():
         for group in event_groups:
             for h in group["hooks"]:
-                assert "python" in h["command"], h
+                assert "-m aexp.hooks." in h["command"], h
 
 
 def test_install_initializes_signac_project(fresh_git_repo: Path) -> None:
@@ -281,7 +282,7 @@ def test_install_json_merges_existing_claude_settings(fresh_git_repo: Path) -> N
     commands = [h["command"] for group in post_tool for h in group["hooks"]]
     assert "user-bash.sh" in commands
     # Vendor's hook got appended
-    assert any("kb_write_guard.py" in c for c in commands)
+    assert any("aexp.hooks.kb_write_guard" in c for c in commands)
     # User's unrelated key survived
     assert merged["theme"] == "dark"
 
@@ -304,23 +305,12 @@ def test_install_creates_claude_dir_if_missing(fresh_git_repo: Path) -> None:
 
 
 def test_installed_kb_validates_cleanly(fresh_git_repo: Path) -> None:
-    """After install, running the vendored kb_validate.py should succeed."""
+    """After install, the seeded kb/ passes structural validation."""
+    from aexp.kb_validate import validate_kb
+
     install_limina(fresh_git_repo)
-    result = subprocess.run(
-        [
-            "python",
-            str(fresh_git_repo / "scripts" / "kb_validate.py"),
-            "--kb-root",
-            str(fresh_git_repo / "kb"),
-            "--format",
-            "text",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=30,
-    )
-    assert result.returncode == 0, (result.stdout, result.stderr)
+    result = validate_kb(fresh_git_repo / "kb")
+    assert result.ok, result.errors
 
 
 def test_install_action_kinds_are_expected(fresh_git_repo: Path) -> None:

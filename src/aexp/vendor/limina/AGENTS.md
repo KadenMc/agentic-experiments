@@ -15,7 +15,7 @@ This file is the shared machine-facing instruction surface. Keep it short, speci
 7. Store reusable lessons in `kb/lessons/` as small topic files. Read only the ones you need.
 8. Use `CR` and `SR` only for real review points: major criticism, reset, or direction change.
 9. If the evaluation, baseline, or prior state looks untrustworthy, stop optimizing and resolve that first.
-10. Run `python3 scripts/kb_validate.py` after substantial kb edits and before closing kb-heavy work.
+10. Run `python -m aexp.kb_validate --kb-root ./kb` (or `python -m aexp validate`) after substantial kb edits and before closing kb-heavy work.
 11. Every note in the research core must include a `## Links` section with real wikilinks.
 12. Artifact notes alias their ID in frontmatter, so use `[[H001]]`, `[[E003]]`, `[[F010]]`, and similar links instead of raw file paths. Fixed notes use `[[ACTIVE]]`, `[[CHALLENGE]]`, and `[[DASHBOARD]]`.
 
@@ -108,7 +108,7 @@ Do not:
 - Persist durable conclusions in artifacts, not only in chat.
 - Ask the user early when blocked on data, access, decisions, or trust in the evaluation.
 - Keep reviews scoped and evidence-backed.
-- Prefer `python3 scripts/kb_new_artifact.py ...` when creating a new core artifact.
+- Create core artifacts by writing directly from `templates/` — see the ID Allocation section below. The `PreToolUse` hook validates H/E/F structure before the write lands.
 - When you create a child artifact, ensure the parent note links back to it.
 
 ## Artifact Model
@@ -131,14 +131,19 @@ Required non-ID files:
 
 Do not maintain manual counters in prompt-loaded files.
 
-Use:
+Pick the next free ID by scanning the relevant directory for the highest
+existing `{prefix}NNN` and incrementing:
 
-```bash
-python3 scripts/kb_next_id.py H
-python3 scripts/kb_new_artifact.py H "Hypothesis title"
-```
+- `H` -> `kb/research/hypotheses/`
+- `E` -> `kb/research/experiments/`
+- `F` -> `kb/research/findings/`
+- `L` -> `kb/research/literature/`
+- `CR` / `SR` -> `kb/reports/`
 
-Replace `H` with `E`, `F`, `L`, `CR`, or `SR`.
+Then create the file from the matching template in `templates/` at
+`kb/.../{ID}-<slug>.md`, fill in the frontmatter, and save. The
+`PreToolUse` hook validates the H->E->F chain at write time; the
+`PostToolUse` hook runs structural validation against the new file.
 
 ## Communication
 

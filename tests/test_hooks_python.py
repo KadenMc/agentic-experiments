@@ -1,27 +1,26 @@
-"""Tests for the Limina hook ports (shell -> Python).
+"""Tests for the aexp hooks (ported from vendored Limina scripts).
 
 Covers:
-- ``_parse_hook_input.parse_hook_input`` (module API) for Write/Edit/MultiEdit payloads.
-- ``_parse_hook_input`` CLI fallback.
-- ``enforce_hef_chain.py`` blocking + allowing paths.
-- ``kb_write_guard.py`` carve-outs + delegation to ``kb_validate.py``.
-- ``stop_validate.py`` full-KB validation.
 
-Strategy: every test copies the vendored Limina tree into a tmp dir (via the
-``limina_project`` fixture in ``conftest.py``) and then execs the hook there.
-Because the hooks derive ``PROJECT_ROOT`` from ``__file__``, running the copied
-hook gives us an isolated project root per test.
+- ``aexp.hooks._parse_hook_input.parse_hook_input`` for Write/Edit/MultiEdit payloads.
+- ``aexp.hooks.enforce_hef_chain`` blocking + allowing paths.
+- ``aexp.hooks.kb_write_guard`` carve-outs + delegation to kb_validate.
+- ``aexp.hooks.stop_validate`` full-KB validation.
+
+Strategy: hooks derive the repo root from ``os.getcwd()``. Each test
+constructs a project directory (via the ``limina_project`` fixture) and
+invokes the hook as ``python -m aexp.hooks.<name>`` with ``cwd`` set to
+that directory.
 """
 from __future__ import annotations
 
 import json
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
 
-HOOK_REL = Path("scripts") / "hooks"
+from aexp.hooks._parse_hook_input import parse_hook_input
 
 
 def _run_hook(
@@ -31,17 +30,16 @@ def _run_hook(
     python_exe: str,
     timeout: float = 15,
 ) -> subprocess.CompletedProcess[str]:
-    """Execute ``<project>/scripts/hooks/<hook_name>`` as a subprocess."""
-    hook_path = project / HOOK_REL / hook_name
-    assert hook_path.is_file(), f"missing hook: {hook_path}"
+    """Execute ``python -m aexp.hooks.<hook_name>`` with cwd set to ``project``."""
     stdin = json.dumps(payload) if payload is not None else ""
     return subprocess.run(
-        [python_exe, str(hook_path)],
+        [python_exe, "-m", f"aexp.hooks.{hook_name}"],
         input=stdin,
         capture_output=True,
         text=True,
         check=False,
         timeout=timeout,
+        cwd=str(project),
     )
 
 
@@ -50,132 +48,71 @@ def _run_hook(
 # ---------------------------------------------------------------------------
 
 
-def test_parse_hook_input_write_payload(limina_project: Path) -> None:
+def test_parse_hook_input_write_payload() -> None:
     """Write payload: file_path + content come through untouched."""
-    sys.path.insert(0, str(limina_project / HOOK_REL))
-    try:
-        import importlib
-
-        parser = importlib.import_module("_parse_hook_input")
-        importlib.reload(parser)  # avoid stale state from other tests
-        fp, content = parser.parse_hook_input(
-            json.dumps(
-                {
-                    "tool_input": {
-                        "file_path": "kb/research/hypotheses/H001-foo.md",
-                        "content": "body",
-                    }
+    fp, content = parse_hook_input(
+        json.dumps(
+            {
+                "tool_input": {
+                    "file_path": "kb/research/hypotheses/H001-foo.md",
+                    "content": "body",
                 }
-            )
+            }
         )
-    finally:
-        sys.path.pop(0)
-
+    )
     assert fp.endswith("H001-foo.md")
     assert content == "body"
 
 
-def test_parse_hook_input_edit_payload_reads_existing(
-    limina_project: Path, tmp_path: Path
-) -> None:
+def test_parse_hook_input_edit_payload_reads_existing(tmp_path: Path) -> None:
     """Edit payload: simulates old_string -> new_string against the real file."""
     target = tmp_path / "note.md"
     target.write_text("hello world", encoding="utf-8")
 
-    sys.path.insert(0, str(limina_project / HOOK_REL))
-    try:
-        import importlib
-
-        parser = importlib.import_module("_parse_hook_input")
-        importlib.reload(parser)
-        fp, content = parser.parse_hook_input(
-            json.dumps(
-                {
-                    "tool_input": {
-                        "file_path": str(target),
-                        "old_string": "world",
-                        "new_string": "there",
-                    }
+    fp, content = parse_hook_input(
+        json.dumps(
+            {
+                "tool_input": {
+                    "file_path": str(target),
+                    "old_string": "world",
+                    "new_string": "there",
                 }
-            )
+            }
         )
-    finally:
-        sys.path.pop(0)
+    )
 
     assert fp == str(target)
     assert content == "hello there"
 
 
-def test_parse_hook_input_multiedit_payload_sequential(
-    limina_project: Path, tmp_path: Path
-) -> None:
+def test_parse_hook_input_multiedit_payload_sequential(tmp_path: Path) -> None:
     """MultiEdit payload: applies edits in order."""
     target = tmp_path / "note.md"
     target.write_text("one two three", encoding="utf-8")
 
-    sys.path.insert(0, str(limina_project / HOOK_REL))
-    try:
-        import importlib
-
-        parser = importlib.import_module("_parse_hook_input")
-        importlib.reload(parser)
-        fp, content = parser.parse_hook_input(
-            json.dumps(
-                {
-                    "tool_input": {
-                        "file_path": str(target),
-                        "edits": [
-                            {"old_string": "one", "new_string": "uno"},
-                            {"old_string": "three", "new_string": "tres"},
-                        ],
-                    }
+    fp, content = parse_hook_input(
+        json.dumps(
+            {
+                "tool_input": {
+                    "file_path": str(target),
+                    "edits": [
+                        {"old_string": "one", "new_string": "uno"},
+                        {"old_string": "three", "new_string": "tres"},
+                    ],
                 }
-            )
+            }
         )
-    finally:
-        sys.path.pop(0)
+    )
 
     assert content == "uno two tres"
     assert fp == str(target)
 
 
-def test_parse_hook_input_cli_fallback(
-    limina_project: Path, python_exe: str
-) -> None:
-    """CLI fallback still prints ``file_path\\ncontent`` to stdout."""
-    payload = {
-        "tool_input": {
-            "file_path": "kb/research/experiments/E001-foo.md",
-            "content": "> **Hypothesis**: H001",
-        }
-    }
-    result = subprocess.run(
-        [python_exe, str(limina_project / HOOK_REL / "_parse_hook_input.py")],
-        input=json.dumps(payload),
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=5,
-    )
-    lines = result.stdout.splitlines()
-    assert lines[0].endswith("E001-foo.md")
-    assert any("H001" in line for line in lines[1:])
-
-
-def test_parse_hook_input_invalid_json_yields_empty(
-    limina_project: Path, python_exe: str
-) -> None:
-    """Invalid JSON input: the CLI exits cleanly with empty lines."""
-    result = subprocess.run(
-        [python_exe, str(limina_project / HOOK_REL / "_parse_hook_input.py")],
-        input="not json at all",
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=5,
-    )
-    # Two empty strings emitted as two blank lines.
-    assert result.stdout == "\n\n"
+def test_parse_hook_input_invalid_json_yields_empty() -> None:
+    """Invalid JSON: returns empty ``(file_path, content)``."""
+    fp, content = parse_hook_input("not json at all")
+    assert fp == ""
+    assert content == ""
 
 
 # ---------------------------------------------------------------------------
@@ -191,7 +128,7 @@ def test_enforce_hef_allows_non_hef_path(limina_project: Path, python_exe: str) 
             "content": "any content",
         }
     }
-    r = _run_hook(limina_project, "enforce_hef_chain.py", payload, python_exe)
+    r = _run_hook(limina_project, "enforce_hef_chain", payload, python_exe)
     assert r.returncode == 0, (r.returncode, r.stderr)
 
 
@@ -205,7 +142,7 @@ def test_enforce_hef_blocks_experiment_missing_hypothesis_ref(
             "content": "no reference here",
         }
     }
-    r = _run_hook(limina_project, "enforce_hef_chain.py", payload, python_exe)
+    r = _run_hook(limina_project, "enforce_hef_chain", payload, python_exe)
     assert r.returncode == 2
     assert "without a hypothesis reference" in r.stderr
 
@@ -220,7 +157,7 @@ def test_enforce_hef_blocks_experiment_referencing_missing_hypothesis(
             "content": "> **Hypothesis**: H999\n",
         }
     }
-    r = _run_hook(limina_project, "enforce_hef_chain.py", payload, python_exe)
+    r = _run_hook(limina_project, "enforce_hef_chain", payload, python_exe)
     assert r.returncode == 2
     assert "no hypothesis file found" in r.stderr
 
@@ -239,7 +176,7 @@ def test_enforce_hef_allows_experiment_with_existing_hypothesis(
             "content": "> **Hypothesis**: H007\n",
         }
     }
-    r = _run_hook(limina_project, "enforce_hef_chain.py", payload, python_exe)
+    r = _run_hook(limina_project, "enforce_hef_chain", payload, python_exe)
     assert r.returncode == 0, (r.returncode, r.stderr)
 
 
@@ -253,7 +190,7 @@ def test_enforce_hef_blocks_finding_missing_experiment_ref(
             "content": "bare finding body",
         }
     }
-    r = _run_hook(limina_project, "enforce_hef_chain.py", payload, python_exe)
+    r = _run_hook(limina_project, "enforce_hef_chain", payload, python_exe)
     assert r.returncode == 2
     assert "without an experiment reference" in r.stderr
 
@@ -272,7 +209,7 @@ def test_enforce_hef_allows_finding_with_existing_experiment(
             "content": "> **Experiment**: E042\n",
         }
     }
-    r = _run_hook(limina_project, "enforce_hef_chain.py", payload, python_exe)
+    r = _run_hook(limina_project, "enforce_hef_chain", payload, python_exe)
     assert r.returncode == 0, (r.returncode, r.stderr)
 
 
@@ -290,7 +227,7 @@ def test_enforce_hef_accepts_frontmatter_hypothesis_key(
             "content": "---\nhypothesis: \"H003\"\n---\n\nbody\n",
         }
     }
-    r = _run_hook(limina_project, "enforce_hef_chain.py", payload, python_exe)
+    r = _run_hook(limina_project, "enforce_hef_chain", payload, python_exe)
     assert r.returncode == 0, (r.returncode, r.stderr)
 
 
@@ -313,7 +250,7 @@ def test_kb_write_guard_skips_non_guarded_paths(
     limina_project: Path, python_exe: str, path: str
 ) -> None:
     payload = {"tool_input": {"file_path": path, "content": "any"}}
-    r = _run_hook(limina_project, "kb_write_guard.py", payload, python_exe)
+    r = _run_hook(limina_project, "kb_write_guard", payload, python_exe)
     assert r.returncode == 0, (r.returncode, r.stdout, r.stderr)
 
 
@@ -331,7 +268,7 @@ def test_kb_write_guard_blocks_invalid_md(
             "content": "this is not a valid Limina artifact",
         }
     }
-    r = _run_hook(limina_project, "kb_write_guard.py", payload, python_exe)
+    r = _run_hook(limina_project, "kb_write_guard", payload, python_exe)
     assert r.returncode == 2, (r.returncode, r.stdout, r.stderr)
     assert "BLOCKED" in r.stderr
 
@@ -345,7 +282,7 @@ def test_stop_validate_passes_on_clean_kb(
     limina_project: Path, python_exe: str
 ) -> None:
     """Vendored Limina's shipped kb/ template validates cleanly out of the box."""
-    r = _run_hook(limina_project, "stop_validate.py", None, python_exe, timeout=30)
+    r = _run_hook(limina_project, "stop_validate", None, python_exe, timeout=30)
     assert r.returncode == 0, (r.returncode, r.stdout, r.stderr)
 
 
@@ -356,7 +293,7 @@ def test_stop_validate_no_kb_dir_is_noop(
     import shutil as _shutil
 
     _shutil.rmtree(limina_project / "kb")
-    r = _run_hook(limina_project, "stop_validate.py", None, python_exe, timeout=10)
+    r = _run_hook(limina_project, "stop_validate", None, python_exe, timeout=10)
     assert r.returncode == 0
 
 
@@ -368,6 +305,6 @@ def test_stop_validate_blocks_on_broken_kb(
     broken.parent.mkdir(parents=True, exist_ok=True)
     broken.write_text("no frontmatter, no valid structure", encoding="utf-8")
 
-    r = _run_hook(limina_project, "stop_validate.py", None, python_exe, timeout=30)
+    r = _run_hook(limina_project, "stop_validate", None, python_exe, timeout=30)
     assert r.returncode == 2, (r.returncode, r.stdout, r.stderr)
     assert "BLOCKED" in r.stderr

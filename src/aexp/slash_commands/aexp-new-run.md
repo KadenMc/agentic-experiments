@@ -23,9 +23,11 @@ Create a tracked run for an existing Limina experiment.
 
 Ask the user for:
 1. The experiment id (e.g. `E018`). If they don't know it, run
-   `python -m aexp list-runs` first to show existing runs,
-   or suggest they create the experiment via
-   `python scripts/kb_new_artifact.py experiment`.
+   `python -m aexp list-runs` first to show existing runs. If the
+   experiment doesn't exist yet, write it to
+   `kb/research/experiments/E###-<slug>.md` using `templates/experiment.md`
+   as the starting point — the `PreToolUse` hook will validate the shape
+   before the write lands.
 2. The hypothesis id (optional — defaults to the experiment's primary
    hypothesis).
 3. State-point params. At minimum `condition=<val>`; add `model=`, `seed=`,
