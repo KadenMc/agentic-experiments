@@ -7,43 +7,99 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.1.0] — 2026-04-22
+
+First public release — hypothesis-first experiment tracking for agent-driven
+ML research, wired into Claude Code.
+
 ### Added
-- Initial v1 of the Limina-fork + signac + W&B fusion layer.
-- `aexp install` applies a vendored Limina snapshot to a consumer repo:
-  copies `kb/`, `templates/`, `scripts/` (with four shell hooks ported to
-  cross-platform Python), JSON-merges `.claude/settings.json`, block-merges
-  `AGENTS.md`/`CLAUDE.md`, and initializes a signac project at `.runs/`.
-  Also copies the four Limina research skills (`experiment-rigor`,
-  `exploratory-sota-research`, `research-devil-advocate`,
-  `build-maintainable-software`) into `.claude/skills/`.
-- `aexp` Typer CLI: `install`, `new-run`, `list-runs`, `list-batches`,
-  `show-run`, `show-batch`, `link`, `bind-tracker`, `sync-offline`,
-  `validate`, `install-slash-commands`.
-- Python API re-exported from `aexp`: `install_limina`, `create_run`,
-  `open_run`, `find_runs`, `run_lifecycle`, `list_batches`, `show_batch`,
-  `link_to_experiment`, `load_hypothesis` / `load_experiment` /
+
+#### Core package (`aexp`)
+- **Typer CLI** (`aexp <verb>`) with ten verbs: `install`, `new-run`,
+  `list-runs`, `list-batches`, `show-run`, `show-batch`, `link`,
+  `bind-tracker`, `sync-offline`, `validate`, `install-slash-commands`.
+- **Python API** re-exported from the top-level package: `install_limina`,
+  `create_run`, `open_run`, `find_runs`, `run_lifecycle`, `list_batches`,
+  `show_batch`, `link_to_experiment`, `load_hypothesis` / `load_experiment` /
   `load_finding`, `bind_tracker`, `NoopAdapter`, `WandbAdapter`,
   `validate_repo`.
-- Tracker adapters: `NoopAdapter` (always on; writes JSONL to
-  `<workspace>/tracker_log/`) and `WandbAdapter` (optional `[wandb]`
-  extra; co-locates offline-run dirs with the signac workspace).
-- HPC workflow: `aexp sync-offline` walks `.runs/workspace/*/wandb/` and
-  calls `wandb sync` on every offline run — pair with `--offline` at
-  `bind-tracker` time on compute nodes.
-- MCP server (`aexp.mcp_server`, behind optional `[mcp]` extra) exposes
-  the Python API as typed tools for Claude Code. `aexp install` wires
-  the server into `.claude/settings.json` so Claude picks it up
-  automatically.
-- Cross-platform invocation: `.aexp/installed.json` records `python_exe`
-  and `conda_env_name` at install time; `aexp.utils.resolve_invocation`
-  returns the correct argv prefix from any shell context.
-- Validator (`aexp validate`): composes vendored `kb_validate.py`
-  (structural) with run-link / finding-citation integrity checks.
-  Error codes: `limina.validation_failed`, `run.orphan`,
-  `run.broken_experiment_link`, `run.hypothesis_mismatch`,
-  `run.sub_hypothesis_unlisted`, `run.status_invalid`,
-  `finding.broken_run_citation`, `finding.empty_batch`.
-- Slash commands (`/aexp-new-run`, `/aexp-close-run`, `/aexp-close-batch`)
-  installed via `aexp install-slash-commands`.
+- **Typed schema** (`aexp.schema`) backed by pydantic: `RunLink`,
+  `BatchSelector`, `BatchSummary`, `Issue`, `RunSummary`, etc.
 
-[Unreleased]: https://github.com/kadenmc/agentic-experiments/compare/v0.0.1...HEAD
+#### Limina research harness
+- `aexp install` applies the vendored Limina snapshot to a consumer repo:
+  copies `kb/` scaffold + `templates/`, JSON-merges `.claude/settings.json`
+  and `.mcp.json`, block-merges `AGENTS.md` / `CLAUDE.md`, initialises a
+  signac project at `.runs/`, and records the install-time interpreter
+  in `.aexp/installed.json`.
+- Copies the four Limina research skills (`experiment-rigor`,
+  `exploratory-sota-research`, `research-devil-advocate`,
+  `build-maintainable-software`) into `.claude/skills/`.
+- **Install UX**: prints a heads-up listing every file the install will
+  touch and its merge policy, then prompts for confirmation.
+  `--dry-run` / `-n` previews the plan with zero side effects.
+  `--yes` / `-y` skips the prompt for scripted / CI use.
+  Non-interactive stdin without `--yes` or `--dry-run` aborts cleanly.
+- **`aexp install` respects existing content**: conflicting files are
+  skipped by default (pass `--force` to overwrite). JSON merges preserve
+  the user's own hooks, permissions, and MCP servers. Markdown merges
+  only touch content between `<!-- agentic-experiments:begin/end -->`
+  markers.
+
+#### Claude Code hooks (in-package)
+- `aexp.hooks` ships the four Claude Code hooks as Python modules:
+  `session_start`, `enforce_hef_chain`, `kb_write_guard`, `stop_validate`.
+- `.claude/settings.json` is generated with commands of the form
+  `"<python_exe>" -m aexp.hooks.<name>`, pinned to the install-time
+  interpreter. Hooks upgrade through `pip install -U agentic-experiments`
+  rather than by re-running `aexp install`.
+- **No Python code lands in the consumer repo** other than files the
+  user writes themselves. Hooks, validator logic, and helpers all live
+  in the installed package.
+
+#### KB structural validation
+- `aexp.kb_validate.validate_kb()` — pure in-process validator; covers
+  frontmatter, aliases, wikilinks, bidirectional backlinks, and the
+  H → E → F chain.
+- `aexp.validate.validate_repo()` composes structural validation with
+  run-link and finding-citation integrity. Issue codes:
+  `limina.validation_failed`, `run.orphan`, `run.broken_experiment_link`,
+  `run.hypothesis_mismatch`, `run.sub_hypothesis_unlisted`,
+  `run.status_invalid`, `finding.broken_run_citation`,
+  `finding.empty_batch`.
+
+#### Tracker adapters
+- `TrackerAdapter` ABC with two reference implementations:
+  - `NoopAdapter` (always on; writes JSONL to `<workspace>/tracker_log/`)
+  - `WandbAdapter` (optional `[wandb]` extra; co-locates offline-run
+    dirs with the signac workspace)
+- **HPC workflow**: `aexp sync-offline` walks `.runs/workspace/*/wandb/`
+  and calls `wandb sync` on every offline run from a login node.
+
+#### MCP server
+- `aexp-mcp-server` entry point (optional `[mcp]` extra) exposes nine
+  typed tools over FastMCP: `new_run`, `list_runs`, `list_batches`,
+  `show_run`, `show_batch`, `link_run`, `bind_tracker`, `validate`,
+  `sync_offline`.
+- `aexp install` writes an `.mcp.json` at the repo root that invokes the
+  server via `uvx --from agentic-experiments[mcp] aexp-mcp-server` —
+  portable across machines, committable to git, no absolute paths, no
+  per-teammate configuration.
+
+#### Slash commands
+- `/aexp-new-run`, `/aexp-close-run`, `/aexp-close-batch` installed into
+  `.claude/commands/` via `aexp install-slash-commands`.
+
+### Packaging
+- **Python 3.11+** (3.11, 3.12, 3.13 all tested). CI runs on Ubuntu and
+  Windows against every supported interpreter.
+- `src/` layout; Poetry-built wheel + sdist; PyPA-compliant.
+- Optional extras: `[wandb]` (tracker adapter), `[mcp]` (MCP server).
+- 172 tests on the full suite; `tests/test_e2e_smoke.py` covers the
+  full happy path end to end (install → H + E + runs → finding →
+  validate → broken-link detection → re-run at new commit).
+
+[Unreleased]: https://github.com/KadenMc/agentic-experiments/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/KadenMc/agentic-experiments/releases/tag/v0.1.0

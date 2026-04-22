@@ -30,13 +30,13 @@
 
 **agentic-experiments** (import name `aexp`) is an opinionated research harness for ML experimentation done *with* an AI agent — typically [Claude Code](https://docs.anthropic.com/en/docs/claude-code). It forces a **Hypothesis → Experiment → Finding** chain on every run, ties that chain to git commits, and validates citation integrity at every turn.
 
-> **10 CLI verbs** &bull; **9 MCP tools** &bull; **3 slash commands** &bull; **4 research skills** &bull; **202 tests**
+> **10 CLI verbs** &bull; **9 MCP tools** &bull; **3 slash commands** &bull; **4 research skills** &bull; **170+ tests**
 
 ### What this looks like in practice
 
 - Your agent proposes a hypothesis and writes it to `kb/research/hypotheses/H001-*.md` — session-start hooks refuse work that skips this step
 - It designs an experiment that explicitly cites the hypothesis; a pre-write hook blocks orphaned experiments before they land
-- It creates signac-backed runs via the MCP tool `new_run` — each run records its git commit, experiment ID, and hypothesis ID in `job.doc["limina"]`
+- It creates signac-backed runs via the MCP tool `new_run` — each run records its git commit, experiment ID, and hypothesis ID on the job document
 - A W&B run (optional) is bound to the signac job with a deterministic group slug derived from `(hypothesis, experiment, condition)`
 - When it writes a finding, the `supporting_runs` array must cite real jobs — `aexp validate` flags dangling references
 - Delete an experiment by accident? Every run pointing at it is flagged `run.broken_experiment_link` on the next validation pass
@@ -45,7 +45,7 @@
 
 - **Hypothesis-first, not metric-first** — you can't start a run without a live hypothesis; you can't ship a finding without cited runs
 - **Git is the source of truth** — every run carries its commit SHA; the knowledge base lives in git; nothing load-bearing is ephemeral
-- **Integrate, don't reinvent** — [signac](https://signac.readthedocs.io) for run state, [W&B](https://wandb.ai/) for observability, [Limina](https://github.com/KadenMc/limina) for the research harness. `aexp` is the glue and the discipline
+- **Integrate, don't reinvent** — [signac](https://signac.readthedocs.io) for run state, [W&B](https://wandb.ai/) for observability, [Limina](https://github.com/KadenMc/limina) for the research-graph primitives (the H→E→F artifact model, templates, and methodology skills this project builds on). `aexp` is the glue and the discipline
 - **Portable by default** — the MCP server runs via `uvx` from PyPI; `.mcp.json` is identical on every machine and committable to git
 
 ---
@@ -62,13 +62,13 @@ The missing layer is not another tracker. It's a **grammar** — a structure the
 
 ## How It Works
 
-`aexp` stacks three layers, each owned by a proven upstream tool, glued together with a typed Python API and three agent-facing surfaces.
+`aexp` stacks three concerns — research grammar, run state, and observability — glued together with a typed Python API and three agent-facing surfaces.
 
-| Layer | Owner | What lives here |
-|---|---|---|
-| **Research harness** | Vendored **[Limina](https://github.com/KadenMc/limina)** | `kb/` artifact graph — Hypothesis → Experiment → Finding plus Literature / Challenge Review / Strategic Review. Claude Code hooks enforce the H→E→F chain at write time. Research methodology skills (`experiment-rigor`, `exploratory-sota-research`, `research-devil-advocate`, `build-maintainable-software`) install into `.claude/skills/` |
-| **Local execution / run state** | **[signac](https://signac.readthedocs.io)** | `.runs/.signac/` plus one `.runs/workspace/<job_id>/` directory per run. `job.sp` carries identity params; `job.doc` carries the Limina link, tracker IDs, status, and summary metrics |
-| **Observability mirror** | **W&B** (optional `[wandb]` extra) | Remote runs, grouped by a deterministic slug derived from `(hypothesis_id, experiment_id, condition)`. Offline-by-default on HPC — `aexp sync-offline` walks the run store and syncs every pending run in one call from a login node |
+| Layer | What lives here |
+|---|---|
+| **Research grammar** | `kb/` artifact graph — Hypothesis → Experiment → Finding plus Literature / Challenge Review / Strategic Review. Claude Code hooks enforce the H→E→F chain at write time. Four research-methodology skills (`experiment-rigor`, `exploratory-sota-research`, `research-devil-advocate`, `build-maintainable-software`) install into `.claude/skills/` |
+| **Local run state** ([signac](https://signac.readthedocs.io)) | `.runs/.signac/` plus one `.runs/workspace/<job_id>/` directory per run. `job.sp` carries identity params; `job.doc` carries the artifact link, tracker IDs, status, and summary metrics |
+| **Observability** (**W&B**, optional `[wandb]` extra) | Remote runs grouped by a deterministic slug derived from `(hypothesis_id, experiment_id, condition)`. Offline-by-default on HPC — `aexp sync-offline` walks the run store and syncs every pending run in one call from a login node |
 
 ### Three surfaces, one canonical API
 
@@ -90,7 +90,7 @@ Most ML experiment infrastructure records what happened. `aexp` polices what's *
 
 - **Unlike generic trackers (W&B, MLflow, Aim)** — they log the numbers beautifully, but they don't care whether those numbers answer a question. `aexp` refuses runs that don't name their hypothesis and experiment.
 - **Unlike notebook-driven research** — no commit ties, no structural validation, no citation integrity when you share the notebook three months later.
-- **Unlike DIY harnesses** — this ships with working MCP integration, a vendored research harness with hooks, and a validation pass that catches broken references before they rot.
+- **Unlike DIY harnesses** — this ships with working MCP integration, hook-enforced chain discipline, and a validation pass that catches broken references before they rot.
 
 The design bet: agents already know how to run experiments. What they need is a runtime that makes rigorous research the path of least resistance.
 
@@ -98,12 +98,12 @@ The design bet: agents already know how to run experiments. What they need is a 
 
 ## Features
 
-### Research harness (from Limina)
+### Research grammar
 
 | | |
 |---|---|
 | **H→E→F artifact graph** | Every run descends from an Experiment, which descends from a Hypothesis. Findings cite runs with strong references (either specific job IDs or batch selectors). |
-| **Hook-enforced discipline** | SessionStart, PreToolUse, PostToolUse, and Stop hooks — ported to Python for cross-platform portability — inject active context, block chain violations, and validate KB integrity at turn end. |
+| **Hook-enforced discipline** | SessionStart, PreToolUse, PostToolUse, and Stop hooks inject active context, block chain violations, and validate KB integrity at turn end. Hooks ship inside the installed package and upgrade via `pip install -U`. |
 | **Research methodology skills** | Four SKILL.md files install into `.claude/skills/` — experiment rigor, exploratory SOTA research, devil's advocate review, and build-maintainable-software. Trigger with `$experiment-rigor` etc. |
 
 ### Run state + observability
@@ -142,10 +142,10 @@ graph TB
         API[Python API<br/>aexp.*]
     end
 
-    subgraph "Research harness — vendored Limina"
+    subgraph "Research grammar"
         KB[(kb/<br/>H→E→F artifact graph)]
         SKILLS[research skills<br/>.claude/skills/]
-        VALID[kb_validate.py<br/>structural check]
+        VALID[aexp.kb_validate<br/>structural check]
     end
 
     subgraph "Run state — signac"
@@ -218,7 +218,7 @@ Three equivalent entry points, listed in order of robustness under agent runtime
 
 ## Stop-hook scope caveat
 
-When a Claude Code session ends, `stop_validate.py` runs the vendored `kb_validate.py` — a **KB-structural** check (frontmatter, aliases, wikilinks, bidirectional backlinks, H→E→F chain). It does **not** run `aexp`'s run-link / finding-citation validator.
+When a Claude Code session ends, the Stop hook runs `aexp.kb_validate` — a **KB-structural** check (frontmatter, aliases, wikilinks, bidirectional backlinks, H→E→F chain). It does **not** run `aexp`'s run-link / finding-citation validator.
 
 So a session can end cleanly with a broken `supporting_runs` citation still present. Run `aexp validate` explicitly for full-coverage validation; treat Stop hook success as "KB structurally sound" rather than "everything coherent."
 
@@ -232,7 +232,7 @@ So a session can end cleanly with a broken `supporting_runs` citation still pres
 | [docs/quickstart.md](docs/quickstart.md) | A full worked example — bootstrap to finding |
 | [docs/cli.md](docs/cli.md) | Complete CLI reference, verb by verb |
 | [docs/mcp.md](docs/mcp.md) | MCP server tools, transport, verification prompt, troubleshooting |
-| [docs/mapping.md](docs/mapping.md) | Limina ↔ signac ↔ W&B mapping in gory detail |
+| [docs/mapping.md](docs/mapping.md) | `kb/` ↔ signac ↔ W&B mapping in gory detail |
 | [docs/tracker-adapters.md](docs/tracker-adapters.md) | Writing a new tracker adapter; why Weave isn't in v1 |
 
 ---
@@ -244,11 +244,11 @@ src/aexp/
   __init__.py           # public API re-exports
   cli.py                # Typer app (aexp)
   __main__.py           # python -m aexp → CLI
-  install.py            # install_limina (apply harness into a consumer repo)
+  install.py            # apply the harness into a consumer repo
   runs.py               # signac wrappers: create_run, open_run, find_runs, run_lifecycle
-  linking.py            # batch queries + retroactive Limina-signac linking
+  linking.py            # batch queries + retroactive run-to-experiment linking
   limina_io.py          # typed read wrappers for H/E/F/L/CR/SR artifacts
-  validate.py           # composes kb_validate + run-link + citation integrity
+  validate.py           # composes KB structural + run-link + citation integrity
   kb_validate.py        # KB structural validator (frontmatter, aliases, chain)
   schema.py             # pydantic + dataclass types
   mcp_server.py         # FastMCP server — optional [mcp] extra
@@ -256,7 +256,7 @@ src/aexp/
   slash_commands/       # /aexp-* templates
   trackers/             # TrackerAdapter ABC + noop + wandb adapters
   utils/                # paths, git, atomic writes
-  vendor/limina/        # forked Limina snapshot — kb/, templates/, skills/ only
+  vendor/               # forked research-graph templates, skills, and kb/ scaffold
 tests/                  # pytest suite; CI on Ubuntu + Windows × Py 3.11/3.12/3.13
 docs/                   # concepts, quickstart, cli, mcp, mapping, tracker-adapters
 ```
@@ -267,7 +267,7 @@ docs/                   # concepts, quickstart, cli, mcp, mapping, tracker-adapt
 
 **Pre-release (v0.1.0).** Actively developed by one person and the agents they direct; used in the author's own ML research workflow. The API surface is not yet stable.
 
-- **Developed and primarily tested on Windows 11 / Python 3.12.** Supports Python 3.11+. CI covers Ubuntu too, and 202 tests pass on both. macOS hasn't been exercised — issues welcome.
+- **Developed and primarily tested on Windows 11 / Python 3.12.** Supports Python 3.11+. CI runs the full suite on Ubuntu + Windows × Py 3.11/3.12/3.13. macOS hasn't been exercised — issues welcome.
 - **MCP server is the only PyPI-gated surface** — the CLI and Python API run from a local checkout without any PyPI round-trip.
 - **v1.1 backlog:** artifact-creation CLI verbs (`aexp new-hypothesis` / `new-experiment` / `new-finding`), `aexp index` dashboard, MLflow / Aim / DVC tracker adapters, OpenTelemetry extra.
 
@@ -286,7 +286,7 @@ git clone https://github.com/KadenMc/agentic-experiments.git
 cd agentic-experiments
 poetry install --with dev --extras "wandb mcp"
 
-poetry run pytest              # 202 tests; `-m "not slow"` skips e2e
+poetry run pytest              # `-m "not slow"` skips the e2e smoke
 poetry run ruff check .
 ```
 

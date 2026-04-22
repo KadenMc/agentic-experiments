@@ -9,14 +9,19 @@ license = {text = "MIT"}
 readme = "README.md"
 requires-python = ">=3.11,<4.0"
 keywords = [
+    "agentic-ai",
     "agents",
+    "ai-agents",
+    "autonomous-agents",
     "claude",
     "claude-code",
     "experiment-tracking",
     "hypothesis",
-    "limina",
     "mcp",
+    "mcp-server",
+    "ml-research",
     "mlops",
+    "reproducible-research",
     "research",
     "signac",
     "wandb",

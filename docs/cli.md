@@ -63,19 +63,26 @@ aexp install-slash-commands [--target .claude/commands]
 
 ### `aexp install`
 
-Copy the vendored Limina tree into the current repo, merge `.claude/settings.json`
-and `AGENTS.md`/`CLAUDE.md` (both under `<!-- agentic-experiments:begin -->`
-markers), initialize `.runs/` as a signac project, write the install marker.
+Apply the harness to the current repo: copy the `kb/` scaffold + `templates/`
+(skipping any files the user has already changed), merge `.claude/settings.json`
+with hook commands pinned to the current Python interpreter, write
+`.mcp.json` (or JSON-merge our entry into an existing one), install the
+four research skills into `.claude/skills/`, block-merge `AGENTS.md` and
+`CLAUDE.md` under `<!-- agentic-experiments:begin -->` markers, initialise
+`.runs/` as a signac project, and write the install marker.
 
-Re-runs are idempotent via a SHA-256 hash of the vendored Limina tree — if
-the installed marker matches the current vendor sha, the command short-circuits
-with an "already installed" note. Pass `--force` to re-walk and overwrite any
-user-modified files; by default conflicting files are skipped with a warning.
+By default the command prints a heads-up listing every file it will touch
+and its merge policy, then prompts for confirmation before writing. Flags:
 
-`--run-store PATH` overrides the default `.runs/`. Path is stored in the marker.
+- `--dry-run` / `-n` — print the planned actions without writing anything.
+- `--yes` / `-y` — skip the confirmation prompt (use in scripted / CI runs).
+- `--force` — overwrite conflicting user files instead of skipping with a warning.
+- `--run-store PATH` — override the default `.runs/` location (recorded in the marker).
+- `--no-require-git` — install into a plain directory (useful for integration tests).
 
-`--no-require-git` allows installing into a plain directory (useful for
-integration tests).
+Re-runs are idempotent via a SHA-256 hash of the asset tree — if the install
+marker matches the current sha, the command short-circuits with an
+"already installed" note.
 
 ### `aexp new-run`
 
@@ -133,11 +140,11 @@ preview what would be synced. Exits 1 if any single sync fails; 0 otherwise.
 
 Composes:
 
-1. Vendored `scripts/kb_validate.py` (full Limina KB graph: frontmatter, wikilinks, backlinks, required sections).
+1. `aexp.kb_validate` (KB structural: frontmatter, wikilinks, backlinks, required sections) — called in-process.
 2. Run-link integrity: `run.orphan`, `run.broken_experiment_link`, `run.hypothesis_mismatch`, `run.sub_hypothesis_unlisted`, `run.status_invalid`.
 3. Finding citations: `finding.broken_run_citation`, `finding.empty_batch`.
 
-Exit code 1 on any error. `--kb-only` skips runs-side; `--runs-only` skips `kb_validate.py`.
+Exit code 1 on any error. `--kb-only` skips runs-side; `--runs-only` skips the KB structural pass.
 
 ### `aexp install-slash-commands`
 
