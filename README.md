@@ -11,9 +11,10 @@
 <p align="center">
     <a href="https://github.com/KadenMc/agentic-experiments/actions"><img src="https://img.shields.io/github/actions/workflow/status/KadenMc/agentic-experiments/ci.yml?label=tests" alt="Tests"></a>
     <img src="https://img.shields.io/badge/status-beta-yellow" alt="Beta">
-    <img src="https://img.shields.io/badge/python-3.12-blue" alt="Python 3.12">
+    <img src="https://img.shields.io/badge/python-3.11%2B-blue" alt="Python 3.11+">
     <a href="https://pypi.org/project/agentic-experiments/"><img src="https://img.shields.io/pypi/v/agentic-experiments.svg" alt="PyPI"></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License"></a>
+    <a href="https://github.com/sponsors/KadenMc"><img src="https://img.shields.io/badge/sponsor-%E2%9D%A4-ea4aaa" alt="Sponsor"></a>
 </p>
 
 <p align="center">
@@ -333,7 +334,7 @@ docs/                   # concepts, quickstart, cli, mcp, mapping, tracker-adapt
 
 **Pre-release (v0.1.0).** Actively developed by one person and the agents they direct; used in the author's own ML research workflow. The API surface is not yet stable.
 
-- **Developed and primarily tested on Windows 11 / Python 3.12.** CI covers Ubuntu too, and 202 tests pass on both. macOS hasn't been exercised — issues welcome.
+- **Developed and primarily tested on Windows 11 / Python 3.12.** Supports Python 3.11+. CI covers Ubuntu too, and 202 tests pass on both. macOS hasn't been exercised — issues welcome.
 - **MCP server is the only PyPI-gated surface** — the CLI and Python API run from a local checkout without any PyPI round-trip.
 - **v1.1 backlog:** artifact-creation CLI verbs (`aexp new-hypothesis` / `new-experiment` / `new-finding`), `aexp index` dashboard, MLflow / Aim / DVC tracker adapters, OpenTelemetry extra.
 
