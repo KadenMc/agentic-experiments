@@ -279,7 +279,7 @@ If you run ML experiments with Claude Code and find yourself wanting a harness t
 
 For bugs and feature requests, [open an issue](https://github.com/KadenMc/agentic-experiments/issues).
 
-To hack on the package itself, clone the repo and use Poetry:
+### Hacking on the package itself
 
 ```bash
 git clone https://github.com/KadenMc/agentic-experiments.git
@@ -291,6 +291,26 @@ poetry run ruff check .
 ```
 
 Python 3.11, 3.12, and 3.13 are all exercised in CI on Ubuntu and Windows.
+
+### Developing `aexp` against one of your own research repos
+
+You can test local `aexp` changes live inside a real consumer repo — no publish cycle. Editable-install `aexp` into the target repo's env, then run `aexp install --dev` so its `.mcp.json` wires the MCP server through your local interpreter instead of `uvx` / PyPI:
+
+```bash
+# from the target repo's env (conda, venv, poetry run, etc.)
+pip install -e "/path/to/agentic-experiments[wandb,mcp]"
+
+cd /path/to/target-repo
+aexp install --dev --yes
+```
+
+Every edit to `src/aexp/*.py` is now live in:
+
+- the `aexp` CLI and `python -m aexp.*` invocations
+- the Claude Code hooks (fresh subprocess per call)
+- the MCP server — but only after a Claude Code restart (or an `/mcp` disconnect/reconnect of the `aexp` server), since the server is a long-running subprocess that doesn't hot-reload
+
+> `--dev` bakes your machine's Python path into `.mcp.json`. **Do not commit that form** — gitignore it while iterating, or re-run `aexp install --force` (without `--dev`) to regenerate the portable `uvx` form before committing.
 
 ---
 

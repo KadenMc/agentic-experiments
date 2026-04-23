@@ -2,6 +2,8 @@
 
 A worked example: fresh repo → hypothesis → experiment → two runs → batch finding.
 
+> **Editing `aexp` itself?** If you're developing the `aexp` source *while* using it in this target repo, follow [Contributing → Developing `aexp` against one of your own research repos](../README.md#developing-aexp-against-one-of-your-own-research-repos) instead of this consumer-path install. The rest of this guide works identically once you're set up.
+
 > **Invocation.** Examples below use `aexp <verb>` for brevity, but three
 > forms exist. In decreasing order of robustness under Claude Code:
 >
