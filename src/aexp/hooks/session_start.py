@@ -12,16 +12,21 @@ from pathlib import Path
 
 
 def emit_file(label: str, path: Path) -> None:
-    """Print ``=== label ===`` followed by file contents, or a warning."""
-    if path.is_file():
-        print(f"=== {label} ===")
-        try:
-            print(path.read_text(encoding="utf-8"))
-        except OSError as exc:
-            print(f"(error reading file: {exc})")
-        print()
-    else:
-        print(f"=== WARNING: {label} not found ===")
+    """Print ``=== label ===`` followed by file contents.
+
+    Silently no-ops when the file is absent — consumer repos may legitimately
+    defer authoring ``kb/mission/CHALLENGE.md`` until they have a mission
+    statement worth writing down. ``aexp validate`` surfaces the same fact as
+    a structured issue when it actually matters.
+    """
+    if not path.is_file():
+        return
+    print(f"=== {label} ===")
+    try:
+        print(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        print(f"(error reading file: {exc})")
+    print()
 
 
 def main() -> int:

@@ -30,7 +30,7 @@
 
 **agentic-experiments** (import name `aexp`) is an opinionated research harness for ML experimentation done *with* an AI agent — typically [Claude Code](https://docs.anthropic.com/en/docs/claude-code). It forces a **Hypothesis → Experiment → Finding** chain on every run, ties that chain to git commits, and validates citation integrity at every turn.
 
-> **10 CLI verbs** &bull; **9 MCP tools** &bull; **3 slash commands** &bull; **4 research skills** &bull; **170+ tests**
+> **13 CLI verbs** &bull; **12 MCP tools** &bull; **9 slash commands** &bull; **4 research skills** &bull; **200+ tests**
 
 ### What this looks like in practice
 

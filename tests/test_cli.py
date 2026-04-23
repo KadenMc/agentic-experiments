@@ -45,6 +45,55 @@ def installed_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 # ---------------------------------------------------------------------------
+# artifact creation verbs
+# ---------------------------------------------------------------------------
+
+
+def test_new_hypothesis_new_experiment_new_finding_chain(
+    runner: CliRunner, installed_repo: Path
+) -> None:
+    r = runner.invoke(app, ["new-hypothesis", "--title", "my hypothesis"])
+    assert r.exit_code == 0, r.output
+    assert "H001" in r.output
+
+    r = runner.invoke(
+        app, ["new-experiment", "--title", "my experiment", "--hypothesis", "H001"]
+    )
+    assert r.exit_code == 0, r.output
+    assert "E001" in r.output
+    assert "backlinks patched" in r.output
+
+    r = runner.invoke(
+        app,
+        [
+            "new-finding",
+            "--title",
+            "verdict",
+            "--hypothesis",
+            "H001",
+            "--experiment",
+            "E001",
+            "--impact",
+            "HIGH",
+        ],
+    )
+    assert r.exit_code == 0, r.output
+    assert "F001" in r.output
+
+    validate = runner.invoke(app, ["validate", "--kb-only"])
+    assert validate.exit_code == 0, validate.output
+
+
+def test_new_experiment_missing_parent_exits_nonzero(
+    runner: CliRunner, installed_repo: Path
+) -> None:
+    r = runner.invoke(
+        app, ["new-experiment", "--title", "t", "--hypothesis", "H099"]
+    )
+    assert r.exit_code != 0
+
+
+# ---------------------------------------------------------------------------
 # version + install
 # ---------------------------------------------------------------------------
 
@@ -345,7 +394,17 @@ def test_cli_install_slash_commands(runner: CliRunner, tmp_path: Path, monkeypat
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, ["install-slash-commands"])
     assert result.exit_code == 0
-    for name in ("aexp-new-run.md", "aexp-close-run.md", "aexp-close-batch.md"):
+    for name in (
+        "aexp-new-run.md",
+        "aexp-close-run.md",
+        "aexp-close-batch.md",
+        "aexp-new-hypothesis.md",
+        "aexp-new-experiment.md",
+        "aexp-new-finding.md",
+        "aexp-status.md",
+        "aexp-list-runs.md",
+        "aexp-validate.md",
+    ):
         dst = tmp_path / ".claude" / "commands" / name
         assert dst.is_file(), (name, result.stdout)
         body = dst.read_text(encoding="utf-8")

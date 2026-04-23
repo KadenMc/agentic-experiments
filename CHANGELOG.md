@@ -7,7 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **Artifact-creation API** (`aexp.artifacts`): `new_hypothesis`,
+  `new_experiment`, `new_finding`. Each allocates the smallest unused
+  `H###` / `E###` / `F###` id, renders the shipped template (preferring
+  `<repo>/templates/<kind>.md` when the consumer repo has a local override),
+  writes the file, and — for experiments and findings — patches every
+  parent artifact's `## Links` section via `aexp.backlinks.add_backlink`
+  so `kb_validate`'s bidirectional-link check passes on the first write.
+- **Backlink helper** (`aexp.backlinks.add_backlink`): idempotent
+  ``## Links`` section patcher that tolerates anchored (`[[X#sec]]`) and
+  aliased (`[[X|alt]]`) wikilinks and creates a ``## Links`` section at
+  end of file when one is missing.
+- **New CLI verbs**: `aexp new-hypothesis`, `aexp new-experiment`,
+  `aexp new-finding` — thin wrappers over the Python API with rich
+  console output reporting which parent files were patched.
+- **New MCP tools**: `new_hypothesis`, `new_experiment`, `new_finding` —
+  same surface as the CLI verbs, returning typed dicts.
+- **New slash commands**: `/aexp-new-hypothesis`, `/aexp-new-experiment`,
+  `/aexp-new-finding`, `/aexp-status`, `/aexp-list-runs`, `/aexp-validate`.
+  Six commands added on top of the existing three; install copies all of
+  them into `.claude/commands/`.
+
+### Changed
+
+- **`SessionStart` hook** no longer emits `=== WARNING: <file> not found ===`
+  when `kb/ACTIVE.md` or `kb/mission/CHALLENGE.md` is absent. Consumer repos
+  may legitimately defer authoring `CHALLENGE.md` until they have a real
+  mission statement; `aexp validate` still surfaces the absence as a
+  structured `filesystem` issue when it actually matters.
 
 ## [0.1.1] — 2026-04-22
 

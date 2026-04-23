@@ -14,6 +14,12 @@ from rich.console import Console
 from rich.table import Table
 
 from aexp import __version__
+from aexp.artifacts import (
+    ArtifactCreateError,
+    new_experiment,
+    new_finding,
+    new_hypothesis,
+)
 from aexp.install import install_limina
 from aexp.linking import (
     link_to_experiment,
@@ -82,7 +88,7 @@ _INSTALL_HEADS_UP = """\
   - [cyan]templates/[/cyan]              artifact templates (you can edit these)
   - [cyan].claude/settings.json[/cyan]   JSON-merge: our hooks added, your hooks + permissions preserved
   - [cyan].claude/skills/[/cyan]         4 research-methodology skills
-  - [cyan].claude/commands/[/cyan]       3 slash commands ([green]/aexp-new-run[/green], [green]/aexp-close-run[/green], [green]/aexp-close-batch[/green])
+  - [cyan].claude/commands/[/cyan]       9 slash commands (new/close H·E·F·run, list-runs, status, validate)
   - [cyan].mcp.json[/cyan]               JSON-merge: our `aexp` MCP server added, your other servers preserved
   - [cyan]AGENTS.md[/cyan], [cyan]CLAUDE.md[/cyan]       block-merge: your content outside our `<!-- agentic-experiments:begin/end -->` markers is preserved
   - [cyan].runs/[/cyan]                  signac project (idempotent; initialised if missing)
@@ -196,6 +202,100 @@ def install(
         cwd, run_store=run_store, force=force, assert_git=assert_git, dev=dev
     )
     _print_actions(actions, dry_run=False)
+
+
+# ---------------------------------------------------------------------------
+# artifact creation (H / E / F)
+# ---------------------------------------------------------------------------
+
+
+def _print_artifact_result(label: str, result) -> None:  # type: ignore[no-untyped-def]
+    console.print(f"[green]created[/green] {label} [bold]{result.artifact_id}[/bold]")
+    console.print(f"  path: {result.path}")
+    if result.backlinks_patched:
+        console.print(
+            f"  backlinks patched: {', '.join(result.backlinks_patched)}"
+        )
+    if result.backlinks_already_present:
+        console.print(
+            f"  backlinks already present: {', '.join(result.backlinks_already_present)}"
+        )
+
+
+@app.command("new-hypothesis")
+def new_hypothesis_cmd(
+    title: str = typer.Option(..., "--title", help="Human-readable hypothesis title."),
+    id: str | None = typer.Option(None, "--id", help="Force a specific H### id."),
+    link: list[str] = typer.Option(
+        [], "--link", help="Extra target to add to ## Links (repeatable)."
+    ),
+) -> None:
+    """Create a new hypothesis (H###) with a validator-clean skeleton."""
+    try:
+        result = new_hypothesis(title=title, artifact_id=id, extra_links=link or None)
+    except ArtifactCreateError as exc:
+        console.print(f"[red]{exc}[/red]")
+        _exit(2)
+    _print_artifact_result("hypothesis", result)
+
+
+@app.command("new-experiment")
+def new_experiment_cmd(
+    title: str = typer.Option(..., "--title", help="Human-readable experiment title."),
+    hypothesis: str = typer.Option(
+        ..., "--hypothesis", help="Parent H### id (must exist on disk)."
+    ),
+    id: str | None = typer.Option(None, "--id", help="Force a specific E### id."),
+    link: list[str] = typer.Option(
+        [], "--link", help="Extra target to add to ## Links (repeatable)."
+    ),
+) -> None:
+    """Create a new experiment (E###) under an existing hypothesis."""
+    try:
+        result = new_experiment(
+            title=title,
+            hypothesis_id=hypothesis,
+            artifact_id=id,
+            extra_links=link or None,
+        )
+    except ArtifactCreateError as exc:
+        console.print(f"[red]{exc}[/red]")
+        _exit(2)
+    _print_artifact_result("experiment", result)
+
+
+@app.command("new-finding")
+def new_finding_cmd(
+    title: str = typer.Option(..., "--title", help="Human-readable finding title."),
+    hypothesis: str = typer.Option(..., "--hypothesis", help="Parent H### id."),
+    experiment: str = typer.Option(..., "--experiment", help="Parent E### id."),
+    impact: str = typer.Option(
+        "MEDIUM", "--impact", help="CRITICAL | HIGH | MEDIUM | LOW."
+    ),
+    id: str | None = typer.Option(None, "--id", help="Force a specific F### id."),
+    link: list[str] = typer.Option(
+        [], "--link", help="Extra target to add to ## Links (repeatable)."
+    ),
+) -> None:
+    """Create a new finding (F###) citing one hypothesis + one experiment.
+
+    This writes the finding skeleton and patches both parents' ``## Links``
+    sections. The actual ``supporting_runs:`` citation is added by
+    ``/aexp-close-run`` or ``/aexp-close-batch`` once you have the job id.
+    """
+    try:
+        result = new_finding(
+            title=title,
+            hypothesis_id=hypothesis,
+            experiment_id=experiment,
+            impact=impact,
+            artifact_id=id,
+            extra_links=link or None,
+        )
+    except ArtifactCreateError as exc:
+        console.print(f"[red]{exc}[/red]")
+        _exit(2)
+    _print_artifact_result("finding", result)
 
 
 # ---------------------------------------------------------------------------

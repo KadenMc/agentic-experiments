@@ -26,6 +26,12 @@ except ImportError as exc:  # pragma: no cover
         "Install with: pip install agentic-experiments[mcp]"
     ) from exc
 
+from aexp.artifacts import (
+    ArtifactCreateError,
+    new_experiment as _new_experiment,
+    new_finding as _new_finding,
+    new_hypothesis as _new_hypothesis,
+)
 from aexp.linking import (
     link_to_experiment as _link_to_experiment,
 )
@@ -75,6 +81,117 @@ def _jsonable_job(job: Any) -> dict[str, Any]:
         "ended_at": s.ended_at,
         "workspace": str(Path(job.path)),
     }
+
+
+# ---------------------------------------------------------------------------
+# Tool: new_hypothesis / new_experiment / new_finding
+# ---------------------------------------------------------------------------
+
+
+def _artifact_result_to_dict(result: Any, *, kind: str) -> dict[str, Any]:
+    return {
+        "kind": kind,
+        "artifact_id": result.artifact_id,
+        "path": result.path,
+        "backlinks_patched": list(result.backlinks_patched),
+        "backlinks_already_present": list(result.backlinks_already_present),
+    }
+
+
+@mcp.tool()
+def new_hypothesis(
+    title: str,
+    artifact_id: str | None = None,
+    extra_links: list[str] | None = None,
+) -> dict[str, Any]:
+    """Create a new Limina hypothesis (H###).
+
+    Writes ``kb/research/hypotheses/H###-<slug>.md`` with a validator-clean
+    skeleton (frontmatter, blockquote metadata, ``## Links`` pre-populated
+    with ``ACTIVE`` and ``CHALLENGE``). Returns the new id + path.
+
+    Args:
+        title: Human-readable title; becomes the H1 heading + filename slug.
+        artifact_id: Optional explicit H### id. Defaults to smallest unused.
+        extra_links: Optional extra wikilink targets for ## Links (e.g. a
+            prior hypothesis). Backlinks are NOT patched for extras.
+    """
+    try:
+        result = _new_hypothesis(
+            title=title,
+            artifact_id=artifact_id,
+            extra_links=extra_links,
+        )
+    except ArtifactCreateError as exc:
+        return {"error": str(exc), "code": "artifact_create_error"}
+    return _artifact_result_to_dict(result, kind="H")
+
+
+@mcp.tool()
+def new_experiment(
+    title: str,
+    hypothesis_id: str,
+    artifact_id: str | None = None,
+    extra_links: list[str] | None = None,
+) -> dict[str, Any]:
+    """Create a new Limina experiment (E###) under an existing hypothesis.
+
+    Writes the experiment skeleton and patches the parent H###'s ``## Links``
+    section with ``- [[E###]]`` so ``kb_validate`` passes.
+
+    Args:
+        title: Human-readable title.
+        hypothesis_id: Parent H### id (must exist on disk).
+        artifact_id: Optional explicit E### id.
+        extra_links: Optional extra wikilink targets.
+    """
+    try:
+        result = _new_experiment(
+            title=title,
+            hypothesis_id=hypothesis_id,
+            artifact_id=artifact_id,
+            extra_links=extra_links,
+        )
+    except ArtifactCreateError as exc:
+        return {"error": str(exc), "code": "artifact_create_error"}
+    return _artifact_result_to_dict(result, kind="E")
+
+
+@mcp.tool()
+def new_finding(
+    title: str,
+    hypothesis_id: str,
+    experiment_id: str,
+    impact: str = "MEDIUM",
+    artifact_id: str | None = None,
+    extra_links: list[str] | None = None,
+) -> dict[str, Any]:
+    """Create a new Limina finding (F###) citing a hypothesis + experiment.
+
+    Writes the finding skeleton and patches both parent files' ``## Links``
+    sections. The ``supporting_runs:`` frontmatter list stays empty — add it
+    via the close-run / close-batch slash commands once a job id is known.
+
+    Args:
+        title: Human-readable title.
+        hypothesis_id: Parent H### id.
+        experiment_id: Parent E### id.
+        impact: CRITICAL | HIGH | MEDIUM | LOW (default MEDIUM).
+        artifact_id: Optional explicit F### id.
+        extra_links: Optional extra wikilink targets.
+    """
+    try:
+        result = _new_finding(
+            title=title,
+            hypothesis_id=hypothesis_id,
+            experiment_id=experiment_id,
+            impact=impact,
+            artifact_id=artifact_id,
+            extra_links=extra_links,
+        )
+    except ArtifactCreateError as exc:
+        return {"error": str(exc), "code": "artifact_create_error"}
+    return _artifact_result_to_dict(result, kind="F")
 
 
 # ---------------------------------------------------------------------------
