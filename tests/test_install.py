@@ -432,6 +432,36 @@ def test_install_mcp_entry_uses_uvx(fresh_git_repo: Path) -> None:
     assert entry["env"].get("PYTHONUNBUFFERED") == "1"
 
 
+def test_install_dev_mcp_entry_uses_current_interpreter(fresh_git_repo: Path) -> None:
+    """``install_limina(..., dev=True)`` writes a direct-Python MCP invocation
+    so editable installs (``pip install -e``) take effect on the MCP surface.
+    """
+    import sys
+
+    install_limina(fresh_git_repo, dev=True)
+    mcp = json.loads((fresh_git_repo / ".mcp.json").read_text("utf-8"))
+    entry = mcp["mcpServers"]["aexp"]
+    # Command is the running interpreter, not uvx.
+    assert entry["command"] == sys.executable
+    assert entry["command"] != "uvx"
+    # Args invoke the MCP server as a module; no --from / PyPI spec.
+    assert entry["args"] == ["-m", "aexp.mcp_server"]
+    assert "--from" not in entry["args"]
+    # Stdio flushing guard preserved.
+    assert entry["env"].get("PYTHONUNBUFFERED") == "1"
+
+
+def test_install_dev_flag_can_be_toggled_on_reinstall(fresh_git_repo: Path) -> None:
+    """Running install without --dev after a dev install rewrites back to uvx."""
+    install_limina(fresh_git_repo, dev=True)
+    mcp_dev = json.loads((fresh_git_repo / ".mcp.json").read_text("utf-8"))
+    assert mcp_dev["mcpServers"]["aexp"]["command"] != "uvx"
+
+    install_limina(fresh_git_repo, force=True, dev=False)
+    mcp_prod = json.loads((fresh_git_repo / ".mcp.json").read_text("utf-8"))
+    assert mcp_prod["mcpServers"]["aexp"]["command"] == "uvx"
+
+
 def test_install_mcp_entry_is_env_independent(
     fresh_git_repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

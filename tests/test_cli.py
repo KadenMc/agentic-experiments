@@ -103,6 +103,27 @@ def test_cli_install_dry_run_writes_nothing(
     assert not (repo / ".aexp").exists()
 
 
+def test_cli_install_dev_flag_writes_current_interpreter_to_mcp_json(
+    runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--dev writes a direct-Python .mcp.json for live editable-install dev."""
+    import json
+    import sys
+
+    repo = tmp_path / "dev"
+    repo.mkdir()
+    _git_commit(repo)
+    monkeypatch.chdir(repo)
+    result = runner.invoke(app, ["install", "--yes", "--dev"])
+    assert result.exit_code == 0, (result.exit_code, result.stdout, result.stderr)
+    # Heads-up mentions dev mode so the user knows .mcp.json is machine-specific.
+    assert "Dev mode" in result.stdout
+    mcp = json.loads((repo / ".mcp.json").read_text("utf-8"))
+    entry = mcp["mcpServers"]["aexp"]
+    assert entry["command"] == sys.executable
+    assert entry["args"] == ["-m", "aexp.mcp_server"]
+
+
 def test_cli_install_no_tty_without_yes_aborts(
     runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

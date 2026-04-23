@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.1.1] — 2026-04-22
+
+### Added
+
+- **`aexp install --dev` / `-D`** — writes a development-mode `.mcp.json`
+  whose `aexp` entry invokes the current Python interpreter directly
+  (``"<python_exe>" -m aexp.mcp_server``) instead of the default
+  portable `uvx --from agentic-experiments[mcp]` form. Intended for
+  maintainers editing `aexp` locally via `pip install -e` who want
+  source edits to flow through to the MCP surface; the resulting
+  `.mcp.json` bakes in a machine-specific path and should not be
+  committed.
+- Accompanying advisory printed whenever `--dev` is set, including
+  under `--yes`, so users don't accidentally commit a dev-form
+  `.mcp.json`.
+
+### Docs
+- `docs/mcp.md`, `docs/cli.md`, and the install CLI help text describe
+  `--dev` and the commit / gitignore implications.
+
 ## [0.1.0] — 2026-04-22
 
 First public release — hypothesis-first experiment tracking for agent-driven
@@ -101,5 +121,6 @@ ML research, wired into Claude Code.
   full happy path end to end (install → H + E + runs → finding →
   validate → broken-link detection → re-run at new commit).
 
-[Unreleased]: https://github.com/KadenMc/agentic-experiments/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/KadenMc/agentic-experiments/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/KadenMc/agentic-experiments/releases/tag/v0.1.1
 [0.1.0]: https://github.com/KadenMc/agentic-experiments/releases/tag/v0.1.0

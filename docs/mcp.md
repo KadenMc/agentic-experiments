@@ -136,28 +136,37 @@ this was the Windows Claude Code stdio bug we migrated off. Confirm
 Python path). If it's stale from an older install, re-run
 `aexp install --force` to regenerate.
 
-**uvx fails to find `agentic-experiments` on PyPI** — this means the
-package isn't published yet. For pre-publish local development, edit
-`.mcp.json` by hand to point `--from` at the local source:
+**Developing `aexp` itself and want editable-install edits to reach the MCP server?**
+Pass `--dev` to `aexp install`:
+
+```bash
+aexp install --dev --yes
+```
+
+That writes a `.mcp.json` whose `aexp` entry invokes the current Python
+interpreter directly instead of going through `uvx`:
 
 ```json
 {
   "mcpServers": {
     "aexp": {
-      "command": "uvx",
-      "args": [
-        "--from",
-        "C:\\Vaults\\SecondBrain\\repos\\agentic-experiments[mcp]",
-        "aexp-mcp-server"
-      ],
+      "command": "<absolute-path-to-your-env-python>",
+      "args": ["-m", "aexp.mcp_server"],
       "env": {"PYTHONUNBUFFERED": "1"}
     }
   }
 }
 ```
 
-This is a temporary developer-only override; once the package is
-published the default form resolves automatically.
+Because this form bakes in a machine-specific path, **do not commit the
+dev-form `.mcp.json`**. Gitignore it while iterating, or re-run
+`aexp install --force` (without `--dev`) to regenerate the portable
+uvx form before committing.
+
+MCP-layer edits don't hot-reload — after changing `aexp.mcp_server` or
+any module it imports, restart Claude Code (or `/mcp` -> disconnect/
+reconnect the `aexp` server) to pick up the change. Hook and CLI
+changes are picked up on next invocation automatically.
 
 **Smoke the server command directly:**
 

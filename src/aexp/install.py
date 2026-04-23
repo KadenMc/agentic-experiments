@@ -312,16 +312,18 @@ def _merge_or_write_claude_settings(
 
 
 def _merge_or_write_mcp_json(
-    dst: Path, repo_root: Path, *, dry_run: bool = False
+    dst: Path, repo_root: Path, *, dry_run: bool = False, dev: bool = False
 ) -> InstallAction:
     """Write (or merge) our MCP server entry into ``<repo>/.mcp.json``.
 
     Claude Code reads project-scope MCP servers from ``.mcp.json`` at the
-    repo root — *not* from ``.claude/settings.json``. This file is checked
-    into git so everyone on the team picks up the server automatically.
+    repo root — *not* from ``.claude/settings.json``. Default form is
+    portable across machines (``uvx`` / PyPI). Pass ``dev=True`` to use the
+    current interpreter instead — lets editable installs take effect on
+    the MCP side (at the cost of a machine-specific ``.mcp.json``).
     """
     rel = _display_relpath(dst)
-    our_entry = {"aexp": _build_mcp_server_entry(repo_root)}
+    our_entry = {"aexp": _build_mcp_server_entry(repo_root, dev=dev)}
     payload = {"mcpServers": our_entry}
 
     if not dst.exists():
@@ -357,52 +359,48 @@ def _merge_or_write_mcp_json(
     return InstallAction("merged_json", rel)
 
 
-def _build_mcp_server_entry(repo_root: Path) -> dict[str, Any]:
-    """Compose the portable ``mcpServers.aexp`` entry for ``.mcp.json``.
+def _build_mcp_server_entry(repo_root: Path, *, dev: bool = False) -> dict[str, Any]:
+    """Compose the ``mcpServers.aexp`` entry for ``.mcp.json``.
 
-    **Invocation via ``uvx``** — the canonical pattern for Python MCP
-    servers (used by every reference server under
-    ``modelcontextprotocol/servers`` and documented in the MCP Python
-    SDK + Anthropic's own quickstart). The pattern is:
+    Two forms, depending on the intended workflow.
+
+    **Default (``dev=False``) — portable uvx invocation.**
+    The canonical pattern for Python MCP servers (used by every reference
+    server under ``modelcontextprotocol/servers``)::
 
         uvx --from agentic-experiments[mcp] aexp-mcp-server
 
-    What this buys us:
+    - Single ``.mcp.json`` works on every machine with ``uv`` installed
+      (no absolute Python paths, no env names baked in) — safe to commit
+      to git so teammates get the server on clone.
+    - ``uvx`` fetches ``agentic-experiments`` from PyPI on first use and
+      caches it under ``~/.cache/uv``; subsequent starts are fast.
+    - Sidesteps the Windows Claude Code stdio bugs (#29443 et al.):
+      ``uvx.exe`` is spawned directly, no shell wrapper, no conda
+      activation pipe buffering.
 
-    - **Portable across teammates.** No absolute Python path, no env name,
-      no shell activation. ``uvx`` is a single binary on PATH for anyone
-      with ``uv`` installed. The same ``.mcp.json`` works on every
-      machine that has ``uv``.
-    - **Ephemeral isolated env.** ``uvx`` fetches ``agentic-experiments``
-      from PyPI on first use, caches it under ``~/.cache/uv``, and runs
-      the ``aexp-mcp-server`` entry point in an isolated venv. No
-      interaction with the consumer repo's own Python env.
-    - **Sidesteps the Windows Claude Code stdio bugs** (#29443 et al.):
-      ``uvx.exe`` is a concrete Windows executable that Claude Code
-      spawns directly — no shell wrapper, no PATHEXT resolution of
-      ``.cmd`` / ``.bat`` shims, no conda activation pipe buffering.
-    - **`.mcp.json` can now be committed to git** — project scope works
-      as intended, teammates get the MCP server for free on clone.
+    **Dev mode (``dev=True``) — direct env Python.**
+    Invokes the MCP server through the current interpreter, using the
+    locally-installed ``aexp`` package (editable or otherwise)::
 
-    ``PYTHONUNBUFFERED=1`` still set as belt + suspenders for stdio
-    flushing on Windows.
+        "<python_exe>" -m aexp.mcp_server
 
-    Onboarding requirement: each user must have ``uv`` installed.
-    Install line (~2s, no admin needed):
+    This is what you want when you're *developing* ``aexp`` and need
+    edits to ``src/aexp/mcp_server.py`` (or any module it imports) to
+    flow through to Claude Code. The trade-off: the generated
+    ``.mcp.json`` hard-codes your machine's Python path, so it is
+    **not** safe to commit as-is — gitignore it while iterating.
 
-        # Windows PowerShell
-        powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-        # macOS / Linux
-        curl -LsSf https://astral.sh/uv/install.sh | sh
-
-    Pre-PyPI-publish note: until ``agentic-experiments`` is published to
-    PyPI, uvx can't resolve the package by name. For local development,
-    hand-edit the generated ``.mcp.json`` to use a local source:
-
-        "args": ["--from", "<absolute-path-to-repo>[mcp]", "aexp-mcp-server"]
-
-    Once published, the canonical form shown above works everywhere.
+    ``PYTHONUNBUFFERED=1`` is set on both forms as belt + suspenders for
+    stdio flushing on Windows.
     """
+    if dev:
+        import sys as _sys
+        return {
+            "command": _sys.executable,
+            "args": ["-m", "aexp.mcp_server"],
+            "env": {"PYTHONUNBUFFERED": "1"},
+        }
     return {
         "command": "uvx",
         "args": [
@@ -536,6 +534,7 @@ def install_limina(
     force: bool = False,
     assert_git: bool = True,
     dry_run: bool = False,
+    dev: bool = False,
 ) -> list[InstallAction]:
     """Install the vendored Limina harness into ``repo_root``.
 
@@ -555,6 +554,14 @@ def install_limina(
         Compute and return the full action plan without actually writing any
         files or touching signac. Callers can preview the side effects safely
         and then re-invoke with ``dry_run=False`` to commit.
+    dev : bool, optional
+        Use a **development** form of ``.mcp.json`` that invokes the MCP
+        server via the current Python interpreter (``"<python_exe>" -m
+        aexp.mcp_server``) instead of the default ``uvx``/PyPI form. The
+        dev form honours editable installs (``pip install -e``) so source
+        edits flow through to the MCP surface — at the cost of baking a
+        machine-specific path into ``.mcp.json``. Do not commit the file
+        to git while using this mode.
 
     Returns
     -------
@@ -626,8 +633,11 @@ def install_limina(
 
     # 3c. Write project-scope MCP servers to .mcp.json at repo root.
     #     This is the file Claude Code actually reads for project-scope
-    #     servers (shared with the team via version control).
-    actions.append(_merge_or_write_mcp_json(root / ".mcp.json", root, dry_run=dry_run))
+    #     servers (shared with the team via version control, unless
+    #     ``dev=True`` — see docstring).
+    actions.append(
+        _merge_or_write_mcp_json(root / ".mcp.json", root, dry_run=dry_run, dev=dev)
+    )
 
     # 3b. Install Limina's Claude Code skills into <repo>/.claude/skills/.
     # AGENTS.md references skills like $experiment-rigor; without this step
