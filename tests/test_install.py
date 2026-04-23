@@ -180,6 +180,22 @@ def test_install_populates_fresh_repo(fresh_git_repo: Path) -> None:
                 assert "-m aexp.hooks." in h["command"], h
 
 
+def test_install_drops_slash_commands_without_a_second_step(
+    fresh_git_repo: Path,
+) -> None:
+    """``aexp install`` must ship the slash commands into ``.claude/commands/``.
+
+    Previously users had to remember to run ``aexp install-slash-commands`` as
+    a second step; this test pins the folded-in behaviour so the standalone
+    verb can't become load-bearing again.
+    """
+    install_limina(fresh_git_repo)
+    commands = fresh_git_repo / ".claude" / "commands"
+    assert commands.is_dir()
+    for name in ("aexp-new-run.md", "aexp-close-run.md", "aexp-close-batch.md"):
+        assert (commands / name).is_file(), name
+
+
 def test_install_initializes_signac_project(fresh_git_repo: Path) -> None:
     install_limina(fresh_git_repo)
     assert (fresh_git_repo / ".runs").is_dir()

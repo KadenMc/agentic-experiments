@@ -7,7 +7,6 @@ text when stdout is not a terminal).
 """
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 
 import typer
@@ -83,6 +82,7 @@ _INSTALL_HEADS_UP = """\
   - [cyan]templates/[/cyan]              artifact templates (you can edit these)
   - [cyan].claude/settings.json[/cyan]   JSON-merge: our hooks added, your hooks + permissions preserved
   - [cyan].claude/skills/[/cyan]         4 research-methodology skills
+  - [cyan].claude/commands/[/cyan]       3 slash commands ([green]/aexp-new-run[/green], [green]/aexp-close-run[/green], [green]/aexp-close-batch[/green])
   - [cyan].mcp.json[/cyan]               JSON-merge: our `aexp` MCP server added, your other servers preserved
   - [cyan]AGENTS.md[/cyan], [cyan]CLAUDE.md[/cyan]       block-merge: your content outside our `<!-- agentic-experiments:begin/end -->` markers is preserved
   - [cyan].runs/[/cyan]                  signac project (idempotent; initialised if missing)
@@ -469,22 +469,33 @@ def sync_offline_cmd(
 @app.command("install-slash-commands")
 def install_slash_commands(
     target: str = typer.Option(".claude/commands", "--target"),
+    force: bool = typer.Option(
+        True,
+        "--force/--no-force",
+        help=(
+            "Overwrite existing slash-command files with the shipped versions. "
+            "Default True (preserves the pre-0.1.2 behaviour of this verb); "
+            "pass ``--no-force`` to skip files you've customized."
+        ),
+    ),
 ) -> None:
-    """Copy shipped slash commands into ``<target>/``."""
-    src = Path(__file__).resolve().parent / "slash_commands"
-    if not src.is_dir():
-        console.print(f"[red]no slash_commands dir at {src}[/red]")
-        _exit(2)
-    dst = Path.cwd() / target
-    dst.mkdir(parents=True, exist_ok=True)
-    copied = 0
-    for md in src.glob("*.md"):
-        target_path = dst / md.name
-        shutil.copy2(md, target_path)
-        console.print(f"[green]copied[/green] {md.name} -> {target_path}")
-        copied += 1
-    if copied == 0:
-        console.print(f"[yellow]no *.md files found in {src}[/yellow]")
+    """Copy shipped slash commands into ``<target>/``.
+
+    ``aexp install`` now runs this as part of the standard setup, so this verb
+    is mainly for re-installs or for copying to a custom target directory.
+    """
+    from aexp.install import _install_slash_commands
+
+    actions = _install_slash_commands(Path.cwd(), target_rel=target, force=force)
+    for a in actions:
+        if a.kind == "skipped_conflict":
+            console.print(f"[yellow]{a.kind}[/yellow] {a.path}: {a.detail}")
+        elif a.kind == "skipped_identical":
+            console.print(f"[dim]skipped_identical[/dim] {a.path}")
+        elif a.kind == "copied":
+            console.print(f"[green]copied[/green] {a.path}")
+    if not actions:
+        console.print("[yellow]no slash commands to install[/yellow]")
 
 
 if __name__ == "__main__":

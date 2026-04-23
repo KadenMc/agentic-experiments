@@ -508,6 +508,28 @@ def _install_skills(root: Path, *, force: bool, dry_run: bool = False) -> list[I
     return actions
 
 
+SLASH_COMMANDS_SRC = Path(__file__).resolve().parent / "slash_commands"
+
+
+def _install_slash_commands(
+    root: Path, *, target_rel: str = ".claude/commands", force: bool, dry_run: bool = False
+) -> list[InstallAction]:
+    """Copy shipped slash commands into ``<root>/<target_rel>/``.
+
+    Produces ``copied`` / ``skipped_identical`` / ``skipped_conflict`` actions
+    through the same ``_copy_file`` helper as every other install step, so the
+    summary rolls them up cleanly and ``--force`` / dry-run behaviour is
+    consistent with the rest of ``aexp install``.
+    """
+    actions: list[InstallAction] = []
+    if not SLASH_COMMANDS_SRC.is_dir():
+        return actions
+    dst_dir = root / target_rel
+    for md in sorted(SLASH_COMMANDS_SRC.glob("*.md")):
+        actions.append(_copy_file(md, dst_dir / md.name, force=force, dry_run=dry_run))
+    return actions
+
+
 def _copy_tree(
     src_root: Path, dst_root: Path, *, force: bool, dry_run: bool = False
 ) -> list[InstallAction]:
@@ -643,6 +665,13 @@ def install_limina(
     # AGENTS.md references skills like $experiment-rigor; without this step
     # those references are broken for every consumer repo.
     actions.extend(_install_skills(root, force=force, dry_run=dry_run))
+
+    # 3d. Install aexp's slash commands into <repo>/.claude/commands/.
+    # Previously this was an opt-in ``aexp install-slash-commands`` second
+    # step — easy to miss, no good reason to keep separate. Now part of the
+    # standard flow; the standalone verb remains for re-installs to a custom
+    # target directory.
+    actions.extend(_install_slash_commands(root, force=force, dry_run=dry_run))
 
     # 4. Initialize signac project.
     run_store_path = (root / run_store).resolve()
