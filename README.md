@@ -265,7 +265,7 @@ docs/                   # concepts, quickstart, cli, mcp, mapping, tracker-adapt
 
 ## Status
 
-**Pre-release (v0.1.0).** Actively developed by one person and the agents they direct; used in the author's own ML research workflow. The API surface is not yet stable.
+**Pre-release (v0.1.x).** Actively developed by one person and the agents they direct; used in the author's own ML research workflow. The API surface is not yet stable — see [CHANGELOG.md](CHANGELOG.md) for what has shipped.
 
 - **Developed and primarily tested on Windows 11 / Python 3.12.** Supports Python 3.11+. CI runs the full suite on Ubuntu + Windows × Py 3.11/3.12/3.13. macOS hasn't been exercised — issues welcome.
 - **MCP server is the only PyPI-gated surface** — the CLI and Python API run from a local checkout without any PyPI round-trip.

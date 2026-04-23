@@ -49,10 +49,32 @@ def installed_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 # ---------------------------------------------------------------------------
 
 
+def test_package_version_matches_pyproject() -> None:
+    """Regression guard: ``aexp.__version__`` must agree with ``pyproject.toml``.
+
+    Previously the version was hard-coded in ``src/aexp/__init__.py`` and
+    drifted silently when ``pyproject.toml`` was bumped. The current module
+    reads from installed package metadata — this test pins that behaviour so
+    any future regression (e.g. reverting to a literal string) is caught.
+    """
+    import tomllib
+    from pathlib import Path
+
+    from aexp import __version__
+
+    pyproject = tomllib.loads(
+        (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    assert __version__ == pyproject["project"]["version"]
+
+
 def test_cli_version(runner: CliRunner) -> None:
+    """``aexp version`` prints whatever the installed package metadata reports."""
+    from aexp import __version__
+
     result = runner.invoke(app, ["version"])
     assert result.exit_code == 0
-    assert result.stdout.strip() == "0.1.0"
+    assert result.stdout.strip() == __version__
 
 
 def test_cli_python_dash_m_invocation() -> None:
@@ -63,6 +85,8 @@ def test_cli_python_dash_m_invocation() -> None:
     import subprocess
     import sys
 
+    from aexp import __version__
+
     result = subprocess.run(
         [sys.executable, "-m", "aexp", "version"],
         capture_output=True,
@@ -71,7 +95,7 @@ def test_cli_python_dash_m_invocation() -> None:
         timeout=30,
     )
     assert result.returncode == 0, (result.stdout, result.stderr)
-    assert result.stdout.strip() == "0.1.0"
+    assert result.stdout.strip() == __version__
 
 
 def test_cli_install_fresh_repo(runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
