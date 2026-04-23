@@ -77,6 +77,11 @@ and its merge policy, then prompts for confirmation before writing. Flags:
 - `--dry-run` / `-n` — print the planned actions without writing anything.
 - `--yes` / `-y` — skip the confirmation prompt (use in scripted / CI runs).
 - `--force` — overwrite conflicting user files instead of skipping with a warning.
+- `--dev` / `-D` — write `.mcp.json` using the current Python interpreter
+  (`"<python_exe>" -m aexp.mcp_server`) instead of the portable `uvx`/PyPI form.
+  Use when you've installed `aexp` editable (`pip install -e`) and want edits
+  to `src/aexp/mcp_server.py` to reach the MCP surface. The resulting
+  `.mcp.json` bakes in a machine-specific path — gitignore it while iterating.
 - `--run-store PATH` — override the default `.runs/` location (recorded in the marker).
 - `--no-require-git` — install into a plain directory (useful for integration tests).
 

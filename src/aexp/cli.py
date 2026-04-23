@@ -110,6 +110,14 @@ def _print_actions(actions: list, *, dry_run: bool) -> None:
     console.print(table)
 
 
+_DEV_HEADS_UP = (
+    "[bold magenta]Dev mode:[/bold magenta] `.mcp.json` will invoke the MCP server via your\n"
+    "current Python interpreter (honours editable installs). The resulting\n"
+    "[cyan].mcp.json[/cyan] bakes a machine-specific path — [yellow]do not commit it[/yellow]; gitignore\n"
+    "while iterating, or re-run without `--dev` to regenerate the portable form.\n"
+)
+
+
 @app.command()
 def install(
     run_store: str = typer.Option(".runs", "--run-store", help="Path for signac project."),
@@ -129,21 +137,46 @@ def install(
         "-y",
         help="Skip the pre-install confirmation prompt.",
     ),
+    dev: bool = typer.Option(
+        False,
+        "--dev",
+        "-D",
+        help=(
+            "Write `.mcp.json` using the current Python interpreter "
+            "(`\"<python_exe>\" -m aexp.mcp_server`) instead of the portable "
+            "uvx/PyPI form. Use when you're developing aexp locally and want "
+            "editable-install edits to reach the MCP surface. The resulting "
+            "`.mcp.json` is machine-specific — do not commit."
+        ),
+    ),
 ) -> None:
     """Install the aexp harness into the current repo.
 
     By default, shows a summary of what will be modified and asks for
     confirmation before making any changes. Use ``--yes`` to skip the
     prompt (for scripted / CI use) or ``--dry-run`` to preview only.
+    Pass ``--dev`` to write a development-mode ``.mcp.json`` that honours
+    editable installs.
     """
     import sys as _sys
 
     cwd = Path.cwd()
 
+    # The dev-mode advisory is important enough that we always emit it when
+    # --dev is set — even under --yes, where the full heads-up is skipped.
+    # Users should not accidentally commit a machine-specific .mcp.json.
+    if dev:
+        console.print(_DEV_HEADS_UP)
+
     if dry_run:
         console.print(_INSTALL_HEADS_UP)
         actions = install_limina(
-            cwd, run_store=run_store, force=force, assert_git=assert_git, dry_run=True
+            cwd,
+            run_store=run_store,
+            force=force,
+            assert_git=assert_git,
+            dry_run=True,
+            dev=dev,
         )
         _print_actions(actions, dry_run=True)
         return
@@ -159,7 +192,9 @@ def install(
             console.print("[yellow]Aborted.[/yellow]")
             raise typer.Exit(code=1)
 
-    actions = install_limina(cwd, run_store=run_store, force=force, assert_git=assert_git)
+    actions = install_limina(
+        cwd, run_store=run_store, force=force, assert_git=assert_git, dev=dev
+    )
     _print_actions(actions, dry_run=False)
 
 
