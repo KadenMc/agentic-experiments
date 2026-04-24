@@ -230,5 +230,7 @@ def test_e2e_fresh_repo_full_happy_path(tmp_path: Path, monkeypatch: pytest.Monk
         "aexp-finding-from-run.md",
         "aexp-finding-from-batch.md",
         "aexp-finding-placeholder.md",
+        "aexp-queue-add.md",
+        "aexp-queue-materialize.md",
     ):
         assert (repo / ".claude" / "commands" / name).is_file()

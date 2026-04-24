@@ -30,7 +30,7 @@
 
 **agentic-experiments** (import name `aexp`) is an opinionated research harness for ML experimentation done *with* an AI agent — typically [Claude Code](https://docs.anthropic.com/en/docs/claude-code). It forces a **Hypothesis → Experiment → Finding** chain on every run, ties that chain to git commits, and validates citation integrity at every turn.
 
-> **13 CLI verbs** &bull; **12 MCP tools** &bull; **11 slash commands** &bull; **4 research skills** &bull; **200+ tests**
+> **14 CLI verbs** &bull; **17 MCP tools** &bull; **14 slash commands** &bull; **4 research skills** &bull; **250+ tests**
 
 ### What this looks like in practice
 
@@ -114,14 +114,15 @@ The design bet: agents already know how to run experiments. What they need is a 
 | **W&B binding** | `aexp.tracked_run(job, project=...)` for managed wandb runs; `aexp.prepare_tracker(job, ...)` if your code already calls `wandb.init` and you just want the disciplined payload + signac binding. Group slug is deterministic; offline-first; co-locates with its signac workspace. |
 | **HPC-friendly sync** | `aexp sync-offline` walks the run store and runs `wandb sync` on every offline run — one command from a login node, no shell gymnastics. |
 | **Tracker ABC** | `TrackerAdapter` is a small ABC used by the legacy `bind_tracker(job, adapter, ...)` path — kept for `NoopAdapter` and backend-agnostic code. See [docs/tracker-adapters.md](docs/tracker-adapters.md) for which surface to pick. |
+| **Queue + runner materialization** | `aexp queue add` / `materialize` registers pending runs on one machine and emits a runner script (shell / slurm / manual) for another. Drift-proof provenance via named `conditions:` blocks in the experiment frontmatter — `--sp condition=full` resolves to the full config at queue-time so later edits to `conditions.full` can't retroactively change what ran. See [docs/queue.md](docs/queue.md). |
 
 ### Agent surfaces
 
 | | |
 |---|---|
 | **MCP server** | FastMCP with 9 tools covering the full run lifecycle. Runs via `uvx --from agentic-experiments[mcp] aexp-mcp-server` — no absolute paths, no per-machine config, `.mcp.json` committable to git. |
-| **Slash commands** | Artifact creation: `/aexp-new-hypothesis`, `/aexp-new-experiment`, `/aexp-new-run`. Finding creation (pick by what the finding cites): `/aexp-finding-from-run`, `/aexp-finding-from-batch`, `/aexp-finding-placeholder`. Read / inspect: `/aexp-show-run`, `/aexp-show-batch`, `/aexp-list-runs`, `/aexp-status`, `/aexp-validate`. 11 total. |
-| **CLI** | 13 verbs covering install, artifact creation (H/E/F), run lifecycle, batch queries, tracker binding, validation, and offline sync. See `aexp --help` for the full list. Python API is a one-line `from aexp import ...`. |
+| **Slash commands** | Artifact creation: `/aexp-new-hypothesis`, `/aexp-new-experiment`, `/aexp-new-run`. Finding creation (pick by what the finding cites): `/aexp-finding-from-run`, `/aexp-finding-from-batch`, `/aexp-finding-placeholder`. Read / inspect: `/aexp-show-run`, `/aexp-show-batch`, `/aexp-list-runs`, `/aexp-status`, `/aexp-validate`. Queue: `/aexp-queue-add`, `/aexp-queue-list`, `/aexp-queue-materialize`. 14 total. |
+| **CLI** | 14 verbs covering install, artifact creation (H/E/F), run lifecycle, batch queries, tracker binding, validation, offline sync, and the `queue` subcommand group (add/list/remove/clear/materialize) + `run-queued`. See `aexp --help` for the full list. Python API is a one-line `from aexp import ...`. |
 | **Typed JSON contracts** | Pydantic models (`RunLink`, `BatchSelector`, `Issue`, …) back the schema; MCP tools and CLI return the same shapes. |
 
 ---
@@ -234,6 +235,7 @@ So a session can end cleanly with a broken `supporting_runs` citation still pres
 | [docs/mcp.md](docs/mcp.md) | MCP server tools, transport, verification prompt, troubleshooting |
 | [docs/mapping.md](docs/mapping.md) | `kb/` ↔ signac ↔ W&B mapping in gory detail |
 | [docs/tracker-adapters.md](docs/tracker-adapters.md) | Writing a new tracker adapter; why Weave isn't in v1 |
+| [docs/queue.md](docs/queue.md) | Queue, runner-script materialization, sp resolution, drift-proof provenance, cross-machine sync |
 
 ---
 
@@ -269,7 +271,7 @@ docs/                   # concepts, quickstart, cli, mcp, mapping, tracker-adapt
 
 - **Developed and primarily tested on Windows 11 / Python 3.12.** Supports Python 3.11+. CI runs the full suite on Ubuntu + Windows × Py 3.11/3.12/3.13. macOS hasn't been exercised — issues welcome.
 - **MCP server is the only PyPI-gated surface** — the CLI and Python API run from a local checkout without any PyPI round-trip.
-- **v1.1 backlog:** `aexp index` dashboard, MLflow / Aim / DVC tracker adapters, OpenTelemetry extra, queue / batch-materialization layer. (Artifact-creation CLI verbs and the three-mode wandb surface shipped in 0.1.2.)
+- **v1.1 backlog:** `aexp index` dashboard, MLflow / Aim / DVC tracker adapters, OpenTelemetry extra. (Artifact-creation CLI verbs, the three-mode wandb surface, and the queue + runner-materialization layer shipped in 0.1.2.)
 
 If you run ML experiments with Claude Code and find yourself wanting a harness that holds your agent to scientific discipline, this is built for you. Feedback, bug reports, and PRs all welcome.
 

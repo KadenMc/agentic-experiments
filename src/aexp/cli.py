@@ -27,6 +27,19 @@ from aexp.linking import (
     show_batch,
     summarize_run,
 )
+from aexp.queue import (
+    RunnerCommandMissing,
+    SubprocessFailed,
+    SweepParseError,
+    add_many_to_queue,
+    add_to_queue,
+    clear_queue,
+    list_queue,
+    materialize_queue,
+    parse_sweep,
+    remove_from_queue,
+    run_queued,
+)
 from aexp.runs import create_run, find_runs, open_run
 from aexp.trackers import NoopAdapter, TrackerInitError, bind_tracker
 from aexp.validate import ValidateResult, validate_repo
@@ -598,6 +611,309 @@ def install_slash_commands(
             console.print(f"[green]copied[/green] {a.path}")
     if not actions:
         console.print("[yellow]no slash commands to install[/yellow]")
+
+
+# ---------------------------------------------------------------------------
+# queue subcommand group — pending-run registration + runner materialization
+# ---------------------------------------------------------------------------
+
+
+queue_app = typer.Typer(
+    help="Register pending runs; materialize them as a runner script.",
+    no_args_is_help=True,
+)
+app.add_typer(queue_app, name="queue")
+
+
+def _parse_sweep_or_exit(raw: str | None) -> dict:
+    if not raw:
+        return {}
+    try:
+        return parse_sweep(raw)
+    except SweepParseError as exc:
+        console.print(f"[red]invalid --sweep spec: {exc}[/red]")
+        _exit(2)
+    return {}  # unreachable; _exit raises
+
+
+def _parse_slurm_kwargs(
+    time: str | None,
+    mem: str | None,
+    gpus: str | None,
+    partition: str | None,
+    account: str | None,
+    extra: str | None,
+) -> dict:
+    kw: dict[str, str] = {}
+    if time is not None:
+        kw["time"] = time
+    if mem is not None:
+        kw["mem"] = mem
+    if gpus is not None:
+        kw["gpus"] = gpus
+    if partition is not None:
+        kw["partition"] = partition
+    if account is not None:
+        kw["account"] = account
+    if extra is not None:
+        kw["extra"] = extra
+    return kw
+
+
+@queue_app.command("add")
+def queue_add_cmd(
+    experiment: str = typer.Option(..., "--experiment", help="Limina E### id."),
+    hypothesis: str | None = typer.Option(None, "--hypothesis"),
+    sp: str | None = typer.Option(
+        None, "--sp", help="Fixed sp values: KEY=VAL,KEY=VAL."
+    ),
+    sweep: str | None = typer.Option(
+        None,
+        "--sweep",
+        help=(
+            'Cartesian sweep: "KEY=V1|V2|V3, KEY2=0..3". Pipe-separated '
+            "enum values; integer range via a..b inclusive. Combines with "
+            "--sp for fixed values."
+        ),
+    ),
+    tag: str | None = typer.Option(None, "--tag", help="Groups queued jobs."),
+    runner_hint: str | None = typer.Option(
+        None, "--runner-hint", help="Suggest runner for materialize."
+    ),
+    no_commit: bool = typer.Option(
+        False, "--no-commit", help="Skip code_commit/code_dirty in sp."
+    ),
+    no_resolve: bool = typer.Option(
+        False,
+        "--no-resolve",
+        help=(
+            "Skip condition-block resolution. By default, if sp.condition "
+            "names a key in the experiment's conditions: frontmatter, the "
+            "block is merged into sp."
+        ),
+    ),
+) -> None:
+    """Register one or more pending runs."""
+    base_sp = _parse_sp_kv(sp)
+    sweep_dict = _parse_sweep_or_exit(sweep)
+
+    overlap = set(base_sp) & set(sweep_dict)
+    if overlap:
+        console.print(
+            f"[red]--sp and --sweep share keys: {sorted(overlap)}; "
+            "put each key in exactly one.[/red]"
+        )
+        _exit(2)
+
+    if sweep_dict:
+        jobs = add_many_to_queue(
+            experiment_id=experiment,
+            hypothesis_id=hypothesis,
+            base_sp=base_sp,
+            sweep=sweep_dict,
+            tag=tag,
+            runner_hint=runner_hint,
+            include_commit=not no_commit,
+            resolve_conditions=not no_resolve,
+        )
+        console.print(
+            f"[green]queued[/green] [bold]{len(jobs)}[/bold] job(s)"
+            + (f" under tag=[cyan]{tag}[/cyan]" if tag else "")
+        )
+        for job in jobs:
+            console.print(f"  {job.id[:8]}  {dict(job.sp)}")
+        return
+
+    job = add_to_queue(
+        experiment_id=experiment,
+        hypothesis_id=hypothesis,
+        statepoint=base_sp,
+        tag=tag,
+        runner_hint=runner_hint,
+        include_commit=not no_commit,
+        resolve_conditions=not no_resolve,
+    )
+    console.print(f"[green]queued[/green] [bold]{job.id}[/bold]")
+    console.print(f"  workspace: {job.path}")
+    if tag:
+        console.print(f"  tag: {tag}")
+
+
+@queue_app.command("list")
+def queue_list_cmd(
+    experiment: str | None = typer.Option(None, "--experiment"),
+    tag: str | None = typer.Option(None, "--tag"),
+    include_terminal: bool = typer.Option(
+        False,
+        "--include-terminal",
+        help="Show jobs in terminal states (complete/failed/abandoned).",
+    ),
+) -> None:
+    """List queued runs (pending-run rows only by default)."""
+    entries = list_queue(
+        experiment_id=experiment,
+        tag=tag,
+        include_terminal=include_terminal,
+    )
+    table = Table(
+        title=f"queue ({len(entries)} entr{'y' if len(entries) == 1 else 'ies'})",
+        show_header=True,
+    )
+    for col in ("short_id", "experiment", "status", "tag", "sp"):
+        table.add_column(col)
+    for e in entries:
+        sp_s = ", ".join(
+            f"{k}={v!r}"
+            for k, v in sorted(e.sp.items())
+            if k not in ("experiment_id", "code_commit", "code_dirty")
+        )
+        table.add_row(
+            e.job_id[:8],
+            e.experiment_id or "",
+            e.status or "",
+            e.tag or "",
+            sp_s,
+        )
+    console.print(table)
+
+
+@queue_app.command("remove")
+def queue_remove_cmd(job_id: str) -> None:
+    """Mark one queued job ``abandoned`` without executing it."""
+    remove_from_queue(job_id)
+    console.print(f"[yellow]abandoned[/yellow] {job_id[:8]}")
+
+
+@queue_app.command("clear")
+def queue_clear_cmd(
+    experiment: str | None = typer.Option(None, "--experiment"),
+    tag: str | None = typer.Option(None, "--tag"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation."),
+) -> None:
+    """Bulk-abandon queued jobs matching the filter."""
+    import sys as _sys
+
+    entries = list_queue(experiment_id=experiment, tag=tag)
+    if not entries:
+        console.print("[yellow]no queued jobs match the filter.[/yellow]")
+        return
+    if not yes:
+        console.print(
+            f"[yellow]about to abandon {len(entries)} queued job(s).[/yellow]"
+        )
+        if not _sys.stdin.isatty():
+            console.print(
+                "[yellow]No TTY; rerun with --yes to confirm.[/yellow]"
+            )
+            _exit(1)
+        if not typer.confirm("Proceed?", default=False):
+            console.print("[yellow]aborted.[/yellow]")
+            return
+    abandoned = clear_queue(experiment_id=experiment, tag=tag)
+    console.print(f"[yellow]abandoned[/yellow] {len(abandoned)} job(s)")
+
+
+@queue_app.command("materialize")
+def queue_materialize_cmd(
+    runner: str = typer.Option(
+        "shell", "--runner", help="shell | slurm | manual"
+    ),
+    output: str = typer.Option(
+        "run_queue.sh", "--output", "-o", help="Output path."
+    ),
+    experiment: str | None = typer.Option(None, "--experiment"),
+    tag: str | None = typer.Option(None, "--tag"),
+    slurm_time: str | None = typer.Option(
+        None, "--slurm-time", help="#SBATCH --time value (e.g. 04:00:00)."
+    ),
+    slurm_mem: str | None = typer.Option(
+        None, "--slurm-mem", help="#SBATCH --mem value (e.g. 32G)."
+    ),
+    slurm_gpus: str | None = typer.Option(
+        None, "--slurm-gpus", help="#SBATCH --gpus value."
+    ),
+    slurm_partition: str | None = typer.Option(
+        None, "--slurm-partition"
+    ),
+    slurm_account: str | None = typer.Option(None, "--slurm-account"),
+    slurm_extra: str | None = typer.Option(
+        None,
+        "--slurm-extra",
+        help="Free-form #SBATCH lines (newline-separated). Appended verbatim.",
+    ),
+) -> None:
+    """Emit a runner script covering every matching queue entry."""
+    if runner not in ("shell", "slurm", "manual"):
+        console.print(
+            f"[red]unknown runner {runner!r}; expected shell|slurm|manual[/red]"
+        )
+        _exit(2)
+
+    slurm_kwargs = _parse_slurm_kwargs(
+        slurm_time, slurm_mem, slurm_gpus, slurm_partition,
+        slurm_account, slurm_extra,
+    )
+    try:
+        result = materialize_queue(
+            runner=runner,  # type: ignore[arg-type]
+            output_path=output,
+            experiment_id=experiment,
+            tag=tag,
+            slurm_kwargs=slurm_kwargs or None,
+        )
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        _exit(2)
+        return
+    console.print(
+        f"[green]materialized[/green] [bold]{result.num_jobs}[/bold] "
+        f"job(s) → {result.output_path}"
+    )
+    if runner == "shell":
+        console.print(f"  run it: [cyan]bash {output}[/cyan]")
+    elif runner == "slurm":
+        console.print(f"  submit it: [cyan]sbatch {output}[/cyan]")
+    elif runner == "manual":
+        console.print(
+            "  copy the commands from the output file into your runner."
+        )
+
+
+# ---------------------------------------------------------------------------
+# run-queued — runner-side execution of one queued job
+# ---------------------------------------------------------------------------
+
+
+@app.command("run-queued")
+def run_queued_cmd(
+    job_id: str,
+    force: bool = typer.Option(
+        False, "--force", help="Re-run even if status is terminal."
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Print the rendered command without executing."
+    ),
+) -> None:
+    """Execute one queued job. Idempotent: terminal states skip unless --force.
+
+    Invoked per-job by materialized runner scripts. Reads the experiment's
+    ``runner_command`` template (or per-job override), renders it against
+    the job's resolved sp, and runs it via ``subprocess.run(shell=True)``
+    inside aexp's ``run_lifecycle`` so status transitions happen
+    automatically.
+    """
+    try:
+        returncode = run_queued(job_id, force=force, dry_run=dry_run)
+    except RunnerCommandMissing as exc:
+        console.print(f"[red]{exc}[/red]")
+        _exit(2)
+        return
+    except SubprocessFailed as exc:
+        console.print(f"[red]runner failed: {exc}[/red]")
+        _exit(1)
+        return
+    if returncode != 0:
+        _exit(returncode)
 
 
 if __name__ == "__main__":

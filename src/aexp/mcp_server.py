@@ -35,6 +35,16 @@ from aexp.artifacts import (
 from aexp.linking import (
     link_to_experiment as _link_to_experiment,
 )
+from aexp.queue import (
+    SweepParseError,
+    add_many_to_queue as _add_many_to_queue,
+    add_to_queue as _add_to_queue,
+    clear_queue as _clear_queue,
+    list_queue as _list_queue,
+    materialize_queue as _materialize_queue,
+    parse_sweep as _parse_sweep,
+    remove_from_queue as _remove_from_queue,
+)
 from aexp.linking import (
     list_batches as _list_batches,
 )
@@ -476,6 +486,210 @@ def sync_offline(dry_run: bool = False) -> dict[str, Any]:
             }
             for r in results
         ],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Tool: queue_add
+# ---------------------------------------------------------------------------
+
+
+def _queue_entry_to_dict(entry: Any) -> dict[str, Any]:
+    return {
+        "job_id": entry.job_id,
+        "short_id": entry.job_id[:8],
+        "experiment_id": entry.experiment_id,
+        "hypothesis_id": entry.hypothesis_id,
+        "status": entry.status,
+        "tag": entry.tag,
+        "queued_at": entry.queued_at,
+        "sp": dict(entry.sp),
+        "last_error": entry.last_error,
+    }
+
+
+def _job_to_queue_dict(job: Any) -> dict[str, Any]:
+    return {
+        "job_id": job.id,
+        "short_id": job.id[:8],
+        "sp": dict(job.sp),
+        "status": job.doc.get("status"),
+        "tag": (job.doc.get("queue") or {}).get("tag"),
+        "workspace": str(Path(job.path)),
+    }
+
+
+@mcp.tool()
+def queue_add(
+    experiment_id: str,
+    statepoint: dict[str, Any] | None = None,
+    sweep: str | None = None,
+    hypothesis_id: str | None = None,
+    tag: str | None = None,
+    runner_hint: str | None = None,
+    resolve_conditions: bool = True,
+) -> dict[str, Any]:
+    """Register one or more pending runs (``status="queued"``).
+
+    Args:
+        experiment_id: Limina E### the runs test.
+        statepoint: Fixed sp values applied to every job.
+        sweep: Optional Cartesian-sweep spec, e.g.
+            ``"condition=full|classify_only, seed=0..3"``. Expanded and
+            combined with ``statepoint``.
+        hypothesis_id: Optional H### override.
+        tag: Groups queued jobs for list/materialize filtering.
+        runner_hint: Hint for default materialize runner.
+        resolve_conditions: If True (default) and sp.condition names a
+            block in the experiment's ``conditions:`` frontmatter, merge
+            the block into sp before signac creates the job.
+
+    Returns a dict with ``num_queued`` and ``jobs`` (list of
+    short_id/sp/status/workspace per job).
+    """
+    base_sp = dict(statepoint or {})
+    if sweep:
+        try:
+            sweep_dict = _parse_sweep(sweep)
+        except SweepParseError as exc:
+            return {"error": str(exc), "code": "invalid_sweep"}
+        overlap = set(base_sp) & set(sweep_dict)
+        if overlap:
+            return {
+                "error": (
+                    f"sp and sweep share keys: {sorted(overlap)}; "
+                    "put each key in exactly one"
+                ),
+                "code": "key_collision",
+            }
+        jobs = _add_many_to_queue(
+            experiment_id=experiment_id,
+            hypothesis_id=hypothesis_id,
+            base_sp=base_sp,
+            sweep=sweep_dict,
+            tag=tag,
+            runner_hint=runner_hint,
+            resolve_conditions=resolve_conditions,
+        )
+    else:
+        jobs = [
+            _add_to_queue(
+                experiment_id=experiment_id,
+                hypothesis_id=hypothesis_id,
+                statepoint=base_sp,
+                tag=tag,
+                runner_hint=runner_hint,
+                resolve_conditions=resolve_conditions,
+            )
+        ]
+    return {
+        "num_queued": len(jobs),
+        "tag": tag,
+        "jobs": [_job_to_queue_dict(j) for j in jobs],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Tool: queue_list
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def queue_list(
+    experiment_id: str | None = None,
+    tag: str | None = None,
+    include_terminal: bool = False,
+) -> list[dict[str, Any]]:
+    """List queue entries, optionally filtered by experiment or tag.
+
+    Defaults to hiding jobs in a terminal status (``complete`` /
+    ``failed`` / ``abandoned``). Pass ``include_terminal=True`` to see
+    historical queue entries.
+    """
+    entries = _list_queue(
+        experiment_id=experiment_id,
+        tag=tag,
+        include_terminal=include_terminal,
+    )
+    return [_queue_entry_to_dict(e) for e in entries]
+
+
+# ---------------------------------------------------------------------------
+# Tool: queue_remove
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def queue_remove(job_id: str) -> dict[str, Any]:
+    """Mark one queued job ``abandoned`` without executing it."""
+    job = _remove_from_queue(job_id)
+    return {"job_id": job.id, "status": job.doc.get("status")}
+
+
+# ---------------------------------------------------------------------------
+# Tool: queue_clear
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def queue_clear(
+    experiment_id: str | None = None,
+    tag: str | None = None,
+) -> dict[str, Any]:
+    """Bulk-abandon queued jobs matching the filter."""
+    abandoned = _clear_queue(experiment_id=experiment_id, tag=tag)
+    return {"num_abandoned": len(abandoned), "job_ids": abandoned}
+
+
+# ---------------------------------------------------------------------------
+# Tool: queue_materialize
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def queue_materialize(
+    runner: str = "shell",
+    output_path: str = "run_queue.sh",
+    experiment_id: str | None = None,
+    tag: str | None = None,
+    slurm_kwargs: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Emit a runner script covering every matching queue entry.
+
+    ``runner`` is one of ``"shell"``, ``"slurm"``, ``"manual"``.
+    ``slurm_kwargs`` maps flag keys to values (e.g.
+    ``{"time": "04:00:00", "mem": "32G", "gpus": "1"}``) and becomes
+    ``#SBATCH --<key>=<value>`` lines. Special key ``extra`` is appended
+    verbatim.
+
+    Returns a dict with the absolute output path, num_jobs, and the
+    list of job ids baked into the script.
+
+    Note: this does NOT execute anything. The user invokes the emitted
+    script wherever the runtime env lives (often a different machine
+    than the MCP host). See the ``aexp run-queued <job_id>`` CLI verb
+    for the per-job execution primitive.
+    """
+    if runner not in ("shell", "slurm", "manual"):
+        return {
+            "error": f"unknown runner {runner!r}; expected shell|slurm|manual",
+            "code": "unknown_runner",
+        }
+    try:
+        result = _materialize_queue(
+            runner=runner,  # type: ignore[arg-type]
+            output_path=output_path,
+            experiment_id=experiment_id,
+            tag=tag,
+            slurm_kwargs=slurm_kwargs,
+        )
+    except ValueError as exc:
+        return {"error": str(exc), "code": "materialize_failed"}
+    return {
+        "output_path": result.output_path,
+        "runner": result.runner,
+        "num_jobs": result.num_jobs,
+        "job_ids": list(result.job_ids),
     }
 
 

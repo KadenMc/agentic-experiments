@@ -57,7 +57,23 @@ aexp bind-tracker <job_id> --backend {noop,wandb} [--project P] [--offline]
 aexp sync-offline [--dry-run]
 aexp validate [--kb-only | --runs-only]
 aexp install-slash-commands [--target .claude/commands]
+
+# Queue subcommand group — pending-run registration + materialization
+aexp queue add         --experiment E### [--sp K=V,...] [--sweep "K=V|V,K=a..b"]
+                        [--tag T] [--hypothesis H###] [--no-resolve] [--no-commit]
+aexp queue list        [--experiment E###] [--tag T] [--include-terminal]
+aexp queue remove      <job_id>
+aexp queue clear       [--experiment E###] [--tag T] [--yes]
+aexp queue materialize [--runner shell|slurm|manual] [--output PATH]
+                        [--tag T] [--experiment E###]
+                        [--slurm-time T] [--slurm-mem M] [--slurm-gpus N]
+                        [--slurm-partition P] [--slurm-account A] [--slurm-extra "..."]
+aexp run-queued <job_id> [--force] [--dry-run]
 ```
+
+See [docs/queue.md](queue.md) for the full queue model (sp resolution,
+`runner_command` templates, cross-machine sync) — this file only lists
+the CLI surface.
 
 ## Verbs — details
 

@@ -408,12 +408,92 @@ def validate_ref(
     return ref
 
 
+_JSON_PRIMITIVE_TYPES: tuple[type, ...] = (str, int, float, bool, type(None))
+
+
+def _is_json_serializable_value(value: object) -> bool:
+    """Recursive: primitives, or lists/dicts of them. Rejects tuples / sets /
+    arbitrary objects — the validator is only attesting shape, not rigor."""
+    if isinstance(value, _JSON_PRIMITIVE_TYPES):
+        return True
+    if isinstance(value, list):
+        return all(_is_json_serializable_value(v) for v in value)
+    if isinstance(value, dict):
+        return all(
+            isinstance(k, str) and _is_json_serializable_value(v)
+            for k, v in value.items()
+        )
+    return False
+
+
+def validate_conditions_block(note: NoteRecord, result: ValidationResult) -> None:
+    """Check that an experiment's ``conditions:`` frontmatter block is a
+    dict of dicts of JSON primitives.
+
+    Applies only to ``E###`` artifacts with a ``conditions:`` field. Absent
+    field → no-op (backward compatible). Malformed field → ``conditions_schema``
+    issue per offending entry.
+
+    The validator here re-parses the raw frontmatter because ``NoteRecord``
+    only carries mapped metadata keys (via ``_FRONTMATTER_TO_META``) — the
+    ``conditions`` field isn't mapped and would otherwise be invisible.
+    """
+    raw_frontmatter = parse_frontmatter_values(note.text)
+    conditions = raw_frontmatter.get("conditions")
+    if conditions is None or conditions == "" or conditions == {}:
+        return
+
+    if not isinstance(conditions, dict):
+        result.add(
+            "conditions_schema",
+            f"{note.path.name} 'conditions' must be a mapping of "
+            f"<name>: <config-dict>, got {type(conditions).__name__}.",
+            note.path,
+        )
+        return
+
+    for cond_name, cond_block in conditions.items():
+        if not isinstance(cond_name, str):
+            result.add(
+                "conditions_schema",
+                f"{note.path.name} condition name {cond_name!r} must be a string.",
+                note.path,
+            )
+            continue
+        if not isinstance(cond_block, dict):
+            result.add(
+                "conditions_schema",
+                f"{note.path.name} condition '{cond_name}' must be a mapping "
+                f"of config keys to JSON-serializable values, got "
+                f"{type(cond_block).__name__}.",
+                note.path,
+            )
+            continue
+        for key, value in cond_block.items():
+            if not isinstance(key, str):
+                result.add(
+                    "conditions_schema",
+                    f"{note.path.name} condition '{cond_name}' has non-string "
+                    f"key {key!r}.",
+                    note.path,
+                )
+                continue
+            if not _is_json_serializable_value(value):
+                result.add(
+                    "conditions_schema",
+                    f"{note.path.name} condition '{cond_name}.{key}' value is "
+                    f"not JSON-serializable: got {type(value).__name__}.",
+                    note.path,
+                )
+
+
 def validate_artifact(note: NoteRecord, artifacts: dict[str, NoteRecord], note_index: dict[str, NoteRecord], result: ValidationResult) -> None:
     validate_required_fields(note, result)
     validate_artifact_identity(note, result)
 
     if note.kind == "E":
         validate_ref(note, "Hypothesis", "H", artifacts, result)
+        validate_conditions_block(note, result)
     elif note.kind == "F":
         hypothesis_id = validate_ref(note, "Hypothesis", "H", artifacts, result)
         experiment_id = validate_ref(note, "Experiment", "E", artifacts, result)

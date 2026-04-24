@@ -129,6 +129,7 @@ def create_run(
     repo_root: str | Path | None = None,
     init_doc: dict[str, Any] | None = None,
     include_commit: bool = True,
+    resolve_conditions: bool = True,
 ) -> signac.job.Job:
     """Open (or create) a signac job linked to a Limina experiment.
 
@@ -140,6 +141,11 @@ def create_run(
     statepoint : dict | None
         Caller-supplied identity params. Merged on top of the auto-populated
         defaults (``experiment_id``, optional ``code_commit`` / ``code_dirty``).
+        If ``resolve_conditions`` and the statepoint contains a
+        ``"condition"`` key matching a named block in the experiment's
+        ``conditions:`` frontmatter, the block is merged into the sp
+        before signac creates the job — so the resolved config is frozen
+        to ``signac_statepoint.json``.
     hypothesis_id, sub_hypothesis_id : str | None
         If provided, mirrored into both ``sp`` and ``doc["limina"]``.
     experiment_path : str | None
@@ -152,6 +158,14 @@ def create_run(
     include_commit : bool
         If ``True`` (default), add ``code_commit`` / ``code_dirty`` to
         ``sp`` so re-running at a new commit yields a new directory.
+    resolve_conditions : bool
+        If ``True`` (default) and ``statepoint["condition"]`` matches a
+        named block in the experiment's ``conditions:`` frontmatter, merge
+        the block into the sp *before* signac creates the job. Pass
+        ``False`` for pure bare-label behavior (e.g. when queueing a job
+        whose sp has already been resolved, or when the caller deliberately
+        wants to freeze a label without its config). User-supplied sp
+        values always win over condition defaults on collision.
 
     Returns
     -------
@@ -161,11 +175,20 @@ def create_run(
     """
     root = Path(repo_root).resolve() if repo_root else find_repo_root()
     project = get_run_store(root)
+
+    user_sp = dict(statepoint or {})
+    if resolve_conditions:
+        # Lazy import to avoid a circular import — aexp.queue imports
+        # create_run itself for queue registration.
+        from aexp.queue import resolve_sp
+
+        user_sp = resolve_sp(experiment_id, user_sp, kb_root=root / "kb")
+
     sp = _build_statepoint(
         experiment_id=experiment_id,
         hypothesis_id=hypothesis_id,
         sub_hypothesis_id=sub_hypothesis_id,
-        user_sp=dict(statepoint or {}),
+        user_sp=user_sp,
         include_commit=include_commit,
         repo_root=root,
     )

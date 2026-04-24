@@ -128,6 +128,36 @@ aexp show-batch --experiment E001 --condition full
 
 `list-batches` rolls up by `(experiment_id, condition)` by default — one row per distinct slice, with counts and status mix.
 
+## 5b. Batch-queue for overnight (or cluster) execution
+
+If you want to queue N jobs and materialize them as a runner script — instead of calling `new-run` per job and executing inline — use the `queue` subcommand group:
+
+```powershell
+# Declare what the conditions mean (once, in E001's frontmatter):
+#
+#   runner_command: "python -m mypkg.train --config-json '{sp_json}'"
+#   conditions:
+#     full:     { model: "baseline", max_turns: 12 }
+#     classify: { model: "baseline", max_turns:  4 }
+
+# Queue 8 jobs in one call (Cartesian sweep):
+aexp queue add --experiment E001 --sweep "condition=full|classify, seed=0..3" --tag overnight
+
+# Inspect pending work:
+aexp queue list --tag overnight
+
+# Materialize as a slurm array job (or --runner shell for local):
+aexp queue materialize --runner slurm --output overnight.sbatch --tag overnight \
+    --slurm-time 04:00:00 --slurm-mem 32G --slurm-gpus 1
+
+# Commit, push, pull on cluster, `sbatch overnight.sbatch`. See docs/queue.md
+# for the full cross-machine sync workflow.
+```
+
+Each queued job freezes its full resolved config (the `conditions.full` block merged with whatever you passed in `--sp`/`--sweep`) to `signac_statepoint.json` — editing `conditions.full` tomorrow doesn't retroactively change what last night's runs did. That's the drift-proof provenance mechanism.
+
+Full story in [docs/queue.md](queue.md) (sp resolution rules, `{sp_json}` placeholder, runner script emitters, failure handling).
+
 ## 6. Write a Finding
 
 ```powershell

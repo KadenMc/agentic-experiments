@@ -82,6 +82,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   commands row enumerates the full 9-command set; v1.1 backlog drops the
   items that already shipped.
 
+### Added (queue + runner materialization + sp resolution)
+
+- **`aexp.queue` module** — organizational queue over signac. Agents
+  register pending runs on one machine (laptop / MCP host) and materialize
+  them as a runner script (shell / slurm / manual) that executes on
+  another (e.g. an HPC cluster the agent can't directly access). Public
+  API: `add_to_queue`, `add_many_to_queue`, `list_queue`,
+  `remove_from_queue`, `clear_queue`, `materialize_queue`, `run_queued`,
+  `resolve_sp`, `render_runner_command`, `parse_sweep`, `QueueEntry`,
+  `MaterializeResult`. Errors: `RunnerCommandMissing`, `SubprocessFailed`,
+  `SweepParseError`.
+- **New `RunStatus` value `"queued"`** — extends the lifecycle to
+  `created → queued → running → complete|failed|abandoned`. Backward-
+  compatible: `create_run` still initializes `"created"`; only
+  `add_to_queue` writes `"queued"`.
+- **sp resolution (drift-proof provenance)** — named `conditions:`
+  blocks in an experiment's frontmatter are merged into a job's state
+  point *at queue-time*, so `--sp condition=full` resolves to the full
+  config (e.g. `model`, `max_turns`, `tools`) and signac freezes it to
+  `signac_statepoint.json`. Later edits to `conditions.full` can't
+  retroactively change what queued-then-ran. User sp keys win on
+  collision. Enabled by default on both `queue add` and `new-run`
+  (`create_run` gained a `resolve_conditions=True` kwarg); opt out with
+  `--no-resolve` (CLI) / `resolve_conditions=False` (Python).
+- **`{sp_json}` runner-command placeholder** — renders the full resolved
+  sp as compact JSON (no whitespace) so it splats safely into a shell
+  argv. Plus `{key}` for any sp field and `{job_id}` for the 32-hex id.
+- **CLI `queue` subcommand group** — `aexp queue add`, `queue list`,
+  `queue remove`, `queue clear`, `queue materialize`. First use of
+  `app.add_typer(...)` in the codebase. Plus top-level `aexp run-queued`
+  for runner-side execution of one queued job.
+- **`--sweep` grammar** — `aexp queue add --sweep "condition=full|cls,
+  seed=0..3"` expands to a Cartesian product. `|` separates enumerated
+  values; `a..b` is an inclusive integer range. Keys in `--sp` cannot
+  overlap with `--sweep` keys.
+- **MCP tools** — `queue_add`, `queue_list`, `queue_remove`,
+  `queue_clear`, `queue_materialize`. `run_queued` is deliberately NOT
+  exposed via MCP: execution on the MCP host is usually the wrong env.
+- **Three new slash commands** — `/aexp-queue-add`, `/aexp-queue-list`,
+  `/aexp-queue-materialize`. Ends at 14 total slash commands.
+- **Validator extension** — `kb_validate` gets a `conditions_schema`
+  check: when an experiment's `conditions:` field is present, each
+  named block must be a dict of JSON-serializable primitives. Absent
+  field = no-op (backward compatible).
+- **Runner-env injection** — `aexp run-queued` sets `AEXP_JOB_ID` and
+  `AEXP_JOB_WORKSPACE` in the subprocess environment so training scripts
+  can find their own job without argv threading.
+- **Failure forensics** — `run_queued` captures the last 2KB of stderr
+  into `job.doc["queue"]["last_error"]` before `run_lifecycle` marks
+  the job failed. `aexp queue list --include-terminal` surfaces this.
+- **`docs/queue.md`** — canonical guide: three runner modes, sp
+  resolution semantics, `runner_command` placeholders, cross-machine
+  sync workflow (git-based), FAQ on failure modes.
+
+### Changed (queue-related)
+
+- **`create_run` gains `resolve_conditions=True` kwarg.** Default-on so
+  `aexp new-run --sp condition=full` resolves the same way
+  `aexp queue add` does. Pass `resolve_conditions=False` to store a
+  bare label (the pre-queue behavior).
+- **Experiment template** (`src/aexp/vendor/limina/templates/experiment.md`)
+  — frontmatter gains commented-out `runner_command` and `conditions`
+  stubs so new experiments know where to opt in. Existing experiments
+  aren't rewritten; validator ignores absent / empty fields.
+- **`docs/quickstart.md`** — adds a "5b. Batch-queue for overnight (or
+  cluster) execution" section showing the sweep → materialize → submit
+  workflow with a sample `conditions:` block.
+- **`docs/cli.md`** — lists the `queue` subcommand group and
+  `run-queued` under "Verbs at a glance"; points at `docs/queue.md`
+  for the model.
+- **`README.md`** — adds the queue row to the capabilities table,
+  bumps CLI / MCP / slash-command counts, drops queue from the v1.1
+  backlog, adds `docs/queue.md` to the doc index.
+
 ### Added (slash-command UX cleanup)
 
 - **`/aexp-show-run`** — guided read-only display of one signac run's

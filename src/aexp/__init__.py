@@ -24,6 +24,16 @@ from aexp.install import (
     is_limina_installed,
 )
 
+# Artifact creation (H / E / F) --------------------------------------------
+from aexp.artifacts import (
+    ArtifactCreateError,
+    ArtifactCreateResult,
+    new_experiment,
+    new_finding,
+    new_hypothesis,
+)
+from aexp.backlinks import add_backlink
+
 # Limina readers ------------------------------------------------------------
 from aexp.limina_io import (
     ArtifactNotFoundError,
@@ -42,6 +52,23 @@ from aexp.linking import (
     runs_for_experiment,
     show_batch,
     summarize_run,
+)
+
+# Queue / materialization / sp-resolution ----------------------------------
+from aexp.queue import (
+    RunnerCommandMissing,
+    SubprocessFailed,
+    SweepParseError,
+    add_many_to_queue,
+    add_to_queue,
+    clear_queue,
+    list_queue,
+    materialize_queue,
+    parse_sweep,
+    remove_from_queue,
+    render_runner_command,
+    resolve_sp,
+    run_queued,
 )
 
 # signac-backed run store ---------------------------------------------------
@@ -63,6 +90,8 @@ from aexp.schema import (
     BatchSummary,
     Issue,
     LiminaArtifactRef,
+    MaterializeResult,
+    QueueEntry,
     RunLink,
     RunStatus,
     RunSummary,
@@ -109,6 +138,13 @@ __all__ = [
     "compute_vendor_sha",
     "install_limina",
     "is_limina_installed",
+    # artifacts (H/E/F creation + backlink patching)
+    "ArtifactCreateError",
+    "ArtifactCreateResult",
+    "add_backlink",
+    "new_experiment",
+    "new_finding",
+    "new_hypothesis",
     # runs
     "RunNotFound",
     "RunStoreNotInitialized",
@@ -125,6 +161,20 @@ __all__ = [
     "runs_for_experiment",
     "show_batch",
     "summarize_run",
+    # queue / materialization / sp-resolution
+    "RunnerCommandMissing",
+    "SubprocessFailed",
+    "SweepParseError",
+    "add_many_to_queue",
+    "add_to_queue",
+    "clear_queue",
+    "list_queue",
+    "materialize_queue",
+    "parse_sweep",
+    "remove_from_queue",
+    "render_runner_command",
+    "resolve_sp",
+    "run_queued",
     # limina_io
     "ArtifactNotFoundError",
     "ArtifactReadError",
@@ -138,6 +188,8 @@ __all__ = [
     "BatchSummary",
     "Issue",
     "LiminaArtifactRef",
+    "MaterializeResult",
+    "QueueEntry",
     "RunLink",
     "RunStatus",
     "RunSummary",
@@ -149,7 +201,7 @@ __all__ = [
     "TrackerContext",
     "prepare_tracker",
     "tracked_run",
-    # trackers — adapter / legacy path
+    # trackers — adapter path
     "NoopAdapter",
     "RunHandle",
     "RunRecord",
