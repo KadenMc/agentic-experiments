@@ -68,6 +68,7 @@ from aexp.queue import (
     remove_from_queue,
     render_runner_command,
     resolve_sp,
+    run_queue,
     run_queued,
 )
 
@@ -174,6 +175,7 @@ __all__ = [
     "remove_from_queue",
     "render_runner_command",
     "resolve_sp",
+    "run_queue",
     "run_queued",
     # limina_io
     "ArtifactNotFoundError",

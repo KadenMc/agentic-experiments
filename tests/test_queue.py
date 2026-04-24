@@ -25,6 +25,7 @@ from aexp.queue import (
     remove_from_queue,
     render_runner_command,
     resolve_sp,
+    run_queue,
     run_queued,
 )
 from aexp.runs import create_run, open_run
@@ -563,9 +564,16 @@ def test_materialize_shell_runner_emits_shebang_and_per_job_invocation(
     assert body.count("aexp run-queued ") == 3
 
 
-def test_materialize_slurm_runner_emits_array_directive_and_job_bash_array(
+def test_materialize_slurm_runner_emits_array_directive_and_queue_run(
     installed_repo: Path, tmp_path: Path
 ) -> None:
+    """Slurm template uses `aexp queue run --index` (not baked job ids).
+
+    Baking job ids into a bash array would make re-queueing between
+    materialize and submit inconsistent — the array would still point at
+    the old jobs. Deferring to `aexp queue run --index $SLURM_ARRAY_TASK_ID`
+    against the filter means the task resolves at launch-time.
+    """
     _make_experiment(installed_repo)
     for i in range(4):
         add_to_queue(
@@ -586,11 +594,10 @@ def test_materialize_slurm_runner_emits_array_directive_and_job_bash_array(
     assert "#SBATCH --array=0-3" in body
     assert "#SBATCH --time=04:00:00" in body
     assert "#SBATCH --mem=32G" in body
-    assert 'exec aexp run-queued "${jobs[$SLURM_ARRAY_TASK_ID]}"' in body
-    # Bash array contains all 4 job ids.
-    for line in body.splitlines():
-        pass
-    assert body.count("\n  ") >= 4  # 4 indented array entries
+    # The aexp-specific line resolves jobs at run-time via queue run --index.
+    assert 'aexp queue run' in body
+    assert '--tag overnight' in body
+    assert '--index "$SLURM_ARRAY_TASK_ID"' in body
 
 
 def test_materialize_manual_runner_emits_one_line_per_job_no_shebang(
@@ -889,6 +896,258 @@ def test_run_queued_is_idempotent_across_script_reruns(
 # ---------------------------------------------------------------------------
 # create_run integration — resolve_conditions kwarg
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# run_queue — the inside-your-batch-script iteration API
+# ---------------------------------------------------------------------------
+
+
+def test_run_queue_runs_every_pending_job_sequentially(
+    installed_repo: Path,
+) -> None:
+    _make_experiment(installed_repo, runner_command="echo {condition}-{seed}")
+    for i in range(3):
+        add_to_queue(
+            experiment_id="E001",
+            statepoint={"condition": "full", "seed": i},
+            tag="seq",
+            repo_root=installed_repo,
+        )
+    rcs = run_queue(tag="seq", repo_root=installed_repo)
+    assert rcs == [0, 0, 0]
+    # All three jobs transitioned to complete.
+    entries = list_queue(
+        tag="seq", include_terminal=True, repo_root=installed_repo
+    )
+    assert all(e.status == "complete" for e in entries)
+
+
+def test_run_queue_index_runs_only_the_nth_job(installed_repo: Path) -> None:
+    _make_experiment(installed_repo, runner_command="echo {seed}")
+    for i in range(4):
+        add_to_queue(
+            experiment_id="E001",
+            statepoint={"condition": "full", "seed": i},
+            tag="idx",
+            repo_root=installed_repo,
+        )
+    rcs = run_queue(tag="idx", index=2, repo_root=installed_repo)
+    assert rcs == [0]
+    # Only one job flipped; the other three are still queued.
+    pending = list_queue(tag="idx", repo_root=installed_repo)
+    assert len(pending) == 3
+
+
+def test_run_queue_index_deterministic_order(installed_repo: Path) -> None:
+    """The same --index N picks the same job if nothing else changed."""
+    _make_experiment(installed_repo, runner_command="echo {seed}")
+    for i in range(3):
+        add_to_queue(
+            experiment_id="E001",
+            statepoint={"condition": "full", "seed": i},
+            tag="det",
+            repo_root=installed_repo,
+        )
+    before = list_queue(tag="det", repo_root=installed_repo)
+    # Executing --index 1 should flip the second entry's job.
+    run_queue(tag="det", index=1, repo_root=installed_repo)
+    after = list_queue(
+        tag="det", include_terminal=True, repo_root=installed_repo
+    )
+    # The status-complete one is the same job that was index=1 before.
+    target_id = before[1].job_id
+    completed = [e for e in after if e.status == "complete"]
+    assert len(completed) == 1
+    assert completed[0].job_id == target_id
+
+
+def test_run_queue_index_out_of_range_raises(installed_repo: Path) -> None:
+    _make_experiment(installed_repo, runner_command="echo hi")
+    add_to_queue(
+        experiment_id="E001",
+        statepoint={"condition": "full"},
+        tag="oob",
+        repo_root=installed_repo,
+    )
+    with pytest.raises(IndexError):
+        run_queue(tag="oob", index=5, repo_root=installed_repo)
+
+
+def test_run_queue_empty_filter_returns_empty_list(
+    installed_repo: Path,
+) -> None:
+    assert run_queue(tag="no-such-tag", repo_root=installed_repo) == []
+
+
+def _write_seed_exit_helper(tmp_path: Path, fail_seed: str) -> Path:
+    """Write a helper python script that exits 1 when argv[1] matches ``fail_seed``.
+
+    Using a script file sidesteps Windows cmd.exe's single-quote handling
+    (which differs from POSIX sh) and lets the runner_command stay simple:
+    ``"<python>" "<helper>" {seed}``.
+    """
+    helper = tmp_path / f"seed_exit_{fail_seed}.py"
+    helper.write_text(
+        "import sys\n"
+        f"sys.exit(1 if sys.argv[1] == '{fail_seed}' else 0)\n",
+        encoding="utf-8",
+    )
+    return helper
+
+
+def test_run_queue_raises_on_first_failure_by_default(
+    installed_repo: Path, tmp_path: Path
+) -> None:
+    """Default behavior: stop iterating on the first failure.
+
+    Every seed fails (runner exits non-zero regardless of sp). ``run_queue``
+    must raise on whichever job it attempted first; jobs it never reached
+    stay ``queued``. Iteration order is ``list_queue``-stable but
+    implementation-defined, so the test checks invariants rather than a
+    specific order: exactly one failed job, the rest untouched (queued).
+    """
+    # A helper that always exits 1 — every attempted job fails.
+    helper = tmp_path / "always_fail.py"
+    helper.write_text("import sys\nsys.exit(1)\n", encoding="utf-8")
+    _make_experiment(
+        installed_repo,
+        runner_command=f'"{sys.executable}" "{helper}"',
+    )
+    for i in range(3):
+        add_to_queue(
+            experiment_id="E001",
+            statepoint={"condition": "full", "seed": i},
+            tag="fail",
+            repo_root=installed_repo,
+        )
+    with pytest.raises(SubprocessFailed):
+        run_queue(tag="fail", repo_root=installed_repo)
+    entries = list_queue(
+        tag="fail", include_terminal=True, repo_root=installed_repo
+    )
+    status_counts: dict[str, int] = {}
+    for e in entries:
+        status_counts[e.status or ""] = status_counts.get(e.status or "", 0) + 1
+    # Exactly one failure; the other two stay queued (never attempted).
+    assert status_counts.get("failed") == 1
+    assert status_counts.get("queued") == 2
+
+
+def test_run_queue_continue_on_failure_runs_every_job(
+    installed_repo: Path, tmp_path: Path
+) -> None:
+    """`continue_on_failure=True` runs every job even when one fails.
+
+    List-queue order is stable-but-implementation-defined (ascending
+    queued_at, then job_id hash), so the failing job isn't at a
+    predictable rcs index. Check invariants instead: exactly one
+    non-zero returncode, exactly one failed status, no jobs left
+    stranded as ``queued``.
+    """
+    helper = _write_seed_exit_helper(tmp_path, fail_seed="1")
+    _make_experiment(
+        installed_repo,
+        runner_command=f'"{sys.executable}" "{helper}" {{seed}}',
+    )
+    for i in range(3):
+        add_to_queue(
+            experiment_id="E001",
+            statepoint={"condition": "full", "seed": i},
+            tag="cont",
+            repo_root=installed_repo,
+        )
+    rcs = run_queue(
+        tag="cont", continue_on_failure=True, repo_root=installed_repo
+    )
+    assert len(rcs) == 3
+    assert sum(1 for rc in rcs if rc != 0) == 1  # exactly one failure
+    assert sum(1 for rc in rcs if rc == 0) == 2  # two successes
+    # Every job reached a terminal state; no stranded "queued".
+    entries = list_queue(
+        tag="cont", include_terminal=True, repo_root=installed_repo
+    )
+    assert all(e.status in ("complete", "failed") for e in entries)
+    # The failed one is specifically the seed=1 job.
+    failed = [e for e in entries if e.status == "failed"]
+    assert len(failed) == 1
+    assert failed[0].sp.get("seed") == 1
+
+
+def test_run_queue_dry_run_does_not_execute(installed_repo: Path) -> None:
+    _make_experiment(installed_repo, runner_command="echo {condition}")
+    for i in range(2):
+        add_to_queue(
+            experiment_id="E001",
+            statepoint={"condition": "full", "seed": i},
+            tag="dry",
+            repo_root=installed_repo,
+        )
+    rcs = run_queue(tag="dry", dry_run=True, repo_root=installed_repo)
+    assert rcs == [0, 0]
+    # Statuses untouched — still queued.
+    entries = list_queue(tag="dry", repo_root=installed_repo)
+    assert len(entries) == 2
+    assert all(e.status == "queued" for e in entries)
+
+
+def test_materialize_slurm_uses_queue_run_index_not_baked_job_ids(
+    installed_repo: Path, tmp_path: Path
+) -> None:
+    """The slurm starter template must defer job resolution to run-time.
+
+    Baking job ids into the array would break if the user re-queues
+    between materialize and submit. The aexp-specific line must call
+    `aexp queue run --index` against the filter, not a bash array.
+    """
+    _make_experiment(installed_repo)
+    for i in range(4):
+        add_to_queue(
+            experiment_id="E001",
+            statepoint={"condition": "full", "seed": i},
+            tag="slurm",
+            repo_root=installed_repo,
+        )
+    out = tmp_path / "run.sbatch"
+    materialize_queue(
+        runner="slurm",
+        output_path=out,
+        tag="slurm",
+        repo_root=installed_repo,
+    )
+    body = out.read_text(encoding="utf-8")
+    # The new template defers to aexp queue run --index:
+    assert 'aexp queue run' in body
+    assert '--tag slurm' in body
+    assert '--index "$SLURM_ARRAY_TASK_ID"' in body
+    # The old bash-array + `aexp run-queued` bake-in is gone:
+    assert "jobs=(" not in body
+    # It's explicit about being a starter template:
+    assert "STARTER TEMPLATE" in body.upper()
+    assert "#SBATCH --array=0-3" in body
+
+
+def test_materialize_slurm_with_experiment_filter_threads_it_through(
+    installed_repo: Path, tmp_path: Path
+) -> None:
+    _make_experiment(installed_repo)
+    add_to_queue(
+        experiment_id="E001",
+        statepoint={"condition": "full"},
+        tag="both-filters",
+        repo_root=installed_repo,
+    )
+    out = tmp_path / "run.sbatch"
+    materialize_queue(
+        runner="slurm",
+        output_path=out,
+        tag="both-filters",
+        experiment_id="E001",
+        repo_root=installed_repo,
+    )
+    body = out.read_text(encoding="utf-8")
+    assert "--tag both-filters" in body
+    assert "--experiment E001" in body
 
 
 def test_create_run_resolves_conditions_by_default(installed_repo: Path) -> None:

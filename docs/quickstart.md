@@ -146,12 +146,23 @@ aexp queue add --experiment E001 --sweep "condition=full|classify, seed=0..3" --
 # Inspect pending work:
 aexp queue list --tag overnight
 
-# Materialize as a slurm array job (or --runner shell for local):
-aexp queue materialize --runner slurm --output overnight.sbatch --tag overnight \
-    --slurm-time 04:00:00 --slurm-mem 32G --slurm-gpus 1
+# Call `aexp queue run` from inside your own batch script — aexp iterates
+# the pending queue, your script owns partition/account/modules/env:
+cat > overnight.sbatch <<'EOF'
+#!/bin/bash
+#SBATCH --array=0-7
+#SBATCH --partition=your-partition
+#SBATCH --time=04:00:00
+# ... your site's other #SBATCH directives ...
+source ~/miniconda3/bin/activate your-env
+cd /path/to/repo
+aexp queue run --tag overnight --index "$SLURM_ARRAY_TASK_ID"
+EOF
 
-# Commit, push, pull on cluster, `sbatch overnight.sbatch`. See docs/queue.md
-# for the full cross-machine sync workflow.
+# Commit, push, pull on cluster, `sbatch overnight.sbatch`. Or, if you
+# prefer a starter template, `aexp queue materialize --runner slurm` emits
+# one with clearly-marked TODO placeholders. See docs/queue.md for the
+# full cross-machine sync workflow.
 ```
 
 Each queued job freezes its full resolved config (the `conditions.full` block merged with whatever you passed in `--sp`/`--sweep`) to `signac_statepoint.json` — editing `conditions.full` tomorrow doesn't retroactively change what last night's runs did. That's the drift-proof provenance mechanism.

@@ -648,6 +648,74 @@ def test_cli_run_queued_executes_runner_command(
     assert "skipping" in r2.output.lower()
 
 
+def test_cli_queue_run_iterates_filter(
+    runner: CliRunner, installed_repo: Path
+) -> None:
+    _seed_hypothesis_and_experiment(
+        installed_repo, runner_command="echo running-{condition}-{seed}"
+    )
+    for i in range(3):
+        runner.invoke(
+            app,
+            [
+                "queue", "add",
+                "--experiment", "E001",
+                "--sp", f"condition=full,seed={i}",
+                "--tag", "qr",
+            ],
+        )
+    r = runner.invoke(app, ["queue", "run", "--tag", "qr"])
+    assert r.exit_code == 0, r.output
+    assert "3/3" in r.output
+    # Pending queue now empty (all jobs moved to complete).
+    lst = runner.invoke(app, ["queue", "list", "--tag", "qr"])
+    assert "0" in lst.output  # num entries reported in table title
+
+
+def test_cli_queue_run_index_picks_single_job(
+    runner: CliRunner, installed_repo: Path
+) -> None:
+    _seed_hypothesis_and_experiment(
+        installed_repo, runner_command="echo idx-{seed}"
+    )
+    for i in range(4):
+        runner.invoke(
+            app,
+            [
+                "queue", "add",
+                "--experiment", "E001",
+                "--sp", f"condition=full,seed={i}",
+                "--tag", "idx",
+            ],
+        )
+    r = runner.invoke(
+        app, ["queue", "run", "--tag", "idx", "--index", "0"]
+    )
+    assert r.exit_code == 0, r.output
+    assert "1/1" in r.output
+    # Three jobs still pending.
+    lst = runner.invoke(app, ["queue", "list", "--tag", "idx"])
+    assert "3" in lst.output
+
+
+def test_cli_queue_run_index_out_of_range_errors(
+    runner: CliRunner, installed_repo: Path
+) -> None:
+    _seed_hypothesis_and_experiment(
+        installed_repo, runner_command="echo hi"
+    )
+    runner.invoke(
+        app,
+        ["queue", "add", "--experiment", "E001", "--sp", "condition=full",
+         "--tag", "oob"],
+    )
+    r = runner.invoke(
+        app, ["queue", "run", "--tag", "oob", "--index", "5"]
+    )
+    assert r.exit_code != 0
+    assert "out of range" in r.output.lower()
+
+
 def test_cli_run_queued_dry_run_prints_rendered_command(
     runner: CliRunner, installed_repo: Path
 ) -> None:

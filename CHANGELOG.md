@@ -156,6 +156,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bumps CLI / MCP / slash-command counts, drops queue from the v1.1
   backlog, adds `docs/queue.md` to the doc index.
 
+### Added (queue-run + honest slurm template)
+
+- **`aexp queue run`** — the inside-your-batch-script iteration primitive.
+  Iterates the pending queue filtered by `--experiment` / `--tag` and
+  executes each job via `run_queued` semantics. Two shapes: sequential
+  (no flag) runs every matching job in stable order; `--index N` picks
+  the Nth pending job for slurm-array deployment (`--index
+  "$SLURM_ARRAY_TASK_ID"`). `--continue-on-failure` keeps iterating past
+  errors; default is fail-fast with `SubprocessFailed`.
+- **`aexp.run_queue(...)`** — Python API for the same iteration, exported
+  at the package root. Returns a list of subprocess returncodes.
+
+### Changed (honest slurm template)
+
+- **`aexp queue materialize --runner slurm`** now emits a **starter
+  template** with explicit `# TODO` placeholders for `#SBATCH`
+  directives the user must fill in (partition, account, time, mem, gpus)
+  and commented-out setup commands (module loads, env activation,
+  working-dir `cd`). The template's aexp-specific line is
+  `exec aexp queue run --tag <tag> --index "$SLURM_ARRAY_TASK_ID"` —
+  job ids are resolved at task-launch time, not baked into a bash array
+  at materialize-time, so re-queueing between submit and execute stays
+  coherent.
+
+  Rationale: aexp has zero visibility into cluster conventions, so
+  emitting a "ready to submit" slurm script is a lie. The previous
+  output pretended to be turn-key; the new template is explicit about
+  the user's responsibility and encourages skipping the generated file
+  entirely in favor of adding one `aexp queue run` line to whatever
+  batch script the user already has working for their site.
+- **`docs/queue.md`** reframed: `aexp queue run` is documented as the
+  primary cluster primitive; `materialize --runner slurm` is demoted to
+  a starter-template convenience.
+- **`docs/cli.md`** / **`docs/quickstart.md`** updated with the
+  in-script `queue run` pattern as the canonical cluster flow.
+
 ### Added (slash-command UX cleanup)
 
 - **`/aexp-show-run`** — guided read-only display of one signac run's

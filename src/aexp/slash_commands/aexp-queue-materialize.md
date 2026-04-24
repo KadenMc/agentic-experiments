@@ -22,11 +22,21 @@ Flow:
 2. Ask what runner fits their environment:
    - **`shell`** (default) — sequential bash script. Good for local
      runs or simple single-node cluster jobs. Output usually `run.sh`.
-   - **`slurm`** — emits a `#SBATCH --array=0-N` script where each
-     array task runs one queued job. Submit with `sbatch <output>`.
-     Ask for `--slurm-time` (e.g. `04:00:00`), `--slurm-mem`
-     (e.g. `32G`), `--slurm-gpus`, `--slurm-partition`, and
-     `--slurm-account` as relevant to the cluster.
+   - **`slurm`** — emits a **starter template** with
+     `#SBATCH --array=0-N` and a call to `aexp queue run --index
+     "$SLURM_ARRAY_TASK_ID"`. Because aexp has no visibility into the
+     user's cluster (partition, account, module loads, env activation,
+     container setup), the template has `# TODO` placeholders the user
+     must fill in. Ask for `--slurm-time` (e.g. `04:00:00`),
+     `--slurm-mem` (e.g. `32G`), `--slurm-gpus`, `--slurm-partition`,
+     and `--slurm-account` up-front to pre-fill what you can.
+
+     **Often the better move** is to skip `materialize --runner slurm`
+     entirely and have the user add one line to their existing working
+     batch script:
+     ``aexp queue run --tag <tag> --index "$SLURM_ARRAY_TASK_ID"``.
+     If they already have a slurm script that works for their site,
+     suggest this first; only generate a new template when they don't.
    - **`manual`** — plain list of `aexp run-queued <id>` lines, no
      shebang, no control flow. Useful when the user has a different
      job-runner (qsub, LSF, Airflow, etc.) and wants to splice the

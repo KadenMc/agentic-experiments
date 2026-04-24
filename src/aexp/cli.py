@@ -38,6 +38,7 @@ from aexp.queue import (
     materialize_queue,
     parse_sweep,
     remove_from_queue,
+    run_queue,
     run_queued,
 )
 from aexp.runs import create_run, find_runs, open_run
@@ -877,6 +878,92 @@ def queue_materialize_cmd(
         console.print(
             "  copy the commands from the output file into your runner."
         )
+
+
+@queue_app.command("run")
+def queue_run_cmd(
+    experiment: str | None = typer.Option(None, "--experiment"),
+    tag: str | None = typer.Option(None, "--tag"),
+    index: int | None = typer.Option(
+        None,
+        "--index",
+        help=(
+            "If set, run only the Nth pending job (0-indexed). Intended "
+            'for slurm array tasks: `--index "$SLURM_ARRAY_TASK_ID"`. '
+            "Without --index, runs every pending job in the filter "
+            "sequentially."
+        ),
+    ),
+    continue_on_failure: bool = typer.Option(
+        False,
+        "--continue-on-failure",
+        help=(
+            "When running multiple jobs without --index, don't bail on the "
+            "first failure — keep going. Default: stop on first failure."
+        ),
+    ),
+    force: bool = typer.Option(
+        False, "--force", help="Re-run jobs in terminal states."
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Print rendered commands without executing."
+    ),
+) -> None:
+    """Execute queued jobs from inside your own batch script.
+
+    Iterates the pending queue (filtered by --experiment / --tag) and
+    runs each matching job via `aexp run-queued` semantics. Designed to
+    live inside whatever batch script already works for your site:
+
+    \b
+      # Sequential (single-node):
+      aexp queue run --tag overnight
+
+    \b
+      # Array-parallel (one queued job per slurm array task):
+      #SBATCH --array=0-7
+      aexp queue run --tag overnight --index "$SLURM_ARRAY_TASK_ID"
+
+    Jobs are enumerated in stable order (ascending queued_at, then
+    job_id) so --index picks deterministically.
+    """
+    try:
+        returncodes = run_queue(
+            experiment_id=experiment,
+            tag=tag,
+            index=index,
+            continue_on_failure=continue_on_failure,
+            force=force,
+            dry_run=dry_run,
+        )
+    except IndexError as exc:
+        console.print(f"[red]{exc}[/red]")
+        _exit(2)
+        return
+    except RunnerCommandMissing as exc:
+        console.print(f"[red]{exc}[/red]")
+        _exit(2)
+        return
+    except SubprocessFailed as exc:
+        console.print(f"[red]runner failed: {exc}[/red]")
+        _exit(1)
+        return
+
+    if not returncodes:
+        console.print("[yellow]no queued jobs match the filter[/yellow]")
+        return
+    failed = sum(1 for rc in returncodes if rc != 0)
+    passed = len(returncodes) - failed
+    if failed == 0:
+        console.print(
+            f"[green]ran {passed}/{len(returncodes)} job(s) successfully[/green]"
+        )
+    else:
+        console.print(
+            f"[yellow]ran {len(returncodes)} job(s), "
+            f"{failed} failed / {passed} passed[/yellow]"
+        )
+        _exit(1)
 
 
 # ---------------------------------------------------------------------------

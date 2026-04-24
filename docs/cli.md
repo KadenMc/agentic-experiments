@@ -58,10 +58,12 @@ aexp sync-offline [--dry-run]
 aexp validate [--kb-only | --runs-only]
 aexp install-slash-commands [--target .claude/commands]
 
-# Queue subcommand group — pending-run registration + materialization
+# Queue subcommand group — pending-run registration + in-script execution + materialization
 aexp queue add         --experiment E### [--sp K=V,...] [--sweep "K=V|V,K=a..b"]
                         [--tag T] [--hypothesis H###] [--no-resolve] [--no-commit]
 aexp queue list        [--experiment E###] [--tag T] [--include-terminal]
+aexp queue run         [--experiment E###] [--tag T] [--index N]
+                        [--continue-on-failure] [--force] [--dry-run]
 aexp queue remove      <job_id>
 aexp queue clear       [--experiment E###] [--tag T] [--yes]
 aexp queue materialize [--runner shell|slurm|manual] [--output PATH]
@@ -70,6 +72,12 @@ aexp queue materialize [--runner shell|slurm|manual] [--output PATH]
                         [--slurm-partition P] [--slurm-account A] [--slurm-extra "..."]
 aexp run-queued <job_id> [--force] [--dry-run]
 ```
+
+`aexp queue run` is the primary cluster primitive — call it from inside
+your own batch script, sequential or array-parallel. `materialize` is
+for users who want a starter template to customize; see
+[`docs/queue.md`](queue.md) for why materializing a turn-key slurm
+script is a lie aexp declined to tell.
 
 See [docs/queue.md](queue.md) for the full queue model (sp resolution,
 `runner_command` templates, cross-machine sync) — this file only lists
