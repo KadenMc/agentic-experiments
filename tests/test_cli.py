@@ -395,14 +395,16 @@ def test_cli_install_slash_commands(runner: CliRunner, tmp_path: Path, monkeypat
     result = runner.invoke(app, ["install-slash-commands"])
     assert result.exit_code == 0
     for name in (
-        "aexp-new-run.md",
-        "aexp-close-run.md",
-        "aexp-close-batch.md",
         "aexp-new-hypothesis.md",
         "aexp-new-experiment.md",
-        "aexp-new-finding.md",
-        "aexp-status.md",
+        "aexp-new-run.md",
+        "aexp-finding-from-run.md",
+        "aexp-finding-from-batch.md",
+        "aexp-finding-placeholder.md",
+        "aexp-show-run.md",
+        "aexp-show-batch.md",
         "aexp-list-runs.md",
+        "aexp-status.md",
         "aexp-validate.md",
     ):
         dst = tmp_path / ".claude" / "commands" / name
@@ -417,18 +419,29 @@ def test_cli_install_slash_commands(runner: CliRunner, tmp_path: Path, monkeypat
         assert "conda_env_name" in body, name
 
 
-def test_close_run_slash_command_warns_about_backlinks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, runner: CliRunner) -> None:
-    """close-run / close-batch must tell the agent to add backlinks.
+def test_finding_slash_commands_route_through_new_finding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, runner: CliRunner
+) -> None:
+    """Finding-creation slash commands must call ``aexp new-finding``.
 
-    kb_validate enforces bidirectional wiki-links; creating a finding
-    without also editing H### and E### to link back will fail validation.
-    Slash commands need to pre-warn so agents don't hit this every time.
+    ``aexp new-finding`` handles id allocation, template rendering, and
+    (crucially) patches both parents' ``## Links`` sections automatically.
+    If a slash command bypasses it — e.g. tells the agent to hand-write
+    the markdown — ``kb_validate`` will reject the file on the next
+    PostToolUse hook run because backlinks are missing from H### / E###.
+
+    This test pins the invariant: every finding command must route
+    through ``aexp new-finding`` and reference the ``## Links`` section
+    (so the agent knows it's already handled).
     """
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, ["install-slash-commands"])
     assert result.exit_code == 0
-    for name in ("aexp-close-run.md", "aexp-close-batch.md"):
+    for name in (
+        "aexp-finding-from-run.md",
+        "aexp-finding-from-batch.md",
+        "aexp-finding-placeholder.md",
+    ):
         body = (tmp_path / ".claude" / "commands" / name).read_text(encoding="utf-8")
-        assert "[[F" in body or "backlink" in body.lower(), name
-        # Reminds about editing H### / E### Links sections
+        assert "aexp new-finding" in body, name
         assert "## Links" in body, name

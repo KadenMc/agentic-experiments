@@ -36,8 +36,8 @@ Flow:
 3. Open the new file and fill in the prose sections (``## Objective``,
    ``## Setup``, ``## Procedure``, ``## Expected Outcome``, ``## Progress``).
    Leave ``## Results``, ``## Analysis``, and ``## Decision`` blank — those
-   get populated as runs produce data and you close out with
-   `/aexp-close-run` / `/aexp-close-batch`.
+   get populated as runs produce data and you write a finding via
+   `/aexp-finding-from-run` / `/aexp-finding-from-batch`.
 
 4. If the user is ready to register runs now, call `/aexp-new-run` next —
    it wants the ``E###`` id you just created.

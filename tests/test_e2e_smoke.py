@@ -225,5 +225,10 @@ def test_e2e_fresh_repo_full_happy_path(tmp_path: Path, monkeypatch: pytest.Monk
     # 10. Install slash commands.
     r_slash = runner.invoke(app, ["install-slash-commands"])
     assert r_slash.exit_code == 0
-    for name in ("aexp-new-run.md", "aexp-close-run.md", "aexp-close-batch.md"):
+    for name in (
+        "aexp-new-run.md",
+        "aexp-finding-from-run.md",
+        "aexp-finding-from-batch.md",
+        "aexp-finding-placeholder.md",
+    ):
         assert (repo / ".claude" / "commands" / name).is_file()

@@ -26,9 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **New MCP tools**: `new_hypothesis`, `new_experiment`, `new_finding` —
   same surface as the CLI verbs, returning typed dicts.
 - **New slash commands**: `/aexp-new-hypothesis`, `/aexp-new-experiment`,
-  `/aexp-new-finding`, `/aexp-status`, `/aexp-list-runs`, `/aexp-validate`.
-  Six commands added on top of the existing three; install copies all of
-  them into `.claude/commands/`.
+  `/aexp-new-finding` (later renamed to `/aexp-finding-placeholder`,
+  see "Changed" below), `/aexp-status`, `/aexp-list-runs`,
+  `/aexp-validate`. Install copies them into `.claude/commands/`.
 
 ### Changed
 
@@ -81,6 +81,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `prepare_tracker`; CLI row updated from "10 verbs" to "13 verbs"; slash
   commands row enumerates the full 9-command set; v1.1 backlog drops the
   items that already shipped.
+
+### Added (slash-command UX cleanup)
+
+- **`/aexp-show-run`** — guided read-only display of one signac run's
+  state point, doc, and linked Limina frame. Slash-parity with
+  `/aexp-list-runs`.
+- **`/aexp-show-batch`** — guided read-only display of every run
+  matching an `(experiment, condition)` batch selector, with status-mix
+  summary. Useful pre-finding sanity check.
+
+### Changed (slash-command UX cleanup)
+
+- **Finding-creation slash commands renamed** to a parallel
+  `aexp-finding-<source>` pattern, so the distinguishing dimension (what
+  the finding cites) is self-explaining from the name rather than
+  doc-text. The old "new / close" split conflated lifecycle framing with
+  source-of-citation:
+  - `/aexp-close-run` → `/aexp-finding-from-run` (one specific job)
+  - `/aexp-close-batch` → `/aexp-finding-from-batch` (batch selector)
+  - `/aexp-new-finding` → `/aexp-finding-placeholder` (no citations yet;
+    synthesis / deferred)
+
+  Each file now routes through `aexp new-finding` (the CLI verb landed
+  earlier in this Unreleased cycle) for id allocation + automatic
+  parent-backlink patching, and documents the three-command set up-front
+  so users pick by intent at a glance.
+- **`docs/tracker-adapters.md`** reframed. The `TrackerAdapter` /
+  `bind-tracker` / `WandbAdapter` path is no longer labeled "legacy" —
+  it's the correct surface for CLI / subprocess / cluster workflows
+  where the training code can't reach Python and needs the binding
+  stamped from outside. Four modes now documented as equally legitimate
+  (`tracked_run`, `prepare_tracker`, CLI `aexp bind-tracker`, noop /
+  custom adapter); the choice is who controls the `wandb.init` call
+  site, not which one is "new" or "deprecated".
+- **`/aexp-new-run` next-step text** rewritten to point at all three
+  paths (managed / BYO-init via Python, or CLI `bind-tracker` with
+  `wandb.init(resume="allow", id=...)` in a separate training script)
+  with the right use-case framing for each. Previously pointed only at
+  `aexp bind-tracker`, which was mislabeled as the sole wandb path in
+  earlier docs.
 
 ## [0.1.1] — 2026-04-22
 

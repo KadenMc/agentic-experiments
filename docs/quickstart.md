@@ -128,13 +128,13 @@ aexp show-batch --experiment E001 --condition full
 
 `list-batches` rolls up by `(experiment_id, condition)` by default — one row per distinct slice, with counts and status mix.
 
-## 6. Close out with a Finding
+## 6. Write a Finding
 
 ```powershell
-/aexp-close-batch --experiment E001 --condition full
+/aexp-finding-from-batch --experiment E001 --condition full
 ```
 
-The slash command (installed by `aexp install-slash-commands`) walks the agent through drafting an `F###` that cites the batch:
+Three sibling slash commands create findings — pick by what the finding cites: `/aexp-finding-from-run` (one job), `/aexp-finding-from-batch` (a batch selector), or `/aexp-finding-placeholder` (no citations yet). The slash command walks the agent through calling `aexp new-finding` (which handles id allocation + automatic parent-backlink patching) and then filling in the `supporting_runs:` citation:
 
 ```yaml
 supporting_runs:

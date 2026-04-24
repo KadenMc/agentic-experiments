@@ -30,7 +30,7 @@
 
 **agentic-experiments** (import name `aexp`) is an opinionated research harness for ML experimentation done *with* an AI agent — typically [Claude Code](https://docs.anthropic.com/en/docs/claude-code). It forces a **Hypothesis → Experiment → Finding** chain on every run, ties that chain to git commits, and validates citation integrity at every turn.
 
-> **13 CLI verbs** &bull; **12 MCP tools** &bull; **9 slash commands** &bull; **4 research skills** &bull; **200+ tests**
+> **13 CLI verbs** &bull; **12 MCP tools** &bull; **11 slash commands** &bull; **4 research skills** &bull; **200+ tests**
 
 ### What this looks like in practice
 
@@ -77,7 +77,7 @@ Every operation exists in three places, all thin wrappers over the same Python f
 | Surface | Triggered by | Best for |
 |---|---|---|
 | **MCP tools** (`new_run`, `list_runs`, `validate`, …) | The agent during a turn | Structured queries, programmatic chaining, typed JSON returns |
-| **Slash commands** (`/aexp-new-run`, `/aexp-close-run`, `/aexp-close-batch`) | User typing `/aexp-…` | Guided multi-step workflows |
+| **Slash commands** (`/aexp-new-hypothesis`, `/aexp-new-run`, `/aexp-finding-from-batch`, …) | User typing `/aexp-…` | Guided multi-step workflows |
 | **CLI** (`aexp new-run ...`) | Human at a terminal | Scripts, CI, PowerShell sessions |
 
 The **hooks** are a fourth surface — invisible to the user, they inject `kb/ACTIVE.md` at session start, block HEF-chain violations, validate KB writes, and run structural validation at turn end.
@@ -120,7 +120,7 @@ The design bet: agents already know how to run experiments. What they need is a 
 | | |
 |---|---|
 | **MCP server** | FastMCP with 9 tools covering the full run lifecycle. Runs via `uvx --from agentic-experiments[mcp] aexp-mcp-server` — no absolute paths, no per-machine config, `.mcp.json` committable to git. |
-| **Slash commands** | `/aexp-new-hypothesis`, `/aexp-new-experiment`, `/aexp-new-finding`, `/aexp-new-run`, `/aexp-close-run`, `/aexp-close-batch`, `/aexp-list-runs`, `/aexp-status`, `/aexp-validate` — guided multi-step workflows for the common cases. |
+| **Slash commands** | Artifact creation: `/aexp-new-hypothesis`, `/aexp-new-experiment`, `/aexp-new-run`. Finding creation (pick by what the finding cites): `/aexp-finding-from-run`, `/aexp-finding-from-batch`, `/aexp-finding-placeholder`. Read / inspect: `/aexp-show-run`, `/aexp-show-batch`, `/aexp-list-runs`, `/aexp-status`, `/aexp-validate`. 11 total. |
 | **CLI** | 13 verbs covering install, artifact creation (H/E/F), run lifecycle, batch queries, tracker binding, validation, and offline sync. See `aexp --help` for the full list. Python API is a one-line `from aexp import ...`. |
 | **Typed JSON contracts** | Pydantic models (`RunLink`, `BatchSelector`, `Issue`, …) back the schema; MCP tools and CLI return the same shapes. |
 

@@ -1,21 +1,23 @@
 # Tracker bindings
 
-`agentic-experiments` offers three ways to link a signac run to a wandb run.
-Pick based on who owns `wandb.init`:
+`agentic-experiments` offers four ways to link a signac run to a tracker
+(wandb or noop). They're all first-class; pick based on *where* the run
+actually executes and *who* owns `wandb.init`:
 
 | Mode | You own | aexp owns | Use when |
 |---|---|---|---|
-| **Managed** — `tracked_run` | nothing | init + bind + finish | aexp is the only wandb caller; simplest flow |
-| **Bring your own init** — `prepare_tracker` + `ctx.bind(run)` | `wandb.init` and `run.finish` | the disciplined payload (group / tags / config / notes / dir / mode) and the signac binding | you already have a `wandb.init` call (e.g. per-item short runs with custom names, `wandb.Table` uploads, memory instrumentation) |
-| **Adapter** — `bind_tracker(job, adapter, ...)` | nothing | everything, through the `TrackerAdapter` ABC | backend-agnostic code, tests, or the `NoopAdapter` (always-available local JSONL) |
+| **Managed** — `tracked_run` | nothing | init + bind + finish | Training runs in the same Python process as aexp. Simplest flow. |
+| **Bring your own init** — `prepare_tracker` + `ctx.bind(run)` | `wandb.init` and `run.finish` | the disciplined payload (group / tags / config / notes / dir / mode) and the signac binding | You already have a `wandb.init` call you want to keep (per-item short runs with custom names, `wandb.Table` uploads, memory instrumentation). |
+| **CLI adapter bind** — `aexp bind-tracker <job_id> --backend wandb` | nothing | everything, via the `WandbAdapter` | Training runs in a subprocess / separate script / cluster job where reaching back to Python isn't convenient. The CLI stamps the binding; your training code runs in the workspace independently. |
+| **Noop / custom adapter** — `bind_tracker(job, NoopAdapter(), ...)` | nothing | everything, through the `TrackerAdapter` ABC | No wandb account; tests; backend-agnostic code; custom backends. |
 
-For wandb specifically, prefer `tracked_run` or `prepare_tracker`. The
-`TrackerAdapter` ABC earns its weight for the noop path and for code that
-wants to stay backend-portable; it is not a wrapper over the wandb surface.
+None of these is deprecated. The Python paths (`tracked_run`,
+`prepare_tracker`) and the CLI adapter path (`aexp bind-tracker`) are
+complementary — the choice is who controls the `wandb.init` call site.
 Once a run is initialized (by any mode), the yielded / bound `wandb.Run`
 exposes the full wandb API — `run.log_artifact`, `wandb.Table`,
-`run.define_metric`, `run.summary[...]`, `run.alert(...)`, sweeps — none of
-it is hidden.
+`run.define_metric`, `run.summary[...]`, `run.alert(...)`, sweeps — none
+of it is hidden behind aexp.
 
 ## 1. Managed runs — `tracked_run`
 
@@ -124,14 +126,23 @@ Duck-types `run.id` (required) and `run.url` (optional). Writes a
 `backend="mlflow"` or similar if you adapted the context to a non-wandb
 tracker.
 
-## 3. `TrackerAdapter` — backend-agnostic / noop path
+## 3. `TrackerAdapter` — CLI, subprocess / cluster, noop, custom backends
 
-The `TrackerAdapter` ABC exists so code can switch between a real tracker
-and `NoopAdapter` without branching. Use this when:
+The `TrackerAdapter` ABC is the common shape behind `bind_tracker`. It
+serves three distinct use cases:
 
-- You're writing tests that shouldn't hit the network.
-- You want a local JSONL record of tracker events instead of a wandb run.
-- You're writing a custom adapter for a backend other than wandb.
+- **CLI / subprocess / cluster workflows** where your training script runs
+  somewhere aexp's Python API can't reach — e.g. a bash script that
+  invokes a `torch.distributed` launcher, or a slurm job that runs a
+  pre-existing training binary. You create the signac job via `aexp
+  new-run`, bind wandb via `aexp bind-tracker <job_id> --backend wandb
+  --project <name> [--offline]` from the login node, and the training
+  script then just calls `wandb.init(...)` itself (or `aexp.prepare_tracker`
+  if it *can* reach Python). The binding is already stamped.
+- **Tests / local-only workflows** via `NoopAdapter` — writes JSONL events
+  to the job workspace, no network, no wandb account needed.
+- **Custom backends** — implement the ABC for MLflow, Aim, DVC, or
+  anything else.
 
 ```python
 class TrackerAdapter(ABC):
@@ -169,21 +180,28 @@ Default location: `<job_workspace>/tracker_log/<run_id>/events.jsonl`.
 Pass `log_root=<path>` to `NoopAdapter(...)` for tests that aren't running
 inside a real signac job.
 
-### `WandbAdapter` (adapter path)
+### `WandbAdapter` via `bind_tracker`
 
 ```python
 from aexp import bind_tracker, WandbAdapter
 
 adapter = WandbAdapter(entity="my-team")  # entity optional
 handle = bind_tracker(job, adapter, project="my-project", offline=True)
-# Equivalent to `with tracked_run(job, project="my-project", offline=True, entity="my-team")`
-# but you manage log / finish yourself via adapter.log / adapter.finish —
-# or by reaching through handle.extra["run_object"] for the raw wandb.Run.
+# The adapter owns wandb.init. Log via `adapter.log(handle, {...})` /
+# `adapter.finish(handle)`, or reach through `handle.extra["run_object"]`
+# for the raw wandb.Run and use wandb's full surface directly.
 ```
 
-The adapter path is kept for backward compatibility and backend parity.
-For new wandb code, `tracked_run` or `prepare_tracker` is shorter and
-makes the init ownership explicit.
+Equivalent in effect to `with tracked_run(job, project="my-project",
+offline=True, entity="my-team") as run:` but you control the log /
+finish lifecycle explicitly instead of via a context manager — useful
+when the logging happens across function boundaries, in async code, or
+in a subprocess you kicked off from here.
+
+The CLI form is `aexp bind-tracker <job_id> --backend wandb --project
+<name> [--offline] [--entity <team>]` — preferred when your training code
+lives in a script you don't want to modify (see **Offline + sync
+workflow** below for the cluster case).
 
 ## Offline + sync workflow (HPC)
 

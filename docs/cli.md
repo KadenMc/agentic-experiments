@@ -153,9 +153,12 @@ Exit code 1 on any error. `--kb-only` skips runs-side; `--runs-only` skips the K
 
 ### `aexp install-slash-commands`
 
-Copies the shipped slash commands (`aexp-new-run.md`, `aexp-close-run.md`,
-`aexp-close-batch.md`) into `<target>/`, default `.claude/commands/`.
-Safe to re-run.
+Copies the shipped slash commands (artifact creation: `aexp-new-hypothesis`,
+`aexp-new-experiment`, `aexp-new-run`; finding creation:
+`aexp-finding-from-run`, `aexp-finding-from-batch`,
+`aexp-finding-placeholder`; read / inspect: `aexp-show-run`,
+`aexp-show-batch`, `aexp-list-runs`, `aexp-status`, `aexp-validate`) into
+`<target>/`, default `.claude/commands/`. Safe to re-run.
 
 ## Exit codes
 

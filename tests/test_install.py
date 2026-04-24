@@ -192,7 +192,12 @@ def test_install_drops_slash_commands_without_a_second_step(
     install_limina(fresh_git_repo)
     commands = fresh_git_repo / ".claude" / "commands"
     assert commands.is_dir()
-    for name in ("aexp-new-run.md", "aexp-close-run.md", "aexp-close-batch.md"):
+    for name in (
+        "aexp-new-run.md",
+        "aexp-finding-from-run.md",
+        "aexp-finding-from-batch.md",
+        "aexp-finding-placeholder.md",
+    ):
         assert (commands / name).is_file(), name
 
 

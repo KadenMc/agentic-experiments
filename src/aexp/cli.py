@@ -280,8 +280,10 @@ def new_finding_cmd(
     """Create a new finding (F###) citing one hypothesis + one experiment.
 
     This writes the finding skeleton and patches both parents' ``## Links``
-    sections. The actual ``supporting_runs:`` citation is added by
-    ``/aexp-close-run`` or ``/aexp-close-batch`` once you have the job id.
+    sections. The ``supporting_runs:`` citation is added separately — use
+    ``/aexp-finding-from-run`` (single job), ``/aexp-finding-from-batch``
+    (batch selector), or ``/aexp-finding-placeholder`` (no citations yet)
+    depending on what the finding cites.
     """
     try:
         result = new_finding(
