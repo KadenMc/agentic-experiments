@@ -78,8 +78,11 @@ from aexp.trackers import (
     RunHandle,
     RunRecord,
     TrackerAdapter,
+    TrackerContext,
     TrackerInitError,
     bind_tracker,
+    prepare_tracker,
+    tracked_run,
 )
 
 # Validation ----------------------------------------------------------------
@@ -142,7 +145,11 @@ __all__ = [
     "SupportingRun",
     "TrackerBinding",
     "batch_slug",
-    # trackers
+    # trackers — preferred wandb surface first
+    "TrackerContext",
+    "prepare_tracker",
+    "tracked_run",
+    # trackers — adapter / legacy path
     "NoopAdapter",
     "RunHandle",
     "RunRecord",

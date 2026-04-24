@@ -42,7 +42,7 @@ Inside Claude Code, the easiest path is to ask the agent: "Create hypothesis H00
 
 From a shell, the same file-creation by hand works — YAML frontmatter plus the `## Statement`, `## Mechanism`, `## Test Plan` sections from the template.
 
-> CLI verbs for artifact creation (`aexp new-hypothesis` / `new-experiment` / `new-finding`) are on the v1.1 roadmap so this step becomes a single command.
+> CLI verbs `aexp new-hypothesis`, `aexp new-experiment`, and `aexp new-finding` handle artifact creation in one command (plus automatic backlink patching on the parent files). See `aexp --help` or the slash-command set under `.claude/commands/aexp-new-*.md`.
 
 ## 3. Frame an experiment
 
@@ -62,29 +62,50 @@ Fill in `## Objective`, `## Procedure`, `## Expected Outcome`. Consider writing 
 
 ### From Python (recommended)
 
+Managed wandb run — aexp owns `wandb.init` + `run.finish`:
+
 ```python
-from aexp import create_run, bind_tracker, NoopAdapter, run_lifecycle
-import json
+from aexp import create_run, run_lifecycle, tracked_run
 
 job = create_run(
     experiment_id="E001",
     hypothesis_id="H001",
     statepoint={"model": "gpt-oss-20b", "condition": "full", "seed": 0},
-    # code_commit is auto-added; set include_commit=False for WIP iteration
 )
-# Optional mirror — noop writes JSONL into the job workspace; swap to WandbAdapter when ready.
-handle = bind_tracker(job, NoopAdapter(), project="my-project")
 
-with run_lifecycle(job):
+with run_lifecycle(job), tracked_run(job, project="my-project", offline=True) as run:
     # ... your actual experiment code ...
-    result = {"accuracy": 0.83, "n": 32}
-    (job.fn("output.json")).write_text(json.dumps(result))
-    # Log to the tracker (noop -> JSONL; wandb -> remote)
-    from aexp.trackers import NoopAdapter as _noop  # use the adapter you bound
-    # ...
+    run.log({"accuracy": 0.83, "n": 32})
+    run.summary["final_accuracy"] = 0.83
 ```
 
-`run_lifecycle` handles status transitions: `created` → `running` → `complete` (or `failed` if an exception propagates) + writes `started_at` / `ended_at` / `wallclock_s`.
+Or, if your code already calls `wandb.init` and you just want aexp's
+disciplined payload + signac binding:
+
+```python
+from aexp import create_run, prepare_tracker, run_lifecycle
+import wandb
+
+job = create_run(experiment_id="E001", hypothesis_id="H001",
+                 statepoint={"condition": "full"})
+ctx = prepare_tracker(job, project="my-project", offline=True)
+run = wandb.init(**ctx.init_kwargs, name="my-run", job_type="eval")
+ctx.bind(run)
+
+with run_lifecycle(job):
+    run.log({"accuracy": 0.83})
+    run.finish()
+```
+
+Or, if you don't want wandb at all, use the always-available noop adapter:
+
+```python
+from aexp import bind_tracker, NoopAdapter
+handle = bind_tracker(job, NoopAdapter(), project="my-project")
+# Noop writes events to <job.workspace>/tracker_log/<run_id>/events.jsonl.
+```
+
+`run_lifecycle` handles signac status transitions: `created` → `running` → `complete` (or `failed` if an exception propagates) + writes `started_at` / `ended_at` / `wallclock_s`. It is orthogonal to tracker binding — compose both.
 
 ### From the CLI
 

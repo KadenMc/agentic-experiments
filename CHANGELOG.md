@@ -38,6 +38,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mission statement; `aexp validate` still surfaces the absence as a
   structured `filesystem` issue when it actually matters.
 
+### Added (tracker redesign)
+
+- **`aexp.tracked_run(job, *, project, ...)`** — context-manager entry
+  point for managed wandb runs. aexp calls `wandb.init(**init_kwargs)` with
+  the disciplined payload (deterministic group slug, auto-tags, curated
+  Limina frame, flattened state point, workspace co-location), stamps
+  `job.doc["tracker"]`, yields the live `wandb.Run`, and calls
+  `run.finish(exit_code=...)` on exit. Full wandb API (`run.log_artifact`,
+  `wandb.Table`, `run.define_metric`, `run.summary[...]`, sweeps) is
+  available on the yielded run — aexp is not a wrapper.
+- **`aexp.prepare_tracker(job, *, project, ...)`** — returns a
+  `TrackerContext` with wandb-shaped `init_kwargs` so callers who already
+  own `wandb.init` (e.g. per-item inference loops with custom names /
+  artifacts) can splat the aexp payload into their own call, then stamp
+  the signac binding via `ctx.bind(run)`. This is the "bring your own
+  init" path — closes the duplicate-run-tree problem that consumers with
+  pre-existing `wandb.init` sites hit with the adapter path.
+- **`aexp.TrackerContext`** — frozen dataclass exported at the package
+  root. `ctx.init_kwargs` holds the ready-to-splat payload; `ctx.group`
+  / `ctx.project` / `ctx.tags` are mirrored for inspection; `ctx.bind(
+  run, *, backend="wandb")` writes `TrackerBinding` into
+  `job.doc["tracker"]` by duck-typing `run.id` / `run.url`.
+
+### Changed (tracker redesign)
+
+- **`docs/tracker-adapters.md`** rewritten. New framing: three modes
+  documented side-by-side in a comparison table (Managed / BYO-init /
+  Adapter). `tracked_run` and `prepare_tracker` lead; the
+  `TrackerAdapter` ABC is documented as the noop / backend-agnostic path.
+- **`bind_tracker(job, adapter, ...)`** signature and side effects
+  unchanged; implementation now delegates to a shared
+  `_derive_tracker_payload` helper used by both the adapter path and
+  `prepare_tracker`. All existing tests (7 noop + 9 wandb + 3 CLI/MCP
+  integration) pass unchanged.
+- **`docs/quickstart.md`** — replaced the `bind_tracker(job,
+  NoopAdapter(), ...)` Python example with parallel snippets for
+  `tracked_run`, `prepare_tracker`, and the noop adapter path. Also
+  removed the stale "v1.1 roadmap" note — the `new-hypothesis` /
+  `new-experiment` / `new-finding` CLI verbs shipped.
+- **`README.md`** — tracker row points at `tracked_run` /
+  `prepare_tracker`; CLI row updated from "10 verbs" to "13 verbs"; slash
+  commands row enumerates the full 9-command set; v1.1 backlog drops the
+  items that already shipped.
+
 ## [0.1.1] — 2026-04-22
 
 ### Added
