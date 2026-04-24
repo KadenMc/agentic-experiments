@@ -128,7 +128,7 @@ aexp show-batch --experiment E001 --condition full
 
 `list-batches` rolls up by `(experiment_id, condition)` by default — one row per distinct slice, with counts and status mix.
 
-## 5b. Batch-queue for overnight (or cluster) execution
+## 5b. Batch-queue for cluster / batched execution
 
 If you want to queue N jobs and materialize them as a runner script — instead of calling `new-run` per job and executing inline — use the `queue` subcommand group:
 
@@ -141,14 +141,14 @@ If you want to queue N jobs and materialize them as a runner script — instead 
 #     classify: { model: "baseline", max_turns:  4 }
 
 # Queue 8 jobs in one call (Cartesian sweep):
-aexp queue add --experiment E001 --sweep "condition=full|classify, seed=0..3" --tag overnight
+aexp queue add --experiment E001 --sweep "condition=full|classify, seed=0..3" --tag paper-ablation
 
 # Inspect pending work:
-aexp queue list --tag overnight
+aexp queue list --tag paper-ablation
 
 # Call `aexp queue run` from inside your own batch script — aexp iterates
 # the pending queue, your script owns partition/account/modules/env:
-cat > overnight.sbatch <<'EOF'
+cat > paper-ablation.sbatch <<'EOF'
 #!/bin/bash
 #SBATCH --array=0-7
 #SBATCH --partition=your-partition
@@ -156,10 +156,10 @@ cat > overnight.sbatch <<'EOF'
 # ... your site's other #SBATCH directives ...
 source ~/miniconda3/bin/activate your-env
 cd /path/to/repo
-aexp queue run --tag overnight --index "$SLURM_ARRAY_TASK_ID"
+aexp queue run --tag paper-ablation --index "$SLURM_ARRAY_TASK_ID"
 EOF
 
-# Commit, push, pull on cluster, `sbatch overnight.sbatch`. Or, if you
+# Commit, push, pull on cluster, `sbatch paper-ablation.sbatch`. Or, if you
 # prefer a starter template, `aexp queue materialize --runner slurm` emits
 # one with clearly-marked TODO placeholders. See docs/queue.md for the
 # full cross-machine sync workflow.

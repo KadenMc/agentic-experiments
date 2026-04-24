@@ -146,8 +146,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   — frontmatter gains commented-out `runner_command` and `conditions`
   stubs so new experiments know where to opt in. Existing experiments
   aren't rewritten; validator ignores absent / empty fields.
-- **`docs/quickstart.md`** — adds a "5b. Batch-queue for overnight (or
-  cluster) execution" section showing the sweep → materialize → submit
+- **`docs/quickstart.md`** — adds a "5b. Batch-queue for cluster /
+  batched execution" section showing the sweep → materialize → submit
   workflow with a sample `conditions:` block.
 - **`docs/cli.md`** — lists the `queue` subcommand group and
   `run-queued` under "Verbs at a glance"; points at `docs/queue.md`
@@ -191,6 +191,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a starter-template convenience.
 - **`docs/cli.md`** / **`docs/quickstart.md`** updated with the
   in-script `queue run` pattern as the canonical cluster flow.
+- **Tag semantics clarified in docs.** `--tag` is pure metadata — a
+  user-chosen label aexp stores and filters by, with no scheduling /
+  deadline / wall-clock semantics. All example tags in `docs/queue.md`,
+  `docs/quickstart.md`, and the queue-adjacent slash commands are now
+  named by *what the batch is* (`paper-ablation`, `full-vs-classify`,
+  `seed-stability`) instead of temporal markers (`overnight`,
+  `tonight`) that falsely implied aexp cared about timing. A new
+  "What `--tag` is (and isn't)" section in `docs/queue.md` spells this
+  out so agents reading the docs don't infer semantics we don't have.
 
 ### Added (slash-command UX cleanup)
 

@@ -52,7 +52,7 @@ Flow:
 
    # Slurm (cluster)
    python -m aexp queue materialize \
-       --runner slurm --output overnight.sbatch \
+       --runner slurm --output paper-ablation.sbatch \
        --tag <tag> \
        --slurm-time 04:00:00 --slurm-mem 32G --slurm-gpus 1 \
        [--slurm-partition gpu] [--slurm-account team-x]

@@ -20,8 +20,12 @@ Flow:
      or a sweep like `condition=full|classify_only, seed=0..3` that expands
      to a Cartesian product.
    - **Tag** (optional) — a short string that groups the queued jobs so
-     `queue list`, `materialize`, and `clear` can filter. Example:
-     `overnight-ablation`.
+     `queue list`, `materialize`, `run`, and `clear` can filter. Pure
+     metadata: aexp stores it in `job.doc["queue"]["tag"]` and never
+     interprets it. Pick a name that describes *what the batch is*
+     (e.g. `paper-ablation`, `full-vs-classify`, `seed-stability`);
+     avoid temporal markers (`overnight`, `tonight`) — they imply
+     scheduling semantics aexp doesn't have.
 
 2. **Condition resolution.** If the `sp` includes a `condition` key and the
    experiment's frontmatter declares a `conditions:` block with a matching
