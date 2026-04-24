@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`aexp install --force` no longer clobbers user-authored scaffold
+  content** in `kb/` and `templates/`. Previously `--force` treated every
+  shipped file (tooling + scaffold) the same, so a user who had polished
+  `kb/mission/CHALLENGE.md`, `kb/ACTIVE.md`, `kb/DASHBOARD.md`, or any
+  `templates/*.md` and then re-ran install to refresh a slash command
+  would silently lose that content back to the blank default. Reported
+  by the electricrag-side agent on 2026-04-24 after a committed
+  `CHALLENGE.md` was reverted to `{What should the agent research?}`.
+
+  Fix: the scaffold trees (`_TREES_VERBATIM = ("kb", "templates")`) now
+  opt into a content-diff preservation rule in `_copy_file`. If the
+  target exists and its bytes differ from the shipped source, the
+  installer emits a new `preserved_user_modified` action and leaves the
+  file alone — even under `--force`. Files that byte-match the shipped
+  default still refresh (trivially, via the existing `skipped_identical`
+  path). Tooling files (slash commands, skills, hooks, `.mcp.json`,
+  `.claude/settings.json`) continue to honor `--force` — their refresh
+  is the whole point of the flag.
+
+  Escape hatch: if you genuinely want to nuke a scaffold file back to
+  the default, `rm` it before re-installing. `--force` alone is no
+  longer sufficient for that destructive semantic.
+
+  The install summary gets a new `preserved_user_modified` row so the
+  behaviour is visible, and the CLI prints a per-file `preserved_user_modified
+  <path>: kept your content; shipped default not applied` line for each
+  such file. 5 new tests in `tests/test_install.py` cover: `kb/`
+  preservation under both no-force and `--force`, `templates/`
+  preservation under `--force`, `skipped_identical` when content
+  matches, and the invariant that slash commands (tooling) still refresh
+  under `--force`.
+
 ### Added
 
 - **Artifact-creation API** (`aexp.artifacts`): `new_hypothesis`,

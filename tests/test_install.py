@@ -247,32 +247,108 @@ def test_install_force_bypasses_idempotence(fresh_git_repo: Path) -> None:
     assert any(a.kind == "skipped_identical" for a in actions)
 
 
-def test_install_refuses_to_clobber_conflicting_file_without_force(
+def test_install_preserves_user_modified_kb_content_without_force(
     fresh_git_repo: Path,
 ) -> None:
-    # Pre-create a conflicting user file at the same path we'd copy.
+    """User-authored content in the ``kb/`` scaffold is preserved without
+    ``--force`` via the ``preserved_user_modified`` action — no clobber,
+    and no "rerun with --force" advice (which was always dangerous for
+    this scope)."""
     target = fresh_git_repo / "kb" / "ACTIVE.md"
     target.parent.mkdir(parents=True)
     target.write_text("user-owned content", encoding="utf-8")
 
     actions = install_limina(fresh_git_repo)
-    skipped = [a for a in actions if a.path.endswith("kb/ACTIVE.md")]
-    assert skipped
-    assert skipped[0].kind == "skipped_conflict"
-    # User content preserved
+    entries = [a for a in actions if a.path.endswith("kb/ACTIVE.md")]
+    assert entries
+    assert entries[0].kind == "preserved_user_modified"
+    # User content untouched.
     assert target.read_text(encoding="utf-8") == "user-owned content"
 
 
-def test_install_force_overwrites_conflicting_file(fresh_git_repo: Path) -> None:
-    target = fresh_git_repo / "kb" / "ACTIVE.md"
+def test_install_preserves_user_modified_kb_content_even_under_force(
+    fresh_git_repo: Path,
+) -> None:
+    """Under ``--force``, user-authored ``kb/`` scaffold files still survive.
+
+    This is the regression guard for the 2026-04-24 electricrag CHALLENGE.md
+    clobber: `aexp install --yes --force --dev` had overwritten a committed
+    mission file back to the blank stub. `--force` should refresh pinned
+    tooling (slash commands, skills, hooks) — not destroy user-authored
+    scaffold content.
+    """
+    target = fresh_git_repo / "kb" / "mission" / "CHALLENGE.md"
     target.parent.mkdir(parents=True)
-    target.write_text("user-owned content", encoding="utf-8")
+    target.write_text(
+        "# My research mission\n\nSpecific objective X.\n", encoding="utf-8"
+    )
 
     actions = install_limina(fresh_git_repo, force=True)
-    overwritten = [a for a in actions if a.path.endswith("kb/ACTIVE.md")]
-    assert overwritten
-    assert overwritten[0].kind == "copied"
-    assert target.read_text(encoding="utf-8") != "user-owned content"
+    entries = [a for a in actions if a.path.endswith("kb/mission/CHALLENGE.md")]
+    assert entries
+    assert entries[0].kind == "preserved_user_modified"
+    # Content survived the force re-install.
+    assert "My research mission" in target.read_text(encoding="utf-8")
+
+
+def test_install_preserves_user_modified_templates(fresh_git_repo: Path) -> None:
+    """Templates (``templates/*.md``) are user-customisable — aexp's
+    ``artifacts._load_template`` prefers the repo-local copy if present.
+    So they ride in the same preservation scope as ``kb/``."""
+    target = fresh_git_repo / "templates" / "hypothesis.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("# My custom hypothesis template\n", encoding="utf-8")
+
+    actions = install_limina(fresh_git_repo, force=True)
+    entries = [
+        a for a in actions if a.path.endswith("templates/hypothesis.md")
+    ]
+    assert entries
+    assert entries[0].kind == "preserved_user_modified"
+    assert "My custom hypothesis template" in target.read_text(encoding="utf-8")
+
+
+def test_install_refreshes_default_kb_content_under_force(
+    fresh_git_repo: Path,
+) -> None:
+    """If a kb/ file still byte-matches the shipped default, a re-install
+    should report ``skipped_identical`` — no preservation noise, and no
+    copy since the content is already correct."""
+    install_limina(fresh_git_repo)  # first run lays down the defaults
+    actions = install_limina(fresh_git_repo, force=True)
+    # Path filter: files shipped under kb/ always end with "kb/<...>.md".
+    kb_entries = [
+        a
+        for a in actions
+        if "/kb/" in a.path and a.path.endswith(".md")
+    ]
+    assert kb_entries, [(a.kind, a.path) for a in actions]
+    # None were preserved (all match shipped default); all skipped_identical.
+    assert all(e.kind == "skipped_identical" for e in kb_entries), [
+        (e.kind, e.path) for e in kb_entries
+    ]
+
+
+def test_install_force_still_overwrites_stale_slash_commands(
+    fresh_git_repo: Path,
+) -> None:
+    """Slash commands are tooling, not user content. If a user had a stale
+    copy of a shipped command on disk, ``--force`` SHOULD refresh it to
+    match the current shipped version. The preservation path does not
+    apply to ``.claude/commands/``."""
+    target = fresh_git_repo / ".claude" / "commands" / "aexp-new-run.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("# stale hand-edited content\n", encoding="utf-8")
+
+    actions = install_limina(fresh_git_repo, force=True)
+    entries = [
+        a
+        for a in actions
+        if a.path.endswith(".claude/commands/aexp-new-run.md")
+    ]
+    assert entries
+    assert entries[0].kind == "copied"
+    assert "stale hand-edited content" not in target.read_text(encoding="utf-8")
 
 
 def test_install_json_merges_existing_claude_settings(fresh_git_repo: Path) -> None:

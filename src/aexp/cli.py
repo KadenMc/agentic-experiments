@@ -109,6 +109,7 @@ _INSTALL_HEADS_UP = """\
   - [cyan].aexp/installed.json[/cyan]   install marker with interpreter path + vendor sha
 
 By default, conflicting existing files are [yellow]skipped with a warning[/yellow] — pass [bold]--force[/bold] to overwrite.
+[bold]User-authored scaffold content under `kb/` and `templates/` is preserved even under --force[/bold] (see `preserved_user_modified` in the summary); only tooling files (slash commands, skills, hooks, `.mcp.json`) are refreshed.
 Hook scripts and validator code live inside the installed `aexp` package; no Python you didn't write lands in your repo.
 """
 
@@ -119,6 +120,13 @@ def _print_actions(actions: list, *, dry_run: bool) -> None:
         kinds[a.kind] = kinds.get(a.kind, 0) + 1
         if a.kind == "skipped_conflict":
             console.print(f"[yellow]{a.kind}[/yellow] {a.path}: {a.detail}")
+        elif a.kind == "preserved_user_modified":
+            # Per-file line so users know exactly which scaffold files kept
+            # their edits under --force.
+            console.print(
+                f"[cyan]preserved_user_modified[/cyan] {a.path}: "
+                "kept your content; shipped default not applied"
+            )
         elif a.kind in ("merged_json", "merged_block", "wrote_marker", "initialized_runs"):
             console.print(f"[green]{a.kind}[/green] {a.path}")
     title = "dry-run plan" if dry_run else "install summary"
@@ -141,7 +149,16 @@ _DEV_HEADS_UP = (
 @app.command()
 def install(
     run_store: str = typer.Option(".runs", "--run-store", help="Path for signac project."),
-    force: bool = typer.Option(False, "--force", help="Overwrite conflicting user files."),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help=(
+            "Overwrite conflicting tooling files (slash commands, skills, "
+            "hooks, .mcp.json). User-authored scaffold content under `kb/` "
+            "and `templates/` is preserved even here — delete the file "
+            "first if you want to reset it to the shipped default."
+        ),
+    ),
     assert_git: bool = typer.Option(
         True, "--require-git/--no-require-git", help="Require a .git dir at repo root."
     ),

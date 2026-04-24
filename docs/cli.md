@@ -100,7 +100,7 @@ and its merge policy, then prompts for confirmation before writing. Flags:
 
 - `--dry-run` / `-n` — print the planned actions without writing anything.
 - `--yes` / `-y` — skip the confirmation prompt (use in scripted / CI runs).
-- `--force` — overwrite conflicting user files instead of skipping with a warning.
+- `--force` — overwrite conflicting **tooling** files (slash commands, skills, hooks, `.mcp.json`). **User-authored scaffold content** under `kb/` and `templates/` is preserved even under `--force` (reported as `preserved_user_modified` in the install summary); delete the file first if you genuinely want to reset it to the shipped default.
 - `--dev` / `-D` — write `.mcp.json` using the current Python interpreter
   (`"<python_exe>" -m aexp.mcp_server`) instead of the portable `uvx`/PyPI form.
   Use when you've installed `aexp` editable (`pip install -e`) and want edits

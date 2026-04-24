@@ -69,6 +69,7 @@ ActionKind = Literal[
     "copied",
     "skipped_identical",
     "skipped_conflict",
+    "preserved_user_modified",
     "merged_json",
     "merged_block",
     "initialized_runs",
@@ -122,15 +123,31 @@ def _files_identical(a: Path, b: Path) -> bool:
     return a.read_bytes() == b.read_bytes()
 
 
-def _copy_file(src: Path, dst: Path, *, force: bool, dry_run: bool = False) -> InstallAction:
+def _copy_file(
+    src: Path,
+    dst: Path,
+    *,
+    force: bool,
+    dry_run: bool = False,
+    preserve_user_modifications: bool = False,
+) -> InstallAction:
     """Copy ``src`` -> ``dst`` atomically, respecting existing-file conflicts.
 
     Rules
     -----
     - Target missing -> copy, record ``copied``.
-    - Target identical -> skip, record ``skipped_identical``.
+    - Target identical to source -> skip, record ``skipped_identical``.
     - Target differs + ``force=False`` -> skip, record ``skipped_conflict``.
-    - Target differs + ``force=True`` -> overwrite, record ``copied``.
+    - Target differs + ``force=True`` + ``preserve_user_modifications=False``
+      -> overwrite, record ``copied``.
+    - Target differs + ``force=True`` + ``preserve_user_modifications=True``
+      -> skip, record ``preserved_user_modified``. This is how
+      user-authored content in the ``kb/`` + ``templates/`` scaffold
+      survives a re-install: when the installer sees a file it shipped
+      as a stub that's been edited on disk, it leaves the edit alone
+      even under ``--force``. Tooling files (slash commands, skills,
+      hooks) set the flag to ``False`` so legitimate refreshes go
+      through.
 
     ``dry_run=True`` suppresses the actual write while still returning the
     planned action — callers can preview the full side-effect list safely.
@@ -138,6 +155,13 @@ def _copy_file(src: Path, dst: Path, *, force: bool, dry_run: bool = False) -> I
     rel = _display_relpath(dst)
     if _files_identical(src, dst):
         return InstallAction("skipped_identical", rel)
+    if dst.exists() and preserve_user_modifications:
+        return InstallAction(
+            "preserved_user_modified",
+            rel,
+            "target has user-authored content (differs from shipped default); "
+            "preserved. `rm` the file before re-installing if you want to reset.",
+        )
     if dst.exists() and not force:
         return InstallAction(
             "skipped_conflict",
@@ -531,16 +555,36 @@ def _install_slash_commands(
 
 
 def _copy_tree(
-    src_root: Path, dst_root: Path, *, force: bool, dry_run: bool = False
+    src_root: Path,
+    dst_root: Path,
+    *,
+    force: bool,
+    dry_run: bool = False,
+    preserve_user_modifications: bool = False,
 ) -> list[InstallAction]:
-    """Copy every file under ``src_root`` into ``dst_root``."""
+    """Copy every file under ``src_root`` into ``dst_root``.
+
+    ``preserve_user_modifications=True`` opts the whole tree into the
+    content-diff preservation path (see :func:`_copy_file`) — targets
+    that have diverged from the shipped source are preserved under
+    ``--force``. Used for ``kb/`` + ``templates/`` where files ship as
+    editable scaffold rather than pinned tooling.
+    """
     actions: list[InstallAction] = []
     if not src_root.is_dir():
         return actions
     for src in sorted(p for p in src_root.rglob("*") if p.is_file()):
         rel = src.relative_to(src_root)
         dst = dst_root / rel
-        actions.append(_copy_file(src, dst, force=force, dry_run=dry_run))
+        actions.append(
+            _copy_file(
+                src,
+                dst,
+                force=force,
+                dry_run=dry_run,
+                preserve_user_modifications=preserve_user_modifications,
+            )
+        )
     return actions
 
 
@@ -629,9 +673,21 @@ def install_limina(
             return actions
 
     # 1. Copy verbatim trees.
+    #    kb/ + templates/ ship as *editable scaffold*, not pinned tooling:
+    #    CHALLENGE.md / ACTIVE.md / DASHBOARD.md / templates/*.md are all
+    #    meant to be authored or customised by the consumer. So even under
+    #    --force, any target that has diverged from the shipped default is
+    #    preserved (see `_copy_file` rules). Tooling files — slash commands,
+    #    skills, hooks — opt out of preservation below and get refreshed.
     for name in _TREES_VERBATIM:
         actions.extend(
-            _copy_tree(VENDOR_LIMINA / name, root / name, force=force, dry_run=dry_run)
+            _copy_tree(
+                VENDOR_LIMINA / name,
+                root / name,
+                force=force,
+                dry_run=dry_run,
+                preserve_user_modifications=True,
+            )
         )
 
     # 2. Copy / block-merge top-level Markdown docs.
