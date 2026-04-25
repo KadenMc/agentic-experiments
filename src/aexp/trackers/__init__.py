@@ -12,8 +12,11 @@ from aexp.trackers.base import (
     RunHandle,
     RunRecord,
     TrackerAdapter,
+    TrackerContext,
     TrackerInitError,
     bind_tracker,
+    prepare_tracker,
+    tracked_run,
 )
 from aexp.trackers.noop_adapter import NoopAdapter
 
@@ -30,8 +33,11 @@ __all__ = [
     "RunHandle",
     "RunRecord",
     "TrackerAdapter",
+    "TrackerContext",
     "TrackerInitError",
     "bind_tracker",
+    "prepare_tracker",
+    "tracked_run",
     "_wandb_adapter",
 ]
 

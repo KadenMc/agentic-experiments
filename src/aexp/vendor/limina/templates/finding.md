@@ -24,6 +24,15 @@ _One clear statement of what the experiment established._
 
 _What measurements, comparisons, or observations support it?_
 
+## Caveats
+
+_What qualifies how this finding should be interpreted? Small sample
+size, domain shift between eval and production, instrumentation
+caveats inherited from the supporting experiment(s), confounds
+identified after the fact. Distinct from ``## Remaining Debt``:
+caveats are about **what limits this finding's interpretation**;
+remaining debt is about **what's still a workaround in the system**._
+
 ## What Improved For Real
 
 _What capability changed beyond the benchmark number itself?_

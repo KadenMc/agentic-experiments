@@ -42,7 +42,7 @@ Inside Claude Code, the easiest path is to ask the agent: "Create hypothesis H00
 
 From a shell, the same file-creation by hand works — YAML frontmatter plus the `## Statement`, `## Mechanism`, `## Test Plan` sections from the template.
 
-> CLI verbs for artifact creation (`aexp new-hypothesis` / `new-experiment` / `new-finding`) are on the v1.1 roadmap so this step becomes a single command.
+> CLI verbs `aexp new-hypothesis`, `aexp new-experiment`, and `aexp new-finding` handle artifact creation in one command (plus automatic backlink patching on the parent files). See `aexp --help` or the slash-command set under `.claude/commands/aexp-new-*.md`.
 
 ## 3. Frame an experiment
 
@@ -56,35 +56,56 @@ sub_hypotheses: ["H002", "H003"]
 
 to its frontmatter (create the H's first).
 
-Fill in `## Objective`, `## Procedure`, `## Expected Outcome`. Consider writing a `## Local Hypothesis` section — it'll get pulled into tracker run notes.
+Fill in `## Objective`, `## Setup`, `## Procedure`, `## Caveats`, `## Intent` (pre-registered or exploratory — pick one), `## Progress`. The validator checks every shipped template header is present, so don't delete sections — fill placeholders. Consider writing a `## Local Hypothesis` section under `## Objective` — it'll get pulled into tracker run notes.
 
 ## 4. Run the experiment
 
 ### From Python (recommended)
 
+Managed wandb run — aexp owns `wandb.init` + `run.finish`:
+
 ```python
-from aexp import create_run, bind_tracker, NoopAdapter, run_lifecycle
-import json
+from aexp import create_run, run_lifecycle, tracked_run
 
 job = create_run(
     experiment_id="E001",
     hypothesis_id="H001",
     statepoint={"model": "gpt-oss-20b", "condition": "full", "seed": 0},
-    # code_commit is auto-added; set include_commit=False for WIP iteration
 )
-# Optional mirror — noop writes JSONL into the job workspace; swap to WandbAdapter when ready.
-handle = bind_tracker(job, NoopAdapter(), project="my-project")
 
-with run_lifecycle(job):
+with run_lifecycle(job), tracked_run(job, project="my-project", offline=True) as run:
     # ... your actual experiment code ...
-    result = {"accuracy": 0.83, "n": 32}
-    (job.fn("output.json")).write_text(json.dumps(result))
-    # Log to the tracker (noop -> JSONL; wandb -> remote)
-    from aexp.trackers import NoopAdapter as _noop  # use the adapter you bound
-    # ...
+    run.log({"accuracy": 0.83, "n": 32})
+    run.summary["final_accuracy"] = 0.83
 ```
 
-`run_lifecycle` handles status transitions: `created` → `running` → `complete` (or `failed` if an exception propagates) + writes `started_at` / `ended_at` / `wallclock_s`.
+Or, if your code already calls `wandb.init` and you just want aexp's
+disciplined payload + signac binding:
+
+```python
+from aexp import create_run, prepare_tracker, run_lifecycle
+import wandb
+
+job = create_run(experiment_id="E001", hypothesis_id="H001",
+                 statepoint={"condition": "full"})
+ctx = prepare_tracker(job, project="my-project", offline=True)
+run = wandb.init(**ctx.init_kwargs, name="my-run", job_type="eval")
+ctx.bind(run)
+
+with run_lifecycle(job):
+    run.log({"accuracy": 0.83})
+    run.finish()
+```
+
+Or, if you don't want wandb at all, use the always-available noop adapter:
+
+```python
+from aexp import bind_tracker, NoopAdapter
+handle = bind_tracker(job, NoopAdapter(), project="my-project")
+# Noop writes events to <job.workspace>/tracker_log/<run_id>/events.jsonl.
+```
+
+`run_lifecycle` handles signac status transitions: `created` → `running` → `complete` (or `failed` if an exception propagates) + writes `started_at` / `ended_at` / `wallclock_s`. It is orthogonal to tracker binding — compose both.
 
 ### From the CLI
 
@@ -107,13 +128,54 @@ aexp show-batch --experiment E001 --condition full
 
 `list-batches` rolls up by `(experiment_id, condition)` by default — one row per distinct slice, with counts and status mix.
 
-## 6. Close out with a Finding
+## 5b. Batch-queue for cluster / batched execution
+
+If you want to queue N jobs and materialize them as a runner script — instead of calling `new-run` per job and executing inline — use the `queue` subcommand group:
 
 ```powershell
-/aexp-close-batch --experiment E001 --condition full
+# Declare what the conditions mean (once, in E001's frontmatter):
+#
+#   runner_command: "python -m mypkg.train --config-json '{sp_json}'"
+#   conditions:
+#     full:     { model: "baseline", max_turns: 12 }
+#     classify: { model: "baseline", max_turns:  4 }
+
+# Queue 8 jobs in one call (Cartesian sweep):
+aexp queue add --experiment E001 --sweep "condition=full|classify, seed=0..3" --tag paper-ablation
+
+# Inspect pending work:
+aexp queue list --tag paper-ablation
+
+# Call `aexp queue run` from inside your own batch script — aexp iterates
+# the pending queue, your script owns partition/account/modules/env:
+cat > paper-ablation.sbatch <<'EOF'
+#!/bin/bash
+#SBATCH --array=0-7
+#SBATCH --partition=your-partition
+#SBATCH --time=04:00:00
+# ... your site's other #SBATCH directives ...
+source ~/miniconda3/bin/activate your-env
+cd /path/to/repo
+aexp queue run --tag paper-ablation --index "$SLURM_ARRAY_TASK_ID"
+EOF
+
+# Commit, push, pull on cluster, `sbatch paper-ablation.sbatch`. Or, if you
+# prefer a starter template, `aexp queue materialize --runner slurm` emits
+# one with clearly-marked TODO placeholders. See docs/queue.md for the
+# full cross-machine sync workflow.
 ```
 
-The slash command (installed by `aexp install-slash-commands`) walks the agent through drafting an `F###` that cites the batch:
+Each queued job freezes its full resolved config (the `conditions.full` block merged with whatever you passed in `--sp`/`--sweep`) to `signac_statepoint.json` — editing `conditions.full` tomorrow doesn't retroactively change what last night's runs did. That's the drift-proof provenance mechanism.
+
+Full story in [docs/queue.md](queue.md) (sp resolution rules, `{sp_json}` placeholder, runner script emitters, failure handling).
+
+## 6. Write a Finding
+
+```powershell
+/aexp-finding-from-batch --experiment E001 --condition full
+```
+
+Three sibling slash commands create findings — pick by what the finding cites: `/aexp-finding-from-run` (one job), `/aexp-finding-from-batch` (a batch selector), or `/aexp-finding-placeholder` (no citations yet). The slash command walks the agent through calling `aexp new-finding` (which handles id allocation + automatic parent-backlink patching) and then filling in the `supporting_runs:` citation:
 
 ```yaml
 supporting_runs:
@@ -122,7 +184,7 @@ supporting_runs:
     selector: { condition: "full" }
 ```
 
-Fill in `## Verdict`, `## Analysis`, `## Decision`. Run `aexp validate` to confirm the finding's citation resolves.
+Fill in `## Finding`, `## Evidence`, `## Caveats`, `## What Improved For Real`, `## Remaining Debt`, `## Next Move`. The slash command's flow walks the agent through each section. Run `aexp validate` to confirm the finding's citation resolves and every shipped template header is present.
 
 ## 7. Six months later
 

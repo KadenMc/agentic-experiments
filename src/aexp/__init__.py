@@ -17,6 +17,18 @@ except PackageNotFoundError:  # pragma: no cover - only in uninstalled-source ed
     __version__ = "0.0.0+unknown"
 
 # Install / bootstrap -------------------------------------------------------
+# Artifact creation (H / E / F / T) ----------------------------------------
+from aexp.artifacts import (
+    ArtifactCreateError,
+    ArtifactCreateResult,
+    ThreadStatusUpdate,
+    close_thread,
+    new_experiment,
+    new_finding,
+    new_hypothesis,
+    new_thread,
+)
+from aexp.backlinks import add_backlink
 from aexp.install import (
     InstallAction,
     compute_vendor_sha,
@@ -33,6 +45,7 @@ from aexp.limina_io import (
     load_experiment,
     load_finding,
     load_hypothesis,
+    load_thread,
 )
 
 # Linking + batch queries ---------------------------------------------------
@@ -42,6 +55,24 @@ from aexp.linking import (
     runs_for_experiment,
     show_batch,
     summarize_run,
+)
+
+# Queue / materialization / sp-resolution ----------------------------------
+from aexp.queue import (
+    RunnerCommandMissing,
+    SubprocessFailed,
+    SweepParseError,
+    add_many_to_queue,
+    add_to_queue,
+    clear_queue,
+    list_queue,
+    materialize_queue,
+    parse_sweep,
+    remove_from_queue,
+    render_runner_command,
+    resolve_sp,
+    run_queue,
+    run_queued,
 )
 
 # signac-backed run store ---------------------------------------------------
@@ -63,6 +94,8 @@ from aexp.schema import (
     BatchSummary,
     Issue,
     LiminaArtifactRef,
+    MaterializeResult,
+    QueueEntry,
     RunLink,
     RunStatus,
     RunSummary,
@@ -78,8 +111,11 @@ from aexp.trackers import (
     RunHandle,
     RunRecord,
     TrackerAdapter,
+    TrackerContext,
     TrackerInitError,
     bind_tracker,
+    prepare_tracker,
+    tracked_run,
 )
 
 # Validation ----------------------------------------------------------------
@@ -106,6 +142,16 @@ __all__ = [
     "compute_vendor_sha",
     "install_limina",
     "is_limina_installed",
+    # artifacts (H/E/F/T creation + backlink patching + thread lifecycle)
+    "ArtifactCreateError",
+    "ArtifactCreateResult",
+    "ThreadStatusUpdate",
+    "add_backlink",
+    "close_thread",
+    "new_experiment",
+    "new_finding",
+    "new_hypothesis",
+    "new_thread",
     # runs
     "RunNotFound",
     "RunStoreNotInitialized",
@@ -122,6 +168,21 @@ __all__ = [
     "runs_for_experiment",
     "show_batch",
     "summarize_run",
+    # queue / materialization / sp-resolution
+    "RunnerCommandMissing",
+    "SubprocessFailed",
+    "SweepParseError",
+    "add_many_to_queue",
+    "add_to_queue",
+    "clear_queue",
+    "list_queue",
+    "materialize_queue",
+    "parse_sweep",
+    "remove_from_queue",
+    "render_runner_command",
+    "resolve_sp",
+    "run_queue",
+    "run_queued",
     # limina_io
     "ArtifactNotFoundError",
     "ArtifactReadError",
@@ -130,11 +191,14 @@ __all__ = [
     "load_experiment",
     "load_finding",
     "load_hypothesis",
+    "load_thread",
     # schema
     "BatchSelector",
     "BatchSummary",
     "Issue",
     "LiminaArtifactRef",
+    "MaterializeResult",
+    "QueueEntry",
     "RunLink",
     "RunStatus",
     "RunSummary",
@@ -142,7 +206,11 @@ __all__ = [
     "SupportingRun",
     "TrackerBinding",
     "batch_slug",
-    # trackers
+    # trackers — preferred wandb surface first
+    "TrackerContext",
+    "prepare_tracker",
+    "tracked_run",
+    # trackers — adapter path
     "NoopAdapter",
     "RunHandle",
     "RunRecord",

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import functools
 import json
 import re
 from dataclasses import dataclass
@@ -28,7 +29,7 @@ except ImportError:
 META_RE = re.compile(r"^>\s+\*\*(.+?)\*\*:\s*(.+?)\s*$")
 FRONTMATTER_BLOCK_RE = re.compile(r"^---\n(.*?)\n---\n?", re.DOTALL)
 WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|[^\]]+)?\]\]")
-ARTIFACT_ID_RE = re.compile(r"^(?:CR|SR|H|E|F|L)\d{3}$")
+ARTIFACT_ID_RE = re.compile(r"^(?:CR|SR|H|E|F|L|T)\d{3}$")
 
 
 @dataclass(frozen=True)
@@ -58,6 +59,7 @@ CORE_ARTIFACTS: dict[str, ArtifactSpec] = {
     "L": ArtifactSpec("L", Path("research/literature"), ("Type", "Date reviewed", "Relevance")),
     "CR": ArtifactSpec("CR", Path("reports"), ("Target", "Requested by", "Reviewer", "Date")),
     "SR": ArtifactSpec("SR", Path("reports"), ("Scope", "Challenge Review", "Date")),
+    "T": ArtifactSpec("T", Path("research/threads"), ("Status", "Created")),
 }
 
 SPECIAL_NOTES = {
@@ -80,6 +82,7 @@ _FRONTMATTER_TO_META = {
     "status": "Status",
     "hypothesis": "Hypothesis",
     "experiment": "Experiment",
+    "thread": "Thread",
     "impact": "Impact",
     "source_type": "Type",
     "relevance": "Relevance",
@@ -408,12 +411,165 @@ def validate_ref(
     return ref
 
 
+_JSON_PRIMITIVE_TYPES: tuple[type, ...] = (str, int, float, bool, type(None))
+
+
+def _is_json_serializable_value(value: object) -> bool:
+    """Recursive: primitives, or lists/dicts of them. Rejects tuples / sets /
+    arbitrary objects — the validator is only attesting shape, not rigor."""
+    if isinstance(value, _JSON_PRIMITIVE_TYPES):
+        return True
+    if isinstance(value, list):
+        return all(_is_json_serializable_value(v) for v in value)
+    if isinstance(value, dict):
+        return all(
+            isinstance(k, str) and _is_json_serializable_value(v)
+            for k, v in value.items()
+        )
+    return False
+
+
+def validate_conditions_block(note: NoteRecord, result: ValidationResult) -> None:
+    """Check that an experiment's ``conditions:`` frontmatter block is a
+    dict of dicts of JSON primitives.
+
+    Applies only to ``E###`` artifacts with a ``conditions:`` field. Absent
+    field → no-op (backward compatible). Malformed field → ``conditions_schema``
+    issue per offending entry.
+
+    The validator here re-parses the raw frontmatter because ``NoteRecord``
+    only carries mapped metadata keys (via ``_FRONTMATTER_TO_META``) — the
+    ``conditions`` field isn't mapped and would otherwise be invisible.
+    """
+    raw_frontmatter = parse_frontmatter_values(note.text)
+    conditions = raw_frontmatter.get("conditions")
+    if conditions is None or conditions == "" or conditions == {}:
+        return
+
+    if not isinstance(conditions, dict):
+        result.add(
+            "conditions_schema",
+            f"{note.path.name} 'conditions' must be a mapping of "
+            f"<name>: <config-dict>, got {type(conditions).__name__}.",
+            note.path,
+        )
+        return
+
+    for cond_name, cond_block in conditions.items():
+        if not isinstance(cond_name, str):
+            result.add(
+                "conditions_schema",
+                f"{note.path.name} condition name {cond_name!r} must be a string.",
+                note.path,
+            )
+            continue
+        if not isinstance(cond_block, dict):
+            result.add(
+                "conditions_schema",
+                f"{note.path.name} condition '{cond_name}' must be a mapping "
+                f"of config keys to JSON-serializable values, got "
+                f"{type(cond_block).__name__}.",
+                note.path,
+            )
+            continue
+        for key, value in cond_block.items():
+            if not isinstance(key, str):
+                result.add(
+                    "conditions_schema",
+                    f"{note.path.name} condition '{cond_name}' has non-string "
+                    f"key {key!r}.",
+                    note.path,
+                )
+                continue
+            if not _is_json_serializable_value(value):
+                result.add(
+                    "conditions_schema",
+                    f"{note.path.name} condition '{cond_name}.{key}' value is "
+                    f"not JSON-serializable: got {type(value).__name__}.",
+                    note.path,
+                )
+
+
+_TEMPLATE_FILENAMES_FOR_HEADER_CHECK: dict[str, str] = {
+    "H": "hypothesis.md",
+    "E": "experiment.md",
+    "F": "finding.md",
+    "T": "thread.md",
+}
+_VENDOR_TEMPLATES_DIR = (
+    Path(__file__).resolve().parent / "vendor" / "limina" / "templates"
+)
+
+
+@functools.cache
+def _required_headers_for_kind(kind: str) -> tuple[str, ...]:
+    """Extract ordered ``## ``-level headers from the vendored template for ``kind``.
+
+    Returns the headers an artifact of this kind is expected to contain.
+    Excludes ``## Links`` (already comprehensively validated by
+    :func:`validate_links`) so we don't double-report. Returns an empty
+    tuple for kinds without a tracked template (e.g. ``L``, ``CR``,
+    ``SR`` — those aren't enforced yet).
+    """
+    filename = _TEMPLATE_FILENAMES_FOR_HEADER_CHECK.get(kind)
+    if filename is None:
+        return ()
+    template_path = _VENDOR_TEMPLATES_DIR / filename
+    if not template_path.is_file():
+        return ()
+    headers: list[str] = []
+    for raw_line in template_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.rstrip()
+        if line.startswith("## "):
+            header = line[3:].strip()
+            if header == "Links":
+                # Covered by validate_links — avoid double-reporting.
+                continue
+            headers.append(header)
+    return tuple(headers)
+
+
+_H2_HEADER_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
+
+
+def validate_required_headers(note: NoteRecord, result: ValidationResult) -> None:
+    """Check that an artifact contains every top-level ``## `` header
+    declared by its kind's shipped template.
+
+    Per Kaden's design directive: *"we need to stick to the templates
+    precisely."* Authors who delete a template section under pressure
+    (deciding it "doesn't apply") are caught here. Extra headers beyond
+    the template are allowed — artifacts can extend, just not contract.
+
+    Currently enforced for H / E / F. L / CR / SR are not yet checked.
+    """
+    required = _required_headers_for_kind(note.kind)
+    if not required:
+        return
+    found = {m.group(1).strip() for m in _H2_HEADER_RE.finditer(note.text)}
+    for header in required:
+        if header not in found:
+            result.add(
+                "missing_template_header",
+                f"{note.path.name} is missing required template header "
+                f"'## {header}'. Templates are contracts, not suggestions — "
+                "fill the section (with a placeholder if there's nothing to "
+                "say yet) or update the shipped template.",
+                note.path,
+            )
+
+
 def validate_artifact(note: NoteRecord, artifacts: dict[str, NoteRecord], note_index: dict[str, NoteRecord], result: ValidationResult) -> None:
     validate_required_fields(note, result)
     validate_artifact_identity(note, result)
+    validate_required_headers(note, result)
 
-    if note.kind == "E":
+    if note.kind == "H":
+        # Optional `Thread` field — when set, must reference an existing T###.
+        validate_ref(note, "Thread", "T", artifacts, result)
+    elif note.kind == "E":
         validate_ref(note, "Hypothesis", "H", artifacts, result)
+        validate_conditions_block(note, result)
     elif note.kind == "F":
         hypothesis_id = validate_ref(note, "Hypothesis", "H", artifacts, result)
         experiment_id = validate_ref(note, "Experiment", "E", artifacts, result)
@@ -425,6 +581,10 @@ def validate_artifact(note: NoteRecord, artifacts: dict[str, NoteRecord], note_i
                     f"{note.path.name} links {hypothesis_id}, but {experiment_id} links {experiment_hypothesis}.",
                     note.path,
                 )
+    elif note.kind == "T":
+        # Threads are not in the H→E→F enforcement chain — they're parent
+        # context for hypotheses, validated structurally only.
+        pass
     elif note.kind == "CR":
         target_id = normalize_ref(note.metadata.get("Target ID", ""))
         if target_id and target_id not in note_index:
@@ -453,7 +613,11 @@ def required_links_for(note: NoteRecord) -> set[str]:
         return {"ACTIVE", "CHALLENGE"}
 
     required = {"ACTIVE", "CHALLENGE"}
-    if note.kind == "E":
+    if note.kind == "H":
+        thread_id = normalize_ref(note.metadata.get("Thread", ""))
+        if thread_id:
+            required.add(thread_id)
+    elif note.kind == "E":
         hypothesis_id = normalize_ref(note.metadata.get("Hypothesis", ""))
         if hypothesis_id:
             required.add(hypothesis_id)
@@ -501,7 +665,11 @@ def validate_backlink(parent_ref: str, child_note: NoteRecord, note_index: dict[
 
 
 def validate_backlinks(note: NoteRecord, note_index: dict[str, NoteRecord], result: ValidationResult) -> None:
-    if note.kind == "E":
+    if note.kind == "H":
+        thread_id = normalize_ref(note.metadata.get("Thread", ""))
+        if thread_id:
+            validate_backlink(thread_id, note, note_index, result)
+    elif note.kind == "E":
         hypothesis_id = normalize_ref(note.metadata.get("Hypothesis", ""))
         if hypothesis_id:
             validate_backlink(hypothesis_id, note, note_index, result)

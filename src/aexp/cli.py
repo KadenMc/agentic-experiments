@@ -14,12 +14,39 @@ from rich.console import Console
 from rich.table import Table
 
 from aexp import __version__
+from aexp.artifacts import (
+    ArtifactCreateError,
+    close_thread,
+    new_experiment,
+    new_finding,
+    new_hypothesis,
+    new_thread,
+)
 from aexp.install import install_limina
+from aexp.limina_io import (
+    ArtifactNotFoundError,
+    list_kb_artifacts,
+    load_thread,
+)
 from aexp.linking import (
     link_to_experiment,
     list_batches,
     show_batch,
     summarize_run,
+)
+from aexp.queue import (
+    RunnerCommandMissing,
+    SubprocessFailed,
+    SweepParseError,
+    add_many_to_queue,
+    add_to_queue,
+    clear_queue,
+    list_queue,
+    materialize_queue,
+    parse_sweep,
+    remove_from_queue,
+    run_queue,
+    run_queued,
 )
 from aexp.runs import create_run, find_runs, open_run
 from aexp.trackers import NoopAdapter, TrackerInitError, bind_tracker
@@ -82,13 +109,14 @@ _INSTALL_HEADS_UP = """\
   - [cyan]templates/[/cyan]              artifact templates (you can edit these)
   - [cyan].claude/settings.json[/cyan]   JSON-merge: our hooks added, your hooks + permissions preserved
   - [cyan].claude/skills/[/cyan]         4 research-methodology skills
-  - [cyan].claude/commands/[/cyan]       3 slash commands ([green]/aexp-new-run[/green], [green]/aexp-close-run[/green], [green]/aexp-close-batch[/green])
+  - [cyan].claude/commands/[/cyan]       9 slash commands (new/close H·E·F·run, list-runs, status, validate)
   - [cyan].mcp.json[/cyan]               JSON-merge: our `aexp` MCP server added, your other servers preserved
   - [cyan]AGENTS.md[/cyan], [cyan]CLAUDE.md[/cyan]       block-merge: your content outside our `<!-- agentic-experiments:begin/end -->` markers is preserved
   - [cyan].runs/[/cyan]                  signac project (idempotent; initialised if missing)
   - [cyan].aexp/installed.json[/cyan]   install marker with interpreter path + vendor sha
 
 By default, conflicting existing files are [yellow]skipped with a warning[/yellow] — pass [bold]--force[/bold] to overwrite.
+[bold]User-authored scaffold content under `kb/` and `templates/` is preserved even under --force[/bold] (see `preserved_user_modified` in the summary); only tooling files (slash commands, skills, hooks, `.mcp.json`) are refreshed.
 Hook scripts and validator code live inside the installed `aexp` package; no Python you didn't write lands in your repo.
 """
 
@@ -99,6 +127,13 @@ def _print_actions(actions: list, *, dry_run: bool) -> None:
         kinds[a.kind] = kinds.get(a.kind, 0) + 1
         if a.kind == "skipped_conflict":
             console.print(f"[yellow]{a.kind}[/yellow] {a.path}: {a.detail}")
+        elif a.kind == "preserved_user_modified":
+            # Per-file line so users know exactly which scaffold files kept
+            # their edits under --force.
+            console.print(
+                f"[cyan]preserved_user_modified[/cyan] {a.path}: "
+                "kept your content; shipped default not applied"
+            )
         elif a.kind in ("merged_json", "merged_block", "wrote_marker", "initialized_runs"):
             console.print(f"[green]{a.kind}[/green] {a.path}")
     title = "dry-run plan" if dry_run else "install summary"
@@ -121,7 +156,16 @@ _DEV_HEADS_UP = (
 @app.command()
 def install(
     run_store: str = typer.Option(".runs", "--run-store", help="Path for signac project."),
-    force: bool = typer.Option(False, "--force", help="Overwrite conflicting user files."),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help=(
+            "Overwrite conflicting tooling files (slash commands, skills, "
+            "hooks, .mcp.json). User-authored scaffold content under `kb/` "
+            "and `templates/` is preserved even here — delete the file "
+            "first if you want to reset it to the shipped default."
+        ),
+    ),
     assert_git: bool = typer.Option(
         True, "--require-git/--no-require-git", help="Require a .git dir at repo root."
     ),
@@ -196,6 +240,247 @@ def install(
         cwd, run_store=run_store, force=force, assert_git=assert_git, dev=dev
     )
     _print_actions(actions, dry_run=False)
+
+
+# ---------------------------------------------------------------------------
+# artifact creation (H / E / F)
+# ---------------------------------------------------------------------------
+
+
+def _print_artifact_result(label: str, result) -> None:  # type: ignore[no-untyped-def]
+    console.print(f"[green]created[/green] {label} [bold]{result.artifact_id}[/bold]")
+    console.print(f"  path: {result.path}")
+    if result.backlinks_patched:
+        console.print(
+            f"  backlinks patched: {', '.join(result.backlinks_patched)}"
+        )
+    if result.backlinks_already_present:
+        console.print(
+            f"  backlinks already present: {', '.join(result.backlinks_already_present)}"
+        )
+
+
+@app.command("new-hypothesis")
+def new_hypothesis_cmd(
+    title: str = typer.Option(..., "--title", help="Human-readable hypothesis title."),
+    id: str | None = typer.Option(None, "--id", help="Force a specific H### id."),
+    link: list[str] = typer.Option(
+        [], "--link", help="Extra target to add to ## Links (repeatable)."
+    ),
+    thread: str | None = typer.Option(
+        None,
+        "--thread",
+        help=(
+            "Optional T### parent thread this hypothesis was promoted from. "
+            "When set, the thread must exist on disk; its ## Links will be "
+            "auto-patched."
+        ),
+    ),
+) -> None:
+    """Create a new hypothesis (H###) with a validator-clean skeleton."""
+    try:
+        result = new_hypothesis(
+            title=title,
+            artifact_id=id,
+            extra_links=link or None,
+            thread_id=thread,
+        )
+    except ArtifactCreateError as exc:
+        console.print(f"[red]{exc}[/red]")
+        _exit(2)
+    _print_artifact_result("hypothesis", result)
+
+
+@app.command("new-experiment")
+def new_experiment_cmd(
+    title: str = typer.Option(..., "--title", help="Human-readable experiment title."),
+    hypothesis: str = typer.Option(
+        ..., "--hypothesis", help="Parent H### id (must exist on disk)."
+    ),
+    id: str | None = typer.Option(None, "--id", help="Force a specific E### id."),
+    link: list[str] = typer.Option(
+        [], "--link", help="Extra target to add to ## Links (repeatable)."
+    ),
+) -> None:
+    """Create a new experiment (E###) under an existing hypothesis."""
+    try:
+        result = new_experiment(
+            title=title,
+            hypothesis_id=hypothesis,
+            artifact_id=id,
+            extra_links=link or None,
+        )
+    except ArtifactCreateError as exc:
+        console.print(f"[red]{exc}[/red]")
+        _exit(2)
+    _print_artifact_result("experiment", result)
+
+
+@app.command("new-finding")
+def new_finding_cmd(
+    title: str = typer.Option(..., "--title", help="Human-readable finding title."),
+    hypothesis: str = typer.Option(..., "--hypothesis", help="Parent H### id."),
+    experiment: str = typer.Option(..., "--experiment", help="Parent E### id."),
+    impact: str = typer.Option(
+        "MEDIUM", "--impact", help="CRITICAL | HIGH | MEDIUM | LOW."
+    ),
+    id: str | None = typer.Option(None, "--id", help="Force a specific F### id."),
+    link: list[str] = typer.Option(
+        [], "--link", help="Extra target to add to ## Links (repeatable)."
+    ),
+) -> None:
+    """Create a new finding (F###) citing one hypothesis + one experiment.
+
+    This writes the finding skeleton and patches both parents' ``## Links``
+    sections. The ``supporting_runs:`` citation is added separately — use
+    ``/aexp-finding-from-run`` (single job), ``/aexp-finding-from-batch``
+    (batch selector), or ``/aexp-finding-placeholder`` (no citations yet)
+    depending on what the finding cites.
+    """
+    try:
+        result = new_finding(
+            title=title,
+            hypothesis_id=hypothesis,
+            experiment_id=experiment,
+            impact=impact,
+            artifact_id=id,
+            extra_links=link or None,
+        )
+    except ArtifactCreateError as exc:
+        console.print(f"[red]{exc}[/red]")
+        _exit(2)
+    _print_artifact_result("finding", result)
+
+
+# ---------------------------------------------------------------------------
+# thread lifecycle (T### — research direction broader than a hypothesis)
+# ---------------------------------------------------------------------------
+
+
+@app.command("new-thread")
+def new_thread_cmd(
+    title: str = typer.Option(..., "--title", help="Human-readable thread title."),
+    id: str | None = typer.Option(None, "--id", help="Force a specific T### id."),
+    link: list[str] = typer.Option(
+        [], "--link", help="Extra target to add to ## Links (repeatable)."
+    ),
+) -> None:
+    """Create a new thread (T###) — a forward-looking research concern
+    broader than a hypothesis.
+
+    Threads capture exploration that may spawn 2-5 hypotheses over their
+    lifetime. They're not in the H→E→F enforcement chain; they're parent
+    context. Promote a thread to a hypothesis with
+    ``aexp new-hypothesis --thread T###``. Close a thread with
+    ``aexp close-thread T###``.
+    """
+    try:
+        result = new_thread(
+            title=title, artifact_id=id, extra_links=link or None
+        )
+    except ArtifactCreateError as exc:
+        console.print(f"[red]{exc}[/red]")
+        _exit(2)
+    _print_artifact_result("thread", result)
+
+
+@app.command("list-threads")
+def list_threads_cmd(
+    status: str | None = typer.Option(
+        None,
+        "--status",
+        help="Filter: PROPOSED | EXPLORING | PROMOTED | CLOSED.",
+    ),
+    tag: str | None = typer.Option(
+        None, "--tag", help="Filter to threads with this tag in frontmatter."
+    ),
+) -> None:
+    """List every thread in kb/research/threads/."""
+    from aexp.utils.paths import find_repo_root
+
+    kb = find_repo_root() / "kb"
+    threads = list_kb_artifacts(kb, kind="T")
+    rows = []
+    for t in threads:
+        t_status = str(t.metadata.get("Status", "") or "").strip()
+        t_tags = t.metadata.get("tags") or []
+        if status is not None and t_status != status:
+            continue
+        if tag is not None:
+            tag_list = (
+                t_tags if isinstance(t_tags, list) else [str(t_tags)]
+            )
+            if tag not in tag_list:
+                continue
+        rows.append((t.id, t_status, t.title, t.path))
+
+    table = Table(title=f"threads ({len(rows)})", show_header=True)
+    for col in ("id", "status", "title", "path"):
+        table.add_column(col)
+    for row in sorted(rows):
+        table.add_row(*[str(c) for c in row])
+    console.print(table)
+
+
+@app.command("show-thread")
+def show_thread_cmd(thread_id: str) -> None:
+    """Show one thread's frontmatter + body summary."""
+    from aexp.utils.paths import find_repo_root
+
+    kb = find_repo_root() / "kb"
+    try:
+        t = load_thread(thread_id, kb_root=kb)
+    except ArtifactNotFoundError as exc:
+        console.print(f"[red]{exc}[/red]")
+        _exit(2)
+        return
+    console.print(f"[bold]{t.id}[/bold] — {t.title}")
+    console.print(f"  path: {t.path}")
+    status = t.metadata.get("Status", "") or "(unset)"
+    created = t.metadata.get("Created", "") or "(unset)"
+    last_updated = t.metadata.get("Last updated", "") or "(unset)"
+    console.print(f"  status: [cyan]{status}[/cyan]")
+    console.print(f"  created: {created}")
+    console.print(f"  last_updated: {last_updated}")
+
+
+@app.command("close-thread")
+def close_thread_cmd(
+    thread_id: str,
+    conclusion: str | None = typer.Option(
+        None,
+        "--conclusion",
+        help=(
+            "Markdown body to write into the thread's ## Conclusion "
+            "section. If omitted, existing body is preserved."
+        ),
+    ),
+    promoted: bool = typer.Option(
+        False,
+        "--promoted",
+        help=(
+            "Set status to PROMOTED instead of CLOSED. Use when one or "
+            "more hypotheses have been spawned and the thread persists "
+            "as parent context."
+        ),
+    ),
+) -> None:
+    """Transition a thread to CLOSED (default) or PROMOTED."""
+    target_status = "PROMOTED" if promoted else "CLOSED"
+    try:
+        result = close_thread(
+            thread_id, conclusion=conclusion, new_status=target_status
+        )
+    except ArtifactCreateError as exc:
+        console.print(f"[red]{exc}[/red]")
+        _exit(2)
+        return
+    console.print(
+        f"[green]{result.new_status}[/green] [bold]{result.thread_id}[/bold]"
+    )
+    console.print(f"  path: {result.path}")
+    if result.conclusion_written:
+        console.print("  conclusion: rewritten")
 
 
 # ---------------------------------------------------------------------------
@@ -496,6 +781,395 @@ def install_slash_commands(
             console.print(f"[green]copied[/green] {a.path}")
     if not actions:
         console.print("[yellow]no slash commands to install[/yellow]")
+
+
+# ---------------------------------------------------------------------------
+# queue subcommand group — pending-run registration + runner materialization
+# ---------------------------------------------------------------------------
+
+
+queue_app = typer.Typer(
+    help="Register pending runs; materialize them as a runner script.",
+    no_args_is_help=True,
+)
+app.add_typer(queue_app, name="queue")
+
+
+def _parse_sweep_or_exit(raw: str | None) -> dict:
+    if not raw:
+        return {}
+    try:
+        return parse_sweep(raw)
+    except SweepParseError as exc:
+        console.print(f"[red]invalid --sweep spec: {exc}[/red]")
+        _exit(2)
+    return {}  # unreachable; _exit raises
+
+
+def _parse_slurm_kwargs(
+    time: str | None,
+    mem: str | None,
+    gpus: str | None,
+    partition: str | None,
+    account: str | None,
+    extra: str | None,
+) -> dict:
+    kw: dict[str, str] = {}
+    if time is not None:
+        kw["time"] = time
+    if mem is not None:
+        kw["mem"] = mem
+    if gpus is not None:
+        kw["gpus"] = gpus
+    if partition is not None:
+        kw["partition"] = partition
+    if account is not None:
+        kw["account"] = account
+    if extra is not None:
+        kw["extra"] = extra
+    return kw
+
+
+@queue_app.command("add")
+def queue_add_cmd(
+    experiment: str = typer.Option(..., "--experiment", help="Limina E### id."),
+    hypothesis: str | None = typer.Option(None, "--hypothesis"),
+    sp: str | None = typer.Option(
+        None, "--sp", help="Fixed sp values: KEY=VAL,KEY=VAL."
+    ),
+    sweep: str | None = typer.Option(
+        None,
+        "--sweep",
+        help=(
+            'Cartesian sweep: "KEY=V1|V2|V3, KEY2=0..3". Pipe-separated '
+            "enum values; integer range via a..b inclusive. Combines with "
+            "--sp for fixed values."
+        ),
+    ),
+    tag: str | None = typer.Option(None, "--tag", help="Groups queued jobs."),
+    runner_hint: str | None = typer.Option(
+        None, "--runner-hint", help="Suggest runner for materialize."
+    ),
+    no_commit: bool = typer.Option(
+        False, "--no-commit", help="Skip code_commit/code_dirty in sp."
+    ),
+    no_resolve: bool = typer.Option(
+        False,
+        "--no-resolve",
+        help=(
+            "Skip condition-block resolution. By default, if sp.condition "
+            "names a key in the experiment's conditions: frontmatter, the "
+            "block is merged into sp."
+        ),
+    ),
+) -> None:
+    """Register one or more pending runs."""
+    base_sp = _parse_sp_kv(sp)
+    sweep_dict = _parse_sweep_or_exit(sweep)
+
+    overlap = set(base_sp) & set(sweep_dict)
+    if overlap:
+        console.print(
+            f"[red]--sp and --sweep share keys: {sorted(overlap)}; "
+            "put each key in exactly one.[/red]"
+        )
+        _exit(2)
+
+    if sweep_dict:
+        jobs = add_many_to_queue(
+            experiment_id=experiment,
+            hypothesis_id=hypothesis,
+            base_sp=base_sp,
+            sweep=sweep_dict,
+            tag=tag,
+            runner_hint=runner_hint,
+            include_commit=not no_commit,
+            resolve_conditions=not no_resolve,
+        )
+        console.print(
+            f"[green]queued[/green] [bold]{len(jobs)}[/bold] job(s)"
+            + (f" under tag=[cyan]{tag}[/cyan]" if tag else "")
+        )
+        for job in jobs:
+            console.print(f"  {job.id[:8]}  {dict(job.sp)}")
+        return
+
+    job = add_to_queue(
+        experiment_id=experiment,
+        hypothesis_id=hypothesis,
+        statepoint=base_sp,
+        tag=tag,
+        runner_hint=runner_hint,
+        include_commit=not no_commit,
+        resolve_conditions=not no_resolve,
+    )
+    console.print(f"[green]queued[/green] [bold]{job.id}[/bold]")
+    console.print(f"  workspace: {job.path}")
+    if tag:
+        console.print(f"  tag: {tag}")
+
+
+@queue_app.command("list")
+def queue_list_cmd(
+    experiment: str | None = typer.Option(None, "--experiment"),
+    tag: str | None = typer.Option(None, "--tag"),
+    include_terminal: bool = typer.Option(
+        False,
+        "--include-terminal",
+        help="Show jobs in terminal states (complete/failed/abandoned).",
+    ),
+) -> None:
+    """List queued runs (pending-run rows only by default)."""
+    entries = list_queue(
+        experiment_id=experiment,
+        tag=tag,
+        include_terminal=include_terminal,
+    )
+    table = Table(
+        title=f"queue ({len(entries)} entr{'y' if len(entries) == 1 else 'ies'})",
+        show_header=True,
+    )
+    for col in ("short_id", "experiment", "status", "tag", "sp"):
+        table.add_column(col)
+    for e in entries:
+        sp_s = ", ".join(
+            f"{k}={v!r}"
+            for k, v in sorted(e.sp.items())
+            if k not in ("experiment_id", "code_commit", "code_dirty")
+        )
+        table.add_row(
+            e.job_id[:8],
+            e.experiment_id or "",
+            e.status or "",
+            e.tag or "",
+            sp_s,
+        )
+    console.print(table)
+
+
+@queue_app.command("remove")
+def queue_remove_cmd(job_id: str) -> None:
+    """Mark one queued job ``abandoned`` without executing it."""
+    remove_from_queue(job_id)
+    console.print(f"[yellow]abandoned[/yellow] {job_id[:8]}")
+
+
+@queue_app.command("clear")
+def queue_clear_cmd(
+    experiment: str | None = typer.Option(None, "--experiment"),
+    tag: str | None = typer.Option(None, "--tag"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation."),
+) -> None:
+    """Bulk-abandon queued jobs matching the filter."""
+    import sys as _sys
+
+    entries = list_queue(experiment_id=experiment, tag=tag)
+    if not entries:
+        console.print("[yellow]no queued jobs match the filter.[/yellow]")
+        return
+    if not yes:
+        console.print(
+            f"[yellow]about to abandon {len(entries)} queued job(s).[/yellow]"
+        )
+        if not _sys.stdin.isatty():
+            console.print(
+                "[yellow]No TTY; rerun with --yes to confirm.[/yellow]"
+            )
+            _exit(1)
+        if not typer.confirm("Proceed?", default=False):
+            console.print("[yellow]aborted.[/yellow]")
+            return
+    abandoned = clear_queue(experiment_id=experiment, tag=tag)
+    console.print(f"[yellow]abandoned[/yellow] {len(abandoned)} job(s)")
+
+
+@queue_app.command("materialize")
+def queue_materialize_cmd(
+    runner: str = typer.Option(
+        "shell", "--runner", help="shell | slurm | manual"
+    ),
+    output: str = typer.Option(
+        "run_queue.sh", "--output", "-o", help="Output path."
+    ),
+    experiment: str | None = typer.Option(None, "--experiment"),
+    tag: str | None = typer.Option(None, "--tag"),
+    slurm_time: str | None = typer.Option(
+        None, "--slurm-time", help="#SBATCH --time value (e.g. 04:00:00)."
+    ),
+    slurm_mem: str | None = typer.Option(
+        None, "--slurm-mem", help="#SBATCH --mem value (e.g. 32G)."
+    ),
+    slurm_gpus: str | None = typer.Option(
+        None, "--slurm-gpus", help="#SBATCH --gpus value."
+    ),
+    slurm_partition: str | None = typer.Option(
+        None, "--slurm-partition"
+    ),
+    slurm_account: str | None = typer.Option(None, "--slurm-account"),
+    slurm_extra: str | None = typer.Option(
+        None,
+        "--slurm-extra",
+        help="Free-form #SBATCH lines (newline-separated). Appended verbatim.",
+    ),
+) -> None:
+    """Emit a runner script covering every matching queue entry."""
+    if runner not in ("shell", "slurm", "manual"):
+        console.print(
+            f"[red]unknown runner {runner!r}; expected shell|slurm|manual[/red]"
+        )
+        _exit(2)
+
+    slurm_kwargs = _parse_slurm_kwargs(
+        slurm_time, slurm_mem, slurm_gpus, slurm_partition,
+        slurm_account, slurm_extra,
+    )
+    try:
+        result = materialize_queue(
+            runner=runner,  # type: ignore[arg-type]
+            output_path=output,
+            experiment_id=experiment,
+            tag=tag,
+            slurm_kwargs=slurm_kwargs or None,
+        )
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        _exit(2)
+        return
+    console.print(
+        f"[green]materialized[/green] [bold]{result.num_jobs}[/bold] "
+        f"job(s) → {result.output_path}"
+    )
+    if runner == "shell":
+        console.print(f"  run it: [cyan]bash {output}[/cyan]")
+    elif runner == "slurm":
+        console.print(f"  submit it: [cyan]sbatch {output}[/cyan]")
+    elif runner == "manual":
+        console.print(
+            "  copy the commands from the output file into your runner."
+        )
+
+
+@queue_app.command("run")
+def queue_run_cmd(
+    experiment: str | None = typer.Option(None, "--experiment"),
+    tag: str | None = typer.Option(None, "--tag"),
+    index: int | None = typer.Option(
+        None,
+        "--index",
+        help=(
+            "If set, run only the Nth pending job (0-indexed). Intended "
+            'for slurm array tasks: `--index "$SLURM_ARRAY_TASK_ID"`. '
+            "Without --index, runs every pending job in the filter "
+            "sequentially."
+        ),
+    ),
+    continue_on_failure: bool = typer.Option(
+        False,
+        "--continue-on-failure",
+        help=(
+            "When running multiple jobs without --index, don't bail on the "
+            "first failure — keep going. Default: stop on first failure."
+        ),
+    ),
+    force: bool = typer.Option(
+        False, "--force", help="Re-run jobs in terminal states."
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Print rendered commands without executing."
+    ),
+) -> None:
+    """Execute queued jobs from inside your own batch script.
+
+    Iterates the pending queue (filtered by --experiment / --tag) and
+    runs each matching job via `aexp run-queued` semantics. Designed to
+    live inside whatever batch script already works for your site:
+
+    \b
+      # Sequential (single-node):
+      aexp queue run --tag overnight
+
+    \b
+      # Array-parallel (one queued job per slurm array task):
+      #SBATCH --array=0-7
+      aexp queue run --tag overnight --index "$SLURM_ARRAY_TASK_ID"
+
+    Jobs are enumerated in stable order (ascending queued_at, then
+    job_id) so --index picks deterministically.
+    """
+    try:
+        returncodes = run_queue(
+            experiment_id=experiment,
+            tag=tag,
+            index=index,
+            continue_on_failure=continue_on_failure,
+            force=force,
+            dry_run=dry_run,
+        )
+    except IndexError as exc:
+        console.print(f"[red]{exc}[/red]")
+        _exit(2)
+        return
+    except RunnerCommandMissing as exc:
+        console.print(f"[red]{exc}[/red]")
+        _exit(2)
+        return
+    except SubprocessFailed as exc:
+        console.print(f"[red]runner failed: {exc}[/red]")
+        _exit(1)
+        return
+
+    if not returncodes:
+        console.print("[yellow]no queued jobs match the filter[/yellow]")
+        return
+    failed = sum(1 for rc in returncodes if rc != 0)
+    passed = len(returncodes) - failed
+    if failed == 0:
+        console.print(
+            f"[green]ran {passed}/{len(returncodes)} job(s) successfully[/green]"
+        )
+    else:
+        console.print(
+            f"[yellow]ran {len(returncodes)} job(s), "
+            f"{failed} failed / {passed} passed[/yellow]"
+        )
+        _exit(1)
+
+
+# ---------------------------------------------------------------------------
+# run-queued — runner-side execution of one queued job
+# ---------------------------------------------------------------------------
+
+
+@app.command("run-queued")
+def run_queued_cmd(
+    job_id: str,
+    force: bool = typer.Option(
+        False, "--force", help="Re-run even if status is terminal."
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Print the rendered command without executing."
+    ),
+) -> None:
+    """Execute one queued job. Idempotent: terminal states skip unless --force.
+
+    Invoked per-job by materialized runner scripts. Reads the experiment's
+    ``runner_command`` template (or per-job override), renders it against
+    the job's resolved sp, and runs it via ``subprocess.run(shell=True)``
+    inside aexp's ``run_lifecycle`` so status transitions happen
+    automatically.
+    """
+    try:
+        returncode = run_queued(job_id, force=force, dry_run=dry_run)
+    except RunnerCommandMissing as exc:
+        console.print(f"[red]{exc}[/red]")
+        _exit(2)
+        return
+    except SubprocessFailed as exc:
+        console.print(f"[red]runner failed: {exc}[/red]")
+        _exit(1)
+        return
+    if returncode != 0:
+        _exit(returncode)
 
 
 if __name__ == "__main__":

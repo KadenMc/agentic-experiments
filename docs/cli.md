@@ -43,6 +43,11 @@ script is composing command lines.
 aexp install [--run-store PATH] [--force] [--no-require-git]
 aexp version
 
+aexp new-thread    --title "..." [--id T###] [--link <wikilink>...]
+aexp list-threads  [--status STATE] [--tag TAG]
+aexp show-thread   <T###>
+aexp close-thread  <T###> [--conclusion "<markdown>"] [--promoted]
+
 aexp new-run --experiment E### [--hypothesis H###] [--sub-hypothesis H###]
             [--sp K=V,...] [--no-commit]
 aexp list-runs [--experiment E###] [--hypothesis H###] [--status STATUS]
@@ -57,7 +62,31 @@ aexp bind-tracker <job_id> --backend {noop,wandb} [--project P] [--offline]
 aexp sync-offline [--dry-run]
 aexp validate [--kb-only | --runs-only]
 aexp install-slash-commands [--target .claude/commands]
+
+# Queue subcommand group — pending-run registration + in-script execution + materialization
+aexp queue add         --experiment E### [--sp K=V,...] [--sweep "K=V|V,K=a..b"]
+                        [--tag T] [--hypothesis H###] [--no-resolve] [--no-commit]
+aexp queue list        [--experiment E###] [--tag T] [--include-terminal]
+aexp queue run         [--experiment E###] [--tag T] [--index N]
+                        [--continue-on-failure] [--force] [--dry-run]
+aexp queue remove      <job_id>
+aexp queue clear       [--experiment E###] [--tag T] [--yes]
+aexp queue materialize [--runner shell|slurm|manual] [--output PATH]
+                        [--tag T] [--experiment E###]
+                        [--slurm-time T] [--slurm-mem M] [--slurm-gpus N]
+                        [--slurm-partition P] [--slurm-account A] [--slurm-extra "..."]
+aexp run-queued <job_id> [--force] [--dry-run]
 ```
+
+`aexp queue run` is the primary cluster primitive — call it from inside
+your own batch script, sequential or array-parallel. `materialize` is
+for users who want a starter template to customize; see
+[`docs/queue.md`](queue.md) for why materializing a turn-key slurm
+script is a lie aexp declined to tell.
+
+See [docs/queue.md](queue.md) for the full queue model (sp resolution,
+`runner_command` templates, cross-machine sync) — this file only lists
+the CLI surface.
 
 ## Verbs — details
 
@@ -76,7 +105,7 @@ and its merge policy, then prompts for confirmation before writing. Flags:
 
 - `--dry-run` / `-n` — print the planned actions without writing anything.
 - `--yes` / `-y` — skip the confirmation prompt (use in scripted / CI runs).
-- `--force` — overwrite conflicting user files instead of skipping with a warning.
+- `--force` — overwrite conflicting **tooling** files (slash commands, skills, hooks, `.mcp.json`). **User-authored scaffold content** under `kb/` and `templates/` is preserved even under `--force` (reported as `preserved_user_modified` in the install summary); delete the file first if you genuinely want to reset it to the shipped default.
 - `--dev` / `-D` — write `.mcp.json` using the current Python interpreter
   (`"<python_exe>" -m aexp.mcp_server`) instead of the portable `uvx`/PyPI form.
   Use when you've installed `aexp` editable (`pip install -e`) and want edits
@@ -153,9 +182,12 @@ Exit code 1 on any error. `--kb-only` skips runs-side; `--runs-only` skips the K
 
 ### `aexp install-slash-commands`
 
-Copies the shipped slash commands (`aexp-new-run.md`, `aexp-close-run.md`,
-`aexp-close-batch.md`) into `<target>/`, default `.claude/commands/`.
-Safe to re-run.
+Copies the shipped slash commands (artifact creation: `aexp-new-hypothesis`,
+`aexp-new-experiment`, `aexp-new-run`; finding creation:
+`aexp-finding-from-run`, `aexp-finding-from-batch`,
+`aexp-finding-placeholder`; read / inspect: `aexp-show-run`,
+`aexp-show-batch`, `aexp-list-runs`, `aexp-status`, `aexp-validate`) into
+`<target>/`, default `.claude/commands/`. Safe to re-run.
 
 ## Exit codes
 

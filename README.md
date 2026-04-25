@@ -30,7 +30,7 @@
 
 **agentic-experiments** (import name `aexp`) is an opinionated research harness for ML experimentation done *with* an AI agent — typically [Claude Code](https://docs.anthropic.com/en/docs/claude-code). It forces a **Hypothesis → Experiment → Finding** chain on every run, ties that chain to git commits, and validates citation integrity at every turn.
 
-> **10 CLI verbs** &bull; **9 MCP tools** &bull; **3 slash commands** &bull; **4 research skills** &bull; **170+ tests**
+> **18 CLI verbs** &bull; **21 MCP tools** &bull; **18 slash commands** &bull; **4 research skills** &bull; **300+ tests**
 
 ### What this looks like in practice
 
@@ -77,7 +77,7 @@ Every operation exists in three places, all thin wrappers over the same Python f
 | Surface | Triggered by | Best for |
 |---|---|---|
 | **MCP tools** (`new_run`, `list_runs`, `validate`, …) | The agent during a turn | Structured queries, programmatic chaining, typed JSON returns |
-| **Slash commands** (`/aexp-new-run`, `/aexp-close-run`, `/aexp-close-batch`) | User typing `/aexp-…` | Guided multi-step workflows |
+| **Slash commands** (`/aexp-new-hypothesis`, `/aexp-new-run`, `/aexp-finding-from-batch`, …) | User typing `/aexp-…` | Guided multi-step workflows |
 | **CLI** (`aexp new-run ...`) | Human at a terminal | Scripts, CI, PowerShell sessions |
 
 The **hooks** are a fourth surface — invisible to the user, they inject `kb/ACTIVE.md` at session start, block HEF-chain violations, validate KB writes, and run structural validation at turn end.
@@ -111,17 +111,18 @@ The design bet: agents already know how to run experiments. What they need is a 
 | | |
 |---|---|
 | **signac-backed runs** | Identity-hashed workspaces; idempotent creation keyed on state point; status and summary metrics in `job.doc`. Re-run at a new commit produces a distinct persistent workspace, both preserved. |
-| **W&B tracker adapter** | Optional, behind `[wandb]` extra. Group slug is deterministic so the same run is never double-created. Offline-first; co-locates with its signac workspace. |
+| **W&B binding** | `aexp.tracked_run(job, project=...)` for managed wandb runs; `aexp.prepare_tracker(job, ...)` if your code already calls `wandb.init` and you just want the disciplined payload + signac binding. Group slug is deterministic; offline-first; co-locates with its signac workspace. |
 | **HPC-friendly sync** | `aexp sync-offline` walks the run store and runs `wandb sync` on every offline run — one command from a login node, no shell gymnastics. |
-| **Tracker ABC** | `TrackerAdapter` is a small ABC; the noop + wandb adapters are reference implementations. MLflow / Aim / DVC adapters reserved for v1.1. |
+| **Tracker ABC** | `TrackerAdapter` is a small ABC used by the legacy `bind_tracker(job, adapter, ...)` path — kept for `NoopAdapter` and backend-agnostic code. See [docs/tracker-adapters.md](docs/tracker-adapters.md) for which surface to pick. |
+| **Queue + runner materialization** | `aexp queue add` / `materialize` registers pending runs on one machine and emits a runner script (shell / slurm / manual) for another. Drift-proof provenance via named `conditions:` blocks in the experiment frontmatter — `--sp condition=full` resolves to the full config at queue-time so later edits to `conditions.full` can't retroactively change what ran. See [docs/queue.md](docs/queue.md). |
 
 ### Agent surfaces
 
 | | |
 |---|---|
 | **MCP server** | FastMCP with 9 tools covering the full run lifecycle. Runs via `uvx --from agentic-experiments[mcp] aexp-mcp-server` — no absolute paths, no per-machine config, `.mcp.json` committable to git. |
-| **Slash commands** | `/aexp-new-run`, `/aexp-close-run`, `/aexp-close-batch` — guided multi-step workflows for the common cases. |
-| **CLI** | 10 verbs: `install`, `new-run`, `list-runs`, `list-batches`, `show-run`, `show-batch`, `link`, `bind-tracker`, `sync-offline`, `validate`, `install-slash-commands`. Python API is a one-line `from aexp import ...`. |
+| **Slash commands** | Artifact creation: `/aexp-new-hypothesis`, `/aexp-new-experiment`, `/aexp-new-run`. Threads (forward-looking research concerns broader than a hypothesis): `/aexp-new-thread`, `/aexp-list-threads`, `/aexp-show-thread`, `/aexp-close-thread`. Finding creation (pick by what the finding cites): `/aexp-finding-from-run`, `/aexp-finding-from-batch`, `/aexp-finding-placeholder`. Read / inspect: `/aexp-show-run`, `/aexp-show-batch`, `/aexp-list-runs`, `/aexp-status`, `/aexp-validate`. Queue: `/aexp-queue-add`, `/aexp-queue-list`, `/aexp-queue-materialize`. 18 total. |
+| **CLI** | 18 verbs covering install, artifact creation (H/E/F/T + thread lifecycle), run lifecycle, batch queries, tracker binding, validation, offline sync, and the `queue` subcommand group (add/list/remove/clear/materialize) + `run-queued`. See `aexp --help` for the full list. Python API is a one-line `from aexp import ...`. |
 | **Typed JSON contracts** | Pydantic models (`RunLink`, `BatchSelector`, `Issue`, …) back the schema; MCP tools and CLI return the same shapes. |
 
 ---
@@ -234,6 +235,8 @@ So a session can end cleanly with a broken `supporting_runs` citation still pres
 | [docs/mcp.md](docs/mcp.md) | MCP server tools, transport, verification prompt, troubleshooting |
 | [docs/mapping.md](docs/mapping.md) | `kb/` ↔ signac ↔ W&B mapping in gory detail |
 | [docs/tracker-adapters.md](docs/tracker-adapters.md) | Writing a new tracker adapter; why Weave isn't in v1 |
+| [docs/queue.md](docs/queue.md) | Queue, runner-script materialization, sp resolution, drift-proof provenance, cross-machine sync |
+| [docs/threads.md](docs/threads.md) | Threads (`T###`) — forward-looking research concerns broader than a hypothesis: lifecycle, linkage to H/E/F, required template sections |
 
 ---
 
@@ -269,7 +272,7 @@ docs/                   # concepts, quickstart, cli, mcp, mapping, tracker-adapt
 
 - **Developed and primarily tested on Windows 11 / Python 3.12.** Supports Python 3.11+. CI runs the full suite on Ubuntu + Windows × Py 3.11/3.12/3.13. macOS hasn't been exercised — issues welcome.
 - **MCP server is the only PyPI-gated surface** — the CLI and Python API run from a local checkout without any PyPI round-trip.
-- **v1.1 backlog:** artifact-creation CLI verbs (`aexp new-hypothesis` / `new-experiment` / `new-finding`), `aexp index` dashboard, MLflow / Aim / DVC tracker adapters, OpenTelemetry extra.
+- **v1.1 backlog:** `aexp index` dashboard, MLflow / Aim / DVC tracker adapters, OpenTelemetry extra. (Artifact-creation CLI verbs, the three-mode wandb surface, and the queue + runner-materialization layer shipped in 0.1.2.)
 
 If you run ML experiments with Claude Code and find yourself wanting a harness that holds your agent to scientific discipline, this is built for you. Feedback, bug reports, and PRs all welcome.
 

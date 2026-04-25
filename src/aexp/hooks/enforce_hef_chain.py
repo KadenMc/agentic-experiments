@@ -19,6 +19,7 @@ from pathlib import Path
 
 from aexp.hooks._parse_hook_input import parse_hook_input
 
+HYPOTHESIS_PATH_RE = re.compile(r"kb/research/hypotheses/H\d{3}-.*\.md$")
 EXPERIMENT_PATH_RE = re.compile(r"kb/research/experiments/E\d{3}-.*\.md$")
 FINDING_PATH_RE = re.compile(r"kb/research/findings/F\d{3}-.*\.md$")
 BLOCKQUOTE_META_RE = re.compile(r"^>\s+\*\*(.+?)\*\*:\s*(.+?)\s*$")
@@ -78,6 +79,26 @@ def main() -> int:
 
     # Normalize to forward slashes for pattern matching.
     normalized = fp.replace("\\", "/")
+
+    if HYPOTHESIS_PATH_RE.search(normalized):
+        # `thread:` field is OPTIONAL on hypotheses. Only enforce when set.
+        thread_id = extract_meta_ref(content, "thread", r"T\d{3}")
+        if thread_id:
+            thread_file = _find_existing_artifact(
+                kb_root / "research" / "threads", thread_id
+            )
+            if thread_file is None:
+                print(
+                    f"BLOCKED: Hypothesis references {thread_id}, but no thread "
+                    "file found in kb/research/threads/.",
+                    file=sys.stderr,
+                )
+                print(
+                    "Create the thread first with `aexp new-thread`, or remove "
+                    "the `thread:` field from this hypothesis.",
+                    file=sys.stderr,
+                )
+                return 2
 
     if EXPERIMENT_PATH_RE.search(normalized):
         hypo_id = extract_meta_ref(content, "hypothesis", r"H\d{3}")

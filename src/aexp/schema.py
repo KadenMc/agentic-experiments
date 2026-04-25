@@ -25,15 +25,33 @@ from pydantic import BaseModel, ConfigDict, Field
 # Shared literal type sets
 # ---------------------------------------------------------------------------
 
-ArtifactKind = Literal["H", "E", "F", "L", "CR", "SR"]
-"""The six Limina artifact kinds validated by vendored ``kb_validate.py``.
+ArtifactKind = Literal["H", "E", "F", "L", "CR", "SR", "T"]
+"""The seven Limina artifact kinds validated by vendored ``kb_validate.py``.
 
 ``H``=Hypothesis, ``E``=Experiment, ``F``=Finding, ``L``=Literature,
-``CR``=Challenge Review, ``SR``=Strategic Review.
+``CR``=Challenge Review, ``SR``=Strategic Review,
+``T``=Thread (forward-looking research concern broader than a single
+hypothesis; spawns one or more H### over its lifetime).
 """
 
-RunStatus = Literal["created", "running", "complete", "failed", "abandoned"]
-"""Lifecycle values written to ``job.doc["status"]`` (plan §6)."""
+RunStatus = Literal[
+    "created", "queued", "running", "complete", "failed", "abandoned"
+]
+"""Lifecycle values written to ``job.doc["status"]`` (plan §6).
+
+Transitions:
+
+- ``created`` — job materialized via :func:`aexp.create_run` but not yet
+  marked for execution (typical for inline/in-process runs).
+- ``queued`` — job registered via :func:`aexp.add_to_queue` for later
+  batched execution. ``run-queued`` transitions through ``running`` to
+  a terminal state.
+- ``running`` — set by :func:`aexp.run_lifecycle` on context-enter.
+- ``complete`` / ``failed`` — set by ``run_lifecycle`` on clean / exception
+  exit respectively.
+- ``abandoned`` — set by :func:`aexp.remove_from_queue` or by
+  :func:`aexp.mark_status` when the user gives up on a run.
+"""
 
 IssueSeverity = Literal["error", "warning"]
 """Validator issue severity. Errors fail ``aex validate``; warnings do not."""
@@ -163,6 +181,40 @@ class BatchSummary:
 
 
 # ---------------------------------------------------------------------------
+# Queue (plan §queue)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class QueueEntry:
+    """One row in the queue view — a signac job currently or formerly queued.
+
+    ``list_queue`` returns these for jobs whose ``doc["queue"]`` is set.
+    ``status`` is the live lifecycle state; an entry with
+    ``status="complete"`` means the queue entry has been consumed.
+    """
+
+    job_id: str
+    experiment_id: str | None
+    hypothesis_id: str | None
+    status: RunStatus | None
+    tag: str | None
+    queued_at: str | None
+    sp: dict[str, Any]
+    last_error: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class MaterializeResult:
+    """Return value from :func:`aexp.materialize_queue`."""
+
+    output_path: str
+    runner: str
+    num_jobs: int
+    job_ids: list[str]
+
+
+# ---------------------------------------------------------------------------
 # Validator issue
 # ---------------------------------------------------------------------------
 
@@ -221,6 +273,8 @@ __all__ = [
     "Issue",
     "IssueSeverity",
     "LiminaArtifactRef",
+    "MaterializeResult",
+    "QueueEntry",
     "RunLink",
     "RunStatus",
     "RunSummary",
