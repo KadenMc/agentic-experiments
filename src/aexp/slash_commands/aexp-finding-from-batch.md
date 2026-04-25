@@ -64,8 +64,13 @@ Flow:
 
 5. Pre-fill the `## Evidence` section with the batch aggregate — `n`,
    mean / min / max of each relevant `summary_metric`, proportion of runs
-   with `status=complete`. Fill `## Finding`, `## What Improved For Real`,
-   `## Remaining Debt`, `## Next Move` from the user's analysis. Leave
-   the `## Links` section alone — `new-finding` already set it up.
+   with `status=complete`. Fill `## Finding`, `## Caveats`,
+   `## What Improved For Real`, `## Remaining Debt`, `## Next Move` from
+   the user's analysis. Leave the `## Links` section alone —
+   `new-finding` already set it up. Boundary reminder: `## Caveats`
+   captures what limits interpretation of this finding (small `n`,
+   batch composition, inherited experiment caveats); `## Remaining
+   Debt` captures what's still a workaround in the system. Both
+   required.
 6. Run `python -m aexp validate` and confirm no `finding.empty_batch` or
    `finding.broken_run_citation` issues are reported.

@@ -51,9 +51,28 @@ def _write_artifact(
     fm_text = yaml.safe_dump(fm, sort_keys=False).strip()
 
     trailing = body
-    if "## Links" not in body:
+
+    # Auto-inject required template headers if absent — kb_validate's
+    # missing_template_header check (per Kaden's "stick to the templates
+    # precisely" directive) requires every shipped H2 to be present.
+    artifact_type = fm.get("type", "")
+    kind = {"hypothesis": "H", "experiment": "E", "finding": "F"}.get(
+        artifact_type
+    )
+    if kind:
+        from aexp.kb_validate import _required_headers_for_kind
+
+        for header in _required_headers_for_kind(kind):
+            marker = f"## {header}"
+            if marker not in trailing:
+                trailing = (
+                    trailing.rstrip()
+                    + f"\n\n{marker}\n\n_(placeholder for tests.)_\n"
+                )
+
+    if "## Links" not in trailing:
         link_lines = "\n".join(f"- [[{link}]]" for link in (links or [])) or "- (none)"
-        trailing = body.rstrip() + f"\n\n## Links\n\n{link_lines}\n"
+        trailing = trailing.rstrip() + f"\n\n## Links\n\n{link_lines}\n"
 
     target.write_text(f"---\n{fm_text}\n---\n\n{trailing}", encoding="utf-8")
     return target
@@ -110,6 +129,157 @@ def test_validate_clean_install_with_hypothesis_and_run(installed_repo: Path) ->
     )
     result = validate_repo(installed_repo)
     assert result.ok, [i.message for i in result.errors]
+
+
+# ---------------------------------------------------------------------------
+# Required-template-header check
+# ---------------------------------------------------------------------------
+
+
+def test_validate_flags_missing_template_header_on_experiment(
+    installed_repo: Path,
+) -> None:
+    """Per Kaden's directive 'stick to templates precisely', the validator
+    must catch authors who delete a shipped template section.
+
+    Calls ``kb_validate.validate_kb`` directly because the per-check codes
+    (``missing_template_header`` etc.) live there; ``validate_repo`` flattens
+    the inner kb-validate output into a single ``limina.validation_failed``
+    issue with the formatted text bundled into the message.
+    """
+    from aexp.kb_validate import validate_kb
+
+    kb = installed_repo / "kb"
+    # H001 fully populated (auto-injected via _write_artifact).
+    _write_artifact(
+        kb,
+        "research/hypotheses",
+        "H001-smoke.md",
+        {"id": "H001", "type": "hypothesis", "status": "PROPOSED", "created": "2026-04-20"},
+        "# H001 — Smoke\n\n> **Status**: PROPOSED\n> **Created**: 2026-04-20\n",
+        links=["E001", "ACTIVE", "CHALLENGE"],
+    )
+    # E001 deliberately omits ## Caveats. We construct the body inline so
+    # the auto-injection in _write_artifact doesn't add it for us.
+    fm_text = (
+        "---\n"
+        'id: "E001"\n'
+        'aliases: ["E001"]\n'
+        "type: experiment\n"
+        "status: DESIGNED\n"
+        'hypothesis: "H001"\n'
+        'created: "2026-04-20"\n'
+        "---\n"
+    )
+    body = (
+        "# E001 — Smoke\n\n"
+        "> **Status**: DESIGNED\n"
+        "> **Hypothesis**: [[H001]]\n"
+        "> **Created**: 2026-04-20\n\n"
+        "## Objective\n\n_x_\n\n"
+        "## Setup\n\n_x_\n\n"
+        "## Procedure\n\n_x_\n\n"
+        # ## Caveats deliberately omitted.
+        "## Intent\n\n_x_\n\n"
+        "## Progress\n\n_x_\n\n"
+        "## Results\n\n_x_\n\n"
+        "## Outcome Summary\n\n_x_\n\n"
+        "## Decision\n\n_x_\n\n"
+        "## Links\n\n- [[H001]]\n- [[ACTIVE]]\n- [[CHALLENGE]]\n"
+    )
+    target = kb / "research" / "experiments" / "E001-smoke.md"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(fm_text + "\n" + body, encoding="utf-8")
+
+    inner = validate_kb(kb)
+    assert not inner.ok
+    header_errors = [
+        e for e in inner.errors if e.get("check") == "missing_template_header"
+    ]
+    assert any("Caveats" in e["message"] for e in header_errors), [
+        e["message"] for e in inner.errors
+    ]
+
+
+def test_validate_repo_surfaces_missing_template_header_in_bundled_message(
+    installed_repo: Path,
+) -> None:
+    """The outer ``validate_repo`` doesn't preserve per-check codes, but its
+    bundled ``limina.validation_failed`` message must still mention the
+    missing header so users see what to fix."""
+    kb = installed_repo / "kb"
+    _write_artifact(
+        kb,
+        "research/hypotheses",
+        "H001-smoke.md",
+        {"id": "H001", "type": "hypothesis", "status": "PROPOSED", "created": "2026-04-20"},
+        "# H001 — Smoke\n\n> **Status**: PROPOSED\n> **Created**: 2026-04-20\n",
+        links=["E001", "ACTIVE", "CHALLENGE"],
+    )
+    fm_text = (
+        "---\n"
+        'id: "E001"\n'
+        'aliases: ["E001"]\n'
+        "type: experiment\n"
+        "status: DESIGNED\n"
+        'hypothesis: "H001"\n'
+        'created: "2026-04-20"\n'
+        "---\n"
+    )
+    body = (
+        "# E001 — Smoke\n\n"
+        "> **Status**: DESIGNED\n"
+        "> **Hypothesis**: [[H001]]\n"
+        "> **Created**: 2026-04-20\n\n"
+        "## Objective\n\n_x_\n\n"
+        "## Setup\n\n_x_\n\n"
+        "## Procedure\n\n_x_\n\n"
+        "## Intent\n\n_x_\n\n"
+        "## Progress\n\n_x_\n\n"
+        "## Results\n\n_x_\n\n"
+        "## Outcome Summary\n\n_x_\n\n"
+        "## Decision\n\n_x_\n\n"
+        "## Links\n\n- [[H001]]\n- [[ACTIVE]]\n- [[CHALLENGE]]\n"
+    )
+    target = kb / "research" / "experiments" / "E001-smoke.md"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(fm_text + "\n" + body, encoding="utf-8")
+
+    result = validate_repo(installed_repo)
+    assert not result.ok
+    bundled = next(
+        i for i in result.errors if i.code == "limina.validation_failed"
+    )
+    assert "Caveats" in bundled.message
+    assert "missing_template_header" in bundled.message
+
+
+def test_validate_passes_when_all_template_headers_present(
+    installed_repo: Path,
+) -> None:
+    """The artifacts API renders the full template — its outputs should
+    pass the new header check end-to-end."""
+    from aexp.artifacts import new_experiment, new_finding, new_hypothesis
+
+    new_hypothesis(title="hypothesis", repo_root=installed_repo, artifact_id="H001")
+    new_experiment(
+        title="experiment",
+        hypothesis_id="H001",
+        repo_root=installed_repo,
+        artifact_id="E001",
+    )
+    new_finding(
+        title="finding",
+        hypothesis_id="H001",
+        experiment_id="E001",
+        repo_root=installed_repo,
+        artifact_id="F001",
+    )
+    result = validate_repo(installed_repo)
+    header_issues = [
+        i for i in result.errors if i.code == "missing_template_header"
+    ]
+    assert header_issues == [], [i.message for i in header_issues]
 
 
 # ---------------------------------------------------------------------------

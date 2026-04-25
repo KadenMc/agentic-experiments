@@ -53,8 +53,11 @@ Flow:
 5. Pre-fill the `## Evidence` section with anything useful from
    `job.doc["summary_metrics"]` (if present), the tracker URL (from
    `job.doc["tracker"]["url"]`), and any artifacts the run recorded.
-   Fill in `## Finding`, `## What Improved For Real`, `## Remaining Debt`,
-   `## Next Move` from the user's analysis. Leave the ``## Links`` section
-   alone — `new-finding` already set it up.
+   Fill in `## Finding`, `## Caveats`, `## What Improved For Real`,
+   `## Remaining Debt`, `## Next Move` from the user's analysis. Leave
+   the ``## Links`` section alone — `new-finding` already set it up.
+   `## Caveats` is what limits this finding's interpretation (sample
+   size, domain shift, inherited experiment caveats); `## Remaining
+   Debt` is what's still a workaround in the system. Both required.
 6. Run `python -m aexp validate` and confirm no
    `finding.broken_run_citation` issues are reported.

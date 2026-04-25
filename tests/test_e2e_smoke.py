@@ -94,44 +94,17 @@ def test_e2e_fresh_repo_full_happy_path(tmp_path: Path, monkeypatch: pytest.Monk
     from aexp.kb_validate import validate_kb as _validate_kb
     assert _validate_kb(repo / "kb").ok
 
-    # 3. Create H001 + E001 via the vendored artifact creator (non-interactively).
-    # kb_new_artifact.py expects interactive prompts; bypass by hand-crafting the files
-    # in a way kb_validate.py accepts.
-    import yaml
+    # 3. Create H001 + E001 via the artifacts API (the canonical creation
+    # path). Renders the full shipped template — required-template-header
+    # validation passes for free; backlinks on the parent are auto-patched.
+    from aexp.artifacts import new_experiment, new_hypothesis
 
-    def _write(subdir: str, fname: str, fm: dict, body: str) -> None:
-        target = repo / "kb" / subdir / fname
-        target.parent.mkdir(parents=True, exist_ok=True)
-        fm_text = yaml.safe_dump(fm, sort_keys=False).strip()
-        target.write_text(f"---\n{fm_text}\n---\n\n{body}", encoding="utf-8")
-
-    _write(
-        "research/hypotheses",
-        "H001-smoke.md",
-        {
-            "id": "H001",
-            "aliases": ["H001"],
-            "type": "hypothesis",
-            "status": "PROPOSED",
-            "created": "2026-04-20",
-        },
-        "# H001 — Smoke\n\n> **Status**: PROPOSED\n> **Created**: 2026-04-20\n\n"
-        "## Links\n\n- [[E001]]\n- [[ACTIVE]]\n- [[CHALLENGE]]\n",
-    )
-    _write(
-        "research/experiments",
-        "E001-smoke.md",
-        {
-            "id": "E001",
-            "aliases": ["E001"],
-            "type": "experiment",
-            "status": "DESIGNED",
-            "hypothesis": "H001",
-            "created": "2026-04-20",
-        },
-        "# E001 — Smoke\n\n> **Status**: DESIGNED\n> **Hypothesis**: [[H001]]\n> **Created**: 2026-04-20\n\n"
-        "## Local Hypothesis\n\nSmoke smoke smoke.\n\n"
-        "## Links\n\n- [[H001]]\n- [[ACTIVE]]\n- [[CHALLENGE]]\n",
+    new_hypothesis(title="smoke", repo_root=repo, artifact_id="H001")
+    new_experiment(
+        title="smoke",
+        hypothesis_id="H001",
+        repo_root=repo,
+        artifact_id="E001",
     )
 
     # kb_validate should remain green with the new artifacts.

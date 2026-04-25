@@ -32,9 +32,22 @@ _What could make this look good without improving the real capability?_
 
 ## Test Plan
 
+_How will the hypothesis be tested? Pick the framing that fits and
+delete the other block. Don't fabricate retroactive thresholds — write
+honestly about what's pre-committed vs. what's exploratory._
+
+_For pre-registered hypotheses_ (preferred for high-stakes / paper-cited
+work):
 - Experiment(s): ...
 - Confirm if: `{command}` -> {observable threshold or result}
 - Reject if: `{command}` -> {observable threshold or result}
+
+_For exploratory hypotheses_ (smoke tests, early-project framing, no
+committed thresholds yet):
+- Experiment(s): ...
+- Purpose: {what you want to see / learn from these runs}
+- _No pre-registered confirm/reject criteria. If a future scaled
+  replication needs them, this section gets revised at that point._
 
 ## Evidence
 

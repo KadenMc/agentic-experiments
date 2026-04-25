@@ -32,11 +32,21 @@ Flow:
    ``kb/research/hypotheses/H###-<slug>.md`` from ``templates/hypothesis.md``,
    and reports the new id + path.
 
-4. Open the new file and fill in the prose sections (``## Statement``,
-   ``## Mechanism``, ``## Why This Might Generalize``, ``## Shortcut Risks``,
-   ``## Test Plan``, ``## Evidence``) from what the user told you. The
-   ``## Conclusion`` section is left blank for after testing. Do NOT edit
-   the frontmatter, the blockquote metadata, or the ``## Links`` section —
-   those are already correct.
+4. Open the new file and fill in the prose sections from what the user
+   told you:
+   - ``## Statement``, ``## Mechanism``, ``## Why This Might Generalize``,
+     ``## Shortcut Risks``, ``## Evidence`` — straightforward.
+   - ``## Test Plan`` — the template ships two sub-blocks (pre-registered
+     vs. exploratory). **Pick the framing that's actually true** and
+     delete the other block. **Don't fabricate retroactive
+     confirm/reject thresholds for runs that were exploratory.** That's
+     the dishonesty trap the dual-mode template is designed to surface
+     — it caught Kaden's first author here on 2026-04-24.
+   - Leave ``## Conclusion`` blank for after testing.
+   Do NOT edit the frontmatter, the blockquote metadata, or the
+   ``## Links`` section — those are already correct.
 
-5. Run `python -m aexp validate --kb-only` to confirm the new file is clean.
+5. Run `python -m aexp validate --kb-only` to confirm the new file is
+   clean. The validator now checks every shipped template header is
+   present (`missing_template_header` issue code) — fill a placeholder
+   rather than deleting a section.

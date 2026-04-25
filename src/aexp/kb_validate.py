@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import functools
 import json
 import re
 from dataclasses import dataclass
@@ -487,9 +488,78 @@ def validate_conditions_block(note: NoteRecord, result: ValidationResult) -> Non
                 )
 
 
+_TEMPLATE_FILENAMES_FOR_HEADER_CHECK: dict[str, str] = {
+    "H": "hypothesis.md",
+    "E": "experiment.md",
+    "F": "finding.md",
+}
+_VENDOR_TEMPLATES_DIR = (
+    Path(__file__).resolve().parent / "vendor" / "limina" / "templates"
+)
+
+
+@functools.lru_cache(maxsize=None)
+def _required_headers_for_kind(kind: str) -> tuple[str, ...]:
+    """Extract ordered ``## ``-level headers from the vendored template for ``kind``.
+
+    Returns the headers an artifact of this kind is expected to contain.
+    Excludes ``## Links`` (already comprehensively validated by
+    :func:`validate_links`) so we don't double-report. Returns an empty
+    tuple for kinds without a tracked template (e.g. ``L``, ``CR``,
+    ``SR`` — those aren't enforced yet).
+    """
+    filename = _TEMPLATE_FILENAMES_FOR_HEADER_CHECK.get(kind)
+    if filename is None:
+        return ()
+    template_path = _VENDOR_TEMPLATES_DIR / filename
+    if not template_path.is_file():
+        return ()
+    headers: list[str] = []
+    for raw_line in template_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.rstrip()
+        if line.startswith("## "):
+            header = line[3:].strip()
+            if header == "Links":
+                # Covered by validate_links — avoid double-reporting.
+                continue
+            headers.append(header)
+    return tuple(headers)
+
+
+_H2_HEADER_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
+
+
+def validate_required_headers(note: NoteRecord, result: ValidationResult) -> None:
+    """Check that an artifact contains every top-level ``## `` header
+    declared by its kind's shipped template.
+
+    Per Kaden's design directive: *"we need to stick to the templates
+    precisely."* Authors who delete a template section under pressure
+    (deciding it "doesn't apply") are caught here. Extra headers beyond
+    the template are allowed — artifacts can extend, just not contract.
+
+    Currently enforced for H / E / F. L / CR / SR are not yet checked.
+    """
+    required = _required_headers_for_kind(note.kind)
+    if not required:
+        return
+    found = {m.group(1).strip() for m in _H2_HEADER_RE.finditer(note.text)}
+    for header in required:
+        if header not in found:
+            result.add(
+                "missing_template_header",
+                f"{note.path.name} is missing required template header "
+                f"'## {header}'. Templates are contracts, not suggestions — "
+                "fill the section (with a placeholder if there's nothing to "
+                "say yet) or update the shipped template.",
+                note.path,
+            )
+
+
 def validate_artifact(note: NoteRecord, artifacts: dict[str, NoteRecord], note_index: dict[str, NoteRecord], result: ValidationResult) -> None:
     validate_required_fields(note, result)
     validate_artifact_identity(note, result)
+    validate_required_headers(note, result)
 
     if note.kind == "E":
         validate_ref(note, "Hypothesis", "H", artifacts, result)

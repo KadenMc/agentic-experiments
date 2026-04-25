@@ -7,6 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (templates + validator: stick to the templates precisely)
+
+- **`kb_validate.validate_required_headers`** — every artifact must
+  contain every top-level (`## `) header declared in the corresponding
+  vendored template. Issue code `missing_template_header`. Headers
+  parsed from `src/aexp/vendor/limina/templates/<kind>.md` once and
+  cached. ``## Links`` excluded (covered comprehensively by the
+  existing `validate_links`). Currently enforced for H / E / F; L /
+  CR / SR not yet checked. Reported by the electricrag-side agent on
+  2026-04-24 after deleting `## Expected Outcome` and `## Analysis`
+  from an experiment file passed validation cleanly.
+- **Experiment template gains `## Caveats`** between `## Procedure`
+  and `## Intent`. Top-level visibility for known limitations,
+  instrumentation gaps, and deviations from plan. ``_None._`` is a
+  valid body for fully-instrumented runs but most experiments
+  accumulate something worth recording at the top level.
+- **Finding template gains `## Caveats`** between `## Evidence` and
+  `## What Improved For Real`. Distinct from `## Remaining Debt`:
+  caveats are about what limits *interpretation* of the finding;
+  remaining debt is about what's still a workaround in the *system*.
+
+### Changed (templates: stop nudging authors toward dishonesty)
+
+- **Hypothesis template `## Test Plan` is now dual-mode.** Ships two
+  alternate sub-blocks — *pre-registered* (confirm/reject thresholds)
+  and *exploratory* (a one-line purpose, no fabricated thresholds).
+  Authors pick the framing that's actually true and delete the other.
+  Previously the section unconditionally asked for confirm/reject
+  criteria, which trained authors to fabricate thresholds for runs
+  that were really smoke tests — Kaden caught this on 2026-04-24
+  with H001's first author here.
+- **Experiment template `## Expected Outcome` renamed to `## Intent`**
+  and rewritten with the same dual-mode pre-registered / exploratory
+  structure. The "Expected Outcome" name presupposed a confirm/reject
+  frame; "Intent" accommodates both honest framings without forcing
+  one.
+- **Experiment template `## Analysis` renamed to `## Outcome
+  Summary`.** The boundary is now explicit in the template body and
+  the slash-command guidance: `## Outcome Summary` reports
+  experiment-level observations (*what happened in this specific
+  run*); generalizable claims belong in the linked Finding's prose,
+  not the experiment. Resolves the semantic overlap the
+  electricrag-side agent flagged where E's Analysis and F's claim
+  prose competed for the same content.
+
+### Changed (slash commands)
+
+- **`/aexp-new-experiment`** — flow guidance rewritten to walk
+  through `## Caveats`, `## Intent` (with the smoke-test trap
+  flagged), and the `## Outcome Summary` ↔ Finding-prose boundary.
+  Adds a step pointing at `missing_template_header` as the validator
+  signal for "you deleted a section."
+- **`/aexp-new-hypothesis`** — same dual-mode `## Test Plan`
+  guidance. Spells out: don't fabricate retroactive thresholds for
+  exploratory runs.
+- **Finding slash commands** (`from-run`, `from-batch`,
+  `placeholder`) — updated to include `## Caveats` in the
+  fill-in list, with the caveats-vs-remaining-debt distinction
+  inline so authors don't conflate them.
+
 ### Fixed
 
 - **`aexp install --force` no longer clobbers user-authored scaffold

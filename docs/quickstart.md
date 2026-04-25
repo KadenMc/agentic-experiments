@@ -56,7 +56,7 @@ sub_hypotheses: ["H002", "H003"]
 
 to its frontmatter (create the H's first).
 
-Fill in `## Objective`, `## Procedure`, `## Expected Outcome`. Consider writing a `## Local Hypothesis` section — it'll get pulled into tracker run notes.
+Fill in `## Objective`, `## Setup`, `## Procedure`, `## Caveats`, `## Intent` (pre-registered or exploratory — pick one), `## Progress`. The validator checks every shipped template header is present, so don't delete sections — fill placeholders. Consider writing a `## Local Hypothesis` section under `## Objective` — it'll get pulled into tracker run notes.
 
 ## 4. Run the experiment
 
@@ -184,7 +184,7 @@ supporting_runs:
     selector: { condition: "full" }
 ```
 
-Fill in `## Verdict`, `## Analysis`, `## Decision`. Run `aexp validate` to confirm the finding's citation resolves.
+Fill in `## Finding`, `## Evidence`, `## Caveats`, `## What Improved For Real`, `## Remaining Debt`, `## Next Move`. The slash command's flow walks the agent through each section. Run `aexp validate` to confirm the finding's citation resolves and every shipped template header is present.
 
 ## 7. Six months later
 

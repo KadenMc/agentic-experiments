@@ -41,8 +41,12 @@ Flow:
    patched with the backlink.
 
 3. Open the new file and fill in the prose sections (``## Finding``,
-   ``## Evidence``, ``## What Improved For Real``, ``## Remaining Debt``,
-   ``## Next Move``). Do not edit the ``## Links`` section.
+   ``## Evidence``, ``## Caveats``, ``## What Improved For Real``,
+   ``## Remaining Debt``, ``## Next Move``). Do not edit the
+   ``## Links`` section. Boundary reminder: ``## Caveats`` is what
+   limits *interpretation* of this finding (small sample, domain shift,
+   instrumentation gaps); ``## Remaining Debt`` is what's still a
+   workaround in the *system*. Both load-bearing, both required.
 
 4. Run `python -m aexp validate` to confirm. When you're ready to cite
    concrete runs, either (a) re-invoke via `/aexp-finding-from-run` /
