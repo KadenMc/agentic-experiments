@@ -34,12 +34,14 @@
 
 ### What this looks like in practice
 
-- Your agent proposes a hypothesis and writes it to `kb/research/hypotheses/H001-*.md` — session-start hooks refuse work that skips this step
-- It designs an experiment that explicitly cites the hypothesis; a pre-write hook blocks orphaned experiments before they land
-- It creates signac-backed runs via the MCP tool `new_run` — each run records its git commit, experiment ID, and hypothesis ID on the job document
-- A W&B run (optional) is bound to the signac job with a deterministic group slug derived from `(hypothesis, experiment, condition)`
-- When it writes a finding, the `supporting_runs` array must cite real jobs — `aexp validate` flags dangling references
-- Delete an experiment by accident? Every run pointing at it is flagged `run.broken_experiment_link` on the next validation pass
+- Your agent optionally captures forward-looking research directions as **threads** (`T###`) — concerns broader than a single hypothesis, with their own lifecycle (`PROPOSED → EXPLORING → PROMOTED | CLOSED`) — and **promotes them into hypotheses** when concrete claims emerge (`aexp new-hypothesis --thread T###`)
+- It proposes a hypothesis and writes it to `kb/research/hypotheses/H001-*.md` — session-start hooks refuse work that skips this step; the H/E/F template enforces a `## Caveats` + dual-mode `## Test Plan` (pre-registered vs. exploratory) so authors can't fabricate retroactive thresholds
+- It designs an experiment that explicitly cites the hypothesis; a pre-write hook blocks orphaned experiments. Experiment frontmatter can declare named **`conditions:`** blocks — `--sp condition=full` resolves to the full config at queue-time and is **frozen into signac**, so later edits to `conditions.full` can't retroactively change what ran (drift-proof provenance)
+- It creates signac-backed runs via the MCP tool `new_run` (or in-process via `aexp.tracked_run` for managed wandb integration) — each run records its git commit, experiment ID, hypothesis ID, and resolved sp on the job document
+- For batches, it uses the **queue layer**: `aexp queue add --sweep "condition=full|cls,seed=0..3"` registers the Cartesian product as pending jobs; `aexp queue materialize --runner slurm` emits a runner script that executes wherever the user's compute lives; `aexp queue run` iterates the pending jobs in-batch-script. Designed for agent-on-laptop, training-on-cluster workflows
+- A W&B run (optional) is bound via three first-class modes: `tracked_run` (managed), `prepare_tracker` + `ctx.bind(run)` (BYO `wandb.init`), or `bind_tracker` (CLI/adapter). Group slug is deterministic from `(hypothesis, experiment, condition)`
+- When it writes a finding, the `supporting_runs` array must cite real jobs — `aexp validate` flags dangling references; templates enforce a `## Caveats` section distinct from `## Remaining Debt`
+- Delete an experiment by accident? Every run pointing at it is flagged `run.broken_experiment_link`; missing required template headers raise `missing_template_header` on the next validation pass
 
 ### Principles
 
@@ -120,7 +122,7 @@ The design bet: agents already know how to run experiments. What they need is a 
 
 | | |
 |---|---|
-| **MCP server** | FastMCP with 9 tools covering the full run lifecycle. Runs via `uvx --from agentic-experiments[mcp] aexp-mcp-server` — no absolute paths, no per-machine config, `.mcp.json` committable to git. |
+| **MCP server** | FastMCP with 21 tools covering artifact creation (H/E/F/T), run lifecycle, batch queries, queue management, tracker binding, and validation. Runs via `uvx --from agentic-experiments[mcp] aexp-mcp-server` — no absolute paths, no per-machine config, `.mcp.json` committable to git. |
 | **Slash commands** | Artifact creation: `/aexp-new-hypothesis`, `/aexp-new-experiment`, `/aexp-new-run`. Threads (forward-looking research concerns broader than a hypothesis): `/aexp-new-thread`, `/aexp-list-threads`, `/aexp-show-thread`, `/aexp-close-thread`. Finding creation (pick by what the finding cites): `/aexp-finding-from-run`, `/aexp-finding-from-batch`, `/aexp-finding-placeholder`. Read / inspect: `/aexp-show-run`, `/aexp-show-batch`, `/aexp-list-runs`, `/aexp-status`, `/aexp-validate`. Queue: `/aexp-queue-add`, `/aexp-queue-list`, `/aexp-queue-materialize`. 18 total. |
 | **CLI** | 18 verbs covering install, artifact creation (H/E/F/T + thread lifecycle), run lifecycle, batch queries, tracker binding, validation, offline sync, and the `queue` subcommand group (add/list/remove/clear/materialize) + `run-queued`. See `aexp --help` for the full list. Python API is a one-line `from aexp import ...`. |
 | **Typed JSON contracts** | Pydantic models (`RunLink`, `BatchSelector`, `Issue`, …) back the schema; MCP tools and CLI return the same shapes. |
@@ -138,8 +140,8 @@ graph TB
     end
 
     subgraph "aexp (Python package)"
-        MCP[MCP Server<br/>FastMCP, 9 tools]
-        CLI[CLI — typer<br/>10 verbs]
+        MCP[MCP Server<br/>FastMCP, 21 tools]
+        CLI[CLI — typer<br/>18 verbs]
         API[Python API<br/>aexp.*]
     end
 
@@ -261,18 +263,18 @@ src/aexp/
   utils/                # paths, git, atomic writes
   vendor/               # forked research-graph templates, skills, and kb/ scaffold
 tests/                  # pytest suite; CI on Ubuntu + Windows × Py 3.11/3.12/3.13
-docs/                   # concepts, quickstart, cli, mcp, mapping, tracker-adapters
+docs/                   # concepts, quickstart, cli, mcp, mapping, tracker-adapters, queue, threads
 ```
 
 ---
 
 ## Status
 
-**Pre-release (v0.1.x).** Actively developed by one person and the agents they direct; used in the author's own ML research workflow. The API surface is not yet stable — see [CHANGELOG.md](CHANGELOG.md) for what has shipped.
+**Pre-release (v0.2.x).** Actively developed by one person and the agents they direct; used in the author's own ML research workflow. The API surface is not yet stable — see [CHANGELOG.md](CHANGELOG.md) for what has shipped.
 
 - **Developed and primarily tested on Windows 11 / Python 3.12.** Supports Python 3.11+. CI runs the full suite on Ubuntu + Windows × Py 3.11/3.12/3.13. macOS hasn't been exercised — issues welcome.
 - **MCP server is the only PyPI-gated surface** — the CLI and Python API run from a local checkout without any PyPI round-trip.
-- **v1.1 backlog:** `aexp index` dashboard, MLflow / Aim / DVC tracker adapters, OpenTelemetry extra. (Artifact-creation CLI verbs, the three-mode wandb surface, and the queue + runner-materialization layer shipped in 0.1.2.)
+- **v0.3 backlog:** `aexp index` dashboard, MLflow / Aim / DVC tracker adapters, OpenTelemetry extra. (Artifact-creation CLI verbs, the three-mode wandb surface, the queue + runner-materialization layer, threads as a new artifact kind, and template/validator strictness all shipped in 0.2.0 — see CHANGELOG for the full breakdown.)
 
 If you run ML experiments with Claude Code and find yourself wanting a harness that holds your agent to scientific discipline, this is built for you. Feedback, bug reports, and PRs all welcome.
 
