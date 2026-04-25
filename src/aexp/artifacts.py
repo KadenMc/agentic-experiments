@@ -124,17 +124,33 @@ def _today_iso() -> str:
 
 
 def _load_template(kind: ArtifactKind, *, repo_root: Path) -> str:
-    """Prefer the repo-local template; fall back to the vendored copy.
+    """Return the canonical template text for an artifact kind.
 
-    Users can edit ``<repo>/templates/<kind>.md`` to customize; the vendored
-    copy is a safety net for partially-installed repos and tests.
+    Always reads from the package-shipped templates at
+    ``src/aexp/vendor/limina/templates/`` — the same source the
+    validator's ``missing_template_header`` check uses
+    (:mod:`aexp.kb_validate`). Single source of truth means creation
+    and validation can never disagree about "what the template is."
+
+    The repo-local ``<repo>/templates/`` directory is a *reference copy*
+    populated (and preserved across re-installs) by ``aexp install``,
+    but it's NEVER consulted by the artifact-creation API. Editing a
+    local template will not affect what ``aexp.new_*`` renders.
+
+    Per-project template overrides aren't supported yet. If you need
+    one, file an issue describing the use case — likely shape is a
+    ``--template-file <path>`` flag on the CLI verbs and an explicit
+    ``template_path=`` kwarg on the Python API. The previous
+    implicit "local file = override" semantic was removed because it
+    silently broke for any consumer whose install predated a template
+    change (creation would render the stale local skeleton; validation
+    would reject it for missing the new shipped headers).
+
+    The ``repo_root`` parameter is preserved for API stability but is
+    intentionally unused.
     """
     filename = _TEMPLATE_FILENAMES[kind]
-    local = repo_root / "templates" / filename
-    if local.is_file():
-        return local.read_text(encoding="utf-8")
-    vendored = _VENDOR_TEMPLATES / filename
-    return vendored.read_text(encoding="utf-8")
+    return (_VENDOR_TEMPLATES / filename).read_text(encoding="utf-8")
 
 
 def _render_template(tpl: str, substitutions: dict[str, str]) -> str:

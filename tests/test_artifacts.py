@@ -236,6 +236,97 @@ def test_full_chain_validates_clean(installed_repo: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Single source of truth: artifact creation reads vendored templates only
+# ---------------------------------------------------------------------------
+
+
+def test_new_hypothesis_ignores_local_template_override(
+    installed_repo: Path,
+) -> None:
+    """Regression guard for the templates-source-of-truth fix.
+
+    When a consumer's local ``templates/<kind>.md`` is stale (or
+    customised), the artifact-creation API must still read from the
+    vendored template — same source the validator uses. Otherwise
+    creation produces a skeleton that immediately fails validation.
+
+    The 2026-04-24 electricrag report described exactly this failure:
+    install-preserve correctly kept stale local templates, but
+    ``new_experiment`` then rendered the old shape while the validator
+    expected the new one.
+    """
+    # Stuff the local hypothesis template with bogus content that has
+    # none of the headers the vendored template ships.
+    local = installed_repo / "templates" / "hypothesis.md"
+    local.write_text(
+        '---\nid: "{ARTIFACT_ID}"\naliases: ["{ARTIFACT_ID}"]\n'
+        'type: hypothesis\nstatus: PROPOSED\ncreated: "{DATE}"\n'
+        'last_updated: "{DATE}"\ntags: []\n---\n\n'
+        "# {ARTIFACT_ID} — {TITLE}\n\n"
+        "## OnlyMe\n\nbogus stale content\n\n"
+        "## Links\n\n{LINKS_BLOCK}\n",
+        encoding="utf-8",
+    )
+    new_hypothesis(title="t", repo_root=installed_repo)
+    rendered = (
+        installed_repo / "kb" / "research" / "hypotheses" / "H001-t.md"
+    ).read_text(encoding="utf-8")
+    # Vendored template's headers must be present.
+    assert "## Statement" in rendered
+    assert "## Test Plan" in rendered
+    assert "## Conclusion" in rendered
+    # The bogus local override must NOT have leaked into the rendered file.
+    assert "## OnlyMe" not in rendered
+    assert "bogus stale content" not in rendered
+
+
+def test_new_experiment_skeleton_passes_validator_unmodified(
+    installed_repo: Path,
+) -> None:
+    """End-to-end regression guard: a freshly-rendered experiment skeleton
+    must satisfy the required-template-header validator without any
+    post-creation edits. Asserts the creation source and validation
+    source agree.
+    """
+    from aexp.kb_validate import validate_kb
+
+    new_hypothesis(title="h", repo_root=installed_repo)
+    new_experiment(
+        title="e", hypothesis_id="H001", repo_root=installed_repo
+    )
+    result = validate_kb(installed_repo / "kb")
+    header_errors = [
+        e for e in result.errors if e.get("check") == "missing_template_header"
+    ]
+    assert header_errors == [], result.errors
+
+
+def test_new_finding_skeleton_passes_validator_unmodified(
+    installed_repo: Path,
+) -> None:
+    """Same regression guard for findings — the new ``## Caveats``
+    section must be in the rendered skeleton, not just the validator's
+    expectation."""
+    from aexp.kb_validate import validate_kb
+
+    new_hypothesis(title="h", repo_root=installed_repo)
+    new_experiment(
+        title="e", hypothesis_id="H001", repo_root=installed_repo
+    )
+    new_finding(
+        title="f",
+        hypothesis_id="H001",
+        experiment_id="E001",
+        repo_root=installed_repo,
+    )
+    result = validate_kb(installed_repo / "kb")
+    header_errors = [
+        e for e in result.errors if e.get("check") == "missing_template_header"
+    ]
+    assert header_errors == [], result.errors
+
+
+# ---------------------------------------------------------------------------
 # backlink helper
 # ---------------------------------------------------------------------------
 

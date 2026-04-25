@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Artifact creation and validation now read from the same template
+  source.** Previously `aexp.artifacts._load_template` preferred the
+  consumer's repo-local `templates/<kind>.md` and fell back to the
+  vendored copy; the validator's `missing_template_header` check
+  always read vendored. When local templates fell behind shipped
+  (which is the default state any time package templates evolve),
+  creation rendered the old skeleton while validation rejected it
+  for missing the new shipped headers. Reported by the electricrag-
+  side agent on 2026-04-24 after `mcp__aexp__new_experiment` and
+  `mcp__aexp__new_finding` produced skeletons missing `## Caveats` /
+  `## Intent` / `## Outcome Summary` and the PostToolUse hook
+  rejected the writes — even though the install-preserve fix was
+  doing exactly what it should (preserving on-disk templates).
+
+  Fix: `_load_template` always reads from the package-shipped
+  templates at `src/aexp/vendor/limina/templates/`. The local
+  `templates/` directory is now purely a *reference copy* — preserved
+  across re-installs by the existing install-preserve logic, but
+  never consulted by the artifact-creation API. The previous
+  implicit "local file = override" semantic is removed.
+
+  **This is a breaking change to undocumented behavior.** Any
+  consumer who was relying on local-template overrides for
+  customization will find their overrides silently ignored. No such
+  consumers are known; the harness is pre-release. If per-project
+  template overrides become a real need, the likely shape is a
+  `--template-file <path>` CLI flag and a `template_path=` Python
+  kwarg — file an issue describing the use case.
+
+  3 new tests in `tests/test_artifacts.py` pin the new behavior:
+  bogus content in a local `templates/hypothesis.md` doesn't leak
+  into rendered artifacts; freshly-rendered E and F skeletons satisfy
+  `kb_validate.validate_kb` without any post-creation edits (the
+  creation-validation agreement contract).
+
 ### Added (templates + validator: stick to the templates precisely)
 
 - **`kb_validate.validate_required_headers`** — every artifact must
