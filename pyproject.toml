@@ -1,6 +1,6 @@
 [project]
 name = "agentic-experiments"
-version = "0.1.1"
+version = "0.2.0"
 description = "Git-first, hypothesis-forcing experiment tracking for agent-driven ML research. Vendors Limina as the research harness, uses signac for local execution/run state, and bridges to W&B for remote observability."
 authors = [
     {name = "Kaden McKeen", email = "mckeenkaden@gmail.com"}

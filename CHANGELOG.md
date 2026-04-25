@@ -7,6 +7,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.2.0] — 2026-04-25
+
+### Release summary
+
+0.2.0 turns aexp from "installed-but-minimal" (0.1.x shipped the
+H→E→F chain enforcement, signac run store, and wandb adapter)
+into an actually-usable research harness. Major themes, top-down:
+
+- **First-class artifact creation API.** `aexp.artifacts` ships
+  `new_hypothesis` / `new_experiment` / `new_finding` /
+  `new_thread` with automatic parent-backlink patching. Templates
+  are rendered from the package (not from stale local copies), so
+  creation and validation can't disagree about what "the template
+  is." No more hand-writing frontmatter + remembering wikilink
+  rules on every artifact.
+
+- **Threads (`T###`) — new artifact kind.** Forward-looking
+  research concerns broader than a single hypothesis. Parallel to
+  H/E/F but deliberately outside the H→E→F enforcement chain.
+  Spawns hypotheses via `aexp new-hypothesis --thread T###`;
+  closes via `aexp close-thread T###` with a `--promoted` variant
+  when the thread persists as parent context.
+
+- **Queue + runner-script materialization.** `aexp queue add` /
+  `queue run` turns declarative intent into a runner script
+  (shell / slurm / manual) that executes wherever the user's
+  compute environment lives — designed for agent-on-laptop,
+  training-on-cluster workflows. Includes sp resolution via named
+  `conditions:` blocks in experiment frontmatter (drift-proof
+  provenance) and a `--sweep "KEY=a|b,SEED=0..3"` Cartesian-product
+  grammar.
+
+- **Wandb init-ownership decoupled.** Three first-class modes:
+  `tracked_run` (managed), `prepare_tracker` (bring your own
+  `wandb.init`), and the existing `bind_tracker` adapter path.
+  Consumers with pre-existing `wandb.init` sites (e.g. electricrag's
+  `loop.py`) can adopt aexp's discipline without refactoring.
+
+- **Validator strictness.** `kb_validate` now enforces template-
+  header presence (`missing_template_header`) and a
+  `conditions_schema` check on experiment frontmatter. Templates
+  grew `## Caveats` + `## Intent` (dual-mode pre-registered vs.
+  exploratory, to kill the fabricate-retroactive-thresholds trap)
+  and renamed old `## Expected Outcome` / `## Analysis` sections
+  to clarify the E-run-level ↔ F-generalizable-claim boundary.
+
+- **Install safety.** `aexp install --force` preserves user-authored
+  `kb/` + `templates/` content while refreshing tooling files.
+  Reported as the CHALLENGE.md-clobber bug by a real user;
+  regression-guarded with a new `preserved_user_modified` action
+  kind.
+
+- **Slash commands: 3 → 18.** Artifact creation (H/E/F/T + new-run),
+  finding creation (picked by what the finding cites —
+  from-run / from-batch / placeholder), read/inspect (show-run,
+  show-batch, list-runs, list-threads, show-thread, status,
+  validate), queue lifecycle (add/list/materialize), thread
+  lifecycle (new/list/show/close). Old close-run / close-batch /
+  new-finding renamed to the parallel `finding-from-<source>` form.
+
+- **Hooks tightened.** `SessionStart` silenced on missing
+  `CHALLENGE.md` / `ACTIVE.md`. `enforce_hef_chain` extended to
+  block hypotheses that reference a non-existent thread.
+
+- **Docs.** New `docs/queue.md`, `docs/threads.md`. `docs/tracker-adapters.md`
+  rewritten to stop implying the adapter is the canonical wandb
+  surface. `docs/cli.md` + `docs/quickstart.md` updated throughout.
+
+Full detail — including every surface, every behavior change, and
+pointers to the bug reports that drove each fix — in the sections
+below.
+
 ### Changed (thread docs — refinements from the first real use)
 
 Reports back from the electricrag-side agent after salvaging two
