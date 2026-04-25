@@ -501,7 +501,7 @@ _VENDOR_TEMPLATES_DIR = (
 )
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 def _required_headers_for_kind(kind: str) -> tuple[str, ...]:
     """Extract ordered ``## ``-level headers from the vendored template for ``kind``.
 

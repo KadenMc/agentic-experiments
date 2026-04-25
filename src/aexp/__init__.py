@@ -17,13 +17,6 @@ except PackageNotFoundError:  # pragma: no cover - only in uninstalled-source ed
     __version__ = "0.0.0+unknown"
 
 # Install / bootstrap -------------------------------------------------------
-from aexp.install import (
-    InstallAction,
-    compute_vendor_sha,
-    install_limina,
-    is_limina_installed,
-)
-
 # Artifact creation (H / E / F / T) ----------------------------------------
 from aexp.artifacts import (
     ArtifactCreateError,
@@ -36,6 +29,12 @@ from aexp.artifacts import (
     new_thread,
 )
 from aexp.backlinks import add_backlink
+from aexp.install import (
+    InstallAction,
+    compute_vendor_sha,
+    install_limina,
+    is_limina_installed,
+)
 
 # Limina readers ------------------------------------------------------------
 from aexp.limina_io import (

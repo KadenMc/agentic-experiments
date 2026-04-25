@@ -5,14 +5,11 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
 from aexp.install import install_limina
 from aexp.queue import (
-    MaterializeResult,
-    QueueEntry,
     RunnerCommandMissing,
     SubprocessFailed,
     SweepParseError,
@@ -29,7 +26,6 @@ from aexp.queue import (
     run_queued,
 )
 from aexp.runs import create_run, open_run
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -117,9 +113,9 @@ def _patch_experiment_frontmatter(
     runner_command: str | None = None,
 ) -> None:
     """Rewrite only the specified fields in an existing E###'s frontmatter."""
-    from aexp.limina_io import find_artifact_path
-
     import frontmatter  # type: ignore[import-not-found]
+
+    from aexp.limina_io import find_artifact_path
 
     exp_path = find_artifact_path(experiment_id, kb_root=repo / "kb")
     post = frontmatter.load(str(exp_path))

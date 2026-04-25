@@ -470,8 +470,9 @@ def _seed_hypothesis_and_experiment(
         title="e", hypothesis_id="H001", repo_root=repo, artifact_id="E001"
     )
     if runner_command is not None:
-        from aexp.limina_io import find_artifact_path
         import frontmatter  # type: ignore[import-not-found]
+
+        from aexp.limina_io import find_artifact_path
 
         exp_path = find_artifact_path("E001", kb_root=repo / "kb")
         post = frontmatter.load(str(exp_path))

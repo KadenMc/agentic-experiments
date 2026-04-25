@@ -30,14 +30,14 @@ import os
 import re
 import subprocess
 import sys
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable, Literal
+from typing import Any, Literal
 
 import signac
 
 from aexp.limina_io import ArtifactNotFoundError, load_experiment
 from aexp.runs import (
-    RunNotFound,
     create_run,
     find_runs,
     mark_status,
@@ -47,7 +47,6 @@ from aexp.runs import (
 from aexp.schema import MaterializeResult, QueueEntry, iso_utc_now
 from aexp.utils.atomic import atomic_write
 from aexp.utils.paths import find_repo_root
-
 
 # ---------------------------------------------------------------------------
 # Errors

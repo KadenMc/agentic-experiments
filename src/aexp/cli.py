@@ -22,12 +22,12 @@ from aexp.artifacts import (
     new_hypothesis,
     new_thread,
 )
+from aexp.install import install_limina
 from aexp.limina_io import (
     ArtifactNotFoundError,
     list_kb_artifacts,
     load_thread,
 )
-from aexp.install import install_limina
 from aexp.linking import (
     link_to_experiment,
     list_batches,

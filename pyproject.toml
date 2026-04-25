@@ -111,6 +111,13 @@ extend-exclude = ["reference", "src/aexp/vendor"]
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP"]
 
+[tool.ruff.lint.flake8-bugbear]
+# typer's API is `param: T = typer.Option(...)`. The OptionInfo it returns
+# is treated as a metadata sentinel by typer at function-call time, not a
+# mutable shared default — so B008 is a false positive for these calls.
+# Same for typer.Argument.
+extend-immutable-calls = ["typer.Option", "typer.Argument"]
+
 [tool.ruff.lint.per-file-ignores]
 # Tests contain long literal artifact-body strings used as fixtures; breaking
 # them up hurts readability without any real benefit.
