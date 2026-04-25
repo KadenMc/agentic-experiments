@@ -43,6 +43,11 @@ script is composing command lines.
 aexp install [--run-store PATH] [--force] [--no-require-git]
 aexp version
 
+aexp new-thread    --title "..." [--id T###] [--link <wikilink>...]
+aexp list-threads  [--status STATE] [--tag TAG]
+aexp show-thread   <T###>
+aexp close-thread  <T###> [--conclusion "<markdown>"] [--promoted]
+
 aexp new-run --experiment E### [--hypothesis H###] [--sub-hypothesis H###]
             [--sp K=V,...] [--no-commit]
 aexp list-runs [--experiment E###] [--hypothesis H###] [--status STATUS]

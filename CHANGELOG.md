@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (threads — new artifact kind for forward-looking research concerns)
+
+- **`T###` artifact kind**, parallel to H/E/F. A thread is a
+  forward-looking research concern broader than a single hypothesis
+  — exploration that may spawn 2–5 ``H###`` over its lifetime.
+  Solves the gap reported by the electricrag-side agent on
+  2026-04-24: H/E/F assume you already know which hypothesis to
+  write; threads capture the upstream exploration without rotting in
+  session notes or going off-graph in external trackers.
+- **Lifecycle**: ``PROPOSED → EXPLORING → PROMOTED`` (one or more
+  hypotheses spawned; thread persists as parent context) or
+  ``CLOSED`` (decided not to pursue / superseded / out of scope).
+  Status transitions are manual — no implicit state machinery.
+- **Linkage**: hypotheses gain an optional ``thread:`` frontmatter
+  field. When set:
+  - The validator (``enforce_hef_chain`` PreToolUse hook + the
+    ``kb_validate`` ``reference`` check) requires the named ``T###``
+    to exist on disk.
+  - The thread's ``## Links`` section is auto-patched with the
+    hypothesis backlink (``- [[H###]]``).
+  - ``required_links_for(H)`` adds the thread to the required-link
+    set, satisfied automatically by the auto-patch.
+  Threads themselves are NOT in the H→E→F enforcement chain —
+  hypotheses without a thread parent are still fine.
+- **`aexp.artifacts.new_thread(title, ...)`** creates a validator-
+  clean skeleton at ``kb/research/threads/T###-<slug>.md`` with the
+  shipped template's seven required sections (`## Statement`,
+  `## Sub-questions`, `## Promotion criteria`, `## Open links`,
+  `## Notes`, `## Conclusion`, `## Links`).
+- **`aexp.artifacts.close_thread(thread_id, conclusion=..., new_status=...)`**
+  transitions the status, updates `last_updated`, and rewrites the
+  ``## Conclusion`` section. Default `new_status` is ``CLOSED``;
+  pass `new_status="PROMOTED"` (or `--promoted` on the CLI) when
+  the thread persists as parent context for spawned hypotheses.
+- **`aexp.artifacts.new_hypothesis(thread_id="T###", ...)`** —
+  promotion path. Records ``thread: T###`` in H frontmatter,
+  auto-patches the thread's ``## Links``, validates T existence
+  before signac job creation. The thread's status doesn't auto-
+  transition — call `close_thread(..., new_status="PROMOTED")` or
+  hand-edit.
+- **CLI verbs** (4 new): ``aexp new-thread``, ``aexp list-threads``,
+  ``aexp show-thread``, ``aexp close-thread``. Plus ``--thread`` flag
+  on ``aexp new-hypothesis`` for promotion.
+- **MCP tools** (4 new): ``new_thread``, ``list_threads``,
+  ``show_thread``, ``close_thread``. ``new_hypothesis`` gains a
+  ``thread_id`` parameter.
+- **Slash commands** (4 new): ``/aexp-new-thread``,
+  ``/aexp-list-threads``, ``/aexp-show-thread``,
+  ``/aexp-close-thread``. ``/aexp-new-hypothesis`` updated to mention
+  the ``--thread`` flag for promotion.
+- **Validator** (`kb_validate`): T added to ``CORE_ARTIFACTS`` with
+  required fields ``("Status", "Created")``. Required-template-header
+  check (`missing_template_header`) covers all seven thread sections.
+  H's optional `Thread` reference is validated by `validate_ref`
+  (existence) and `validate_backlinks` (bidirectional).
+- **`docs/threads.md`** — canonical reference for the model:
+  when-to-use, lifecycle, required sections, linkage, command
+  surface, Python API, idioms (e.g. "thread titles describe the
+  *concern*, not the *answer*").
+
+Total slash commands: 14 → **18**. Total artifact kinds: 6 → **7**.
+
 ### Fixed
 
 - **Artifact creation and validation now read from the same template

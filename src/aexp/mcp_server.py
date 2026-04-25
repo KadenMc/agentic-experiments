@@ -28,9 +28,16 @@ except ImportError as exc:  # pragma: no cover
 
 from aexp.artifacts import (
     ArtifactCreateError,
+    close_thread as _close_thread,
     new_experiment as _new_experiment,
     new_finding as _new_finding,
     new_hypothesis as _new_hypothesis,
+    new_thread as _new_thread,
+)
+from aexp.limina_io import (
+    ArtifactNotFoundError as _ArtifactNotFoundError,
+    list_kb_artifacts as _list_kb_artifacts,
+    load_thread as _load_thread,
 )
 from aexp.linking import (
     link_to_experiment as _link_to_experiment,
@@ -113,6 +120,7 @@ def new_hypothesis(
     title: str,
     artifact_id: str | None = None,
     extra_links: list[str] | None = None,
+    thread_id: str | None = None,
 ) -> dict[str, Any]:
     """Create a new Limina hypothesis (H###).
 
@@ -125,12 +133,16 @@ def new_hypothesis(
         artifact_id: Optional explicit H### id. Defaults to smallest unused.
         extra_links: Optional extra wikilink targets for ## Links (e.g. a
             prior hypothesis). Backlinks are NOT patched for extras.
+        thread_id: Optional T### parent thread this hypothesis was promoted
+            from. When set, the thread must exist on disk; its ## Links
+            section is auto-patched to add ``- [[H###]]``.
     """
     try:
         result = _new_hypothesis(
             title=title,
             artifact_id=artifact_id,
             extra_links=extra_links,
+            thread_id=thread_id,
         )
     except ArtifactCreateError as exc:
         return {"error": str(exc), "code": "artifact_create_error"}
@@ -202,6 +214,134 @@ def new_finding(
     except ArtifactCreateError as exc:
         return {"error": str(exc), "code": "artifact_create_error"}
     return _artifact_result_to_dict(result, kind="F")
+
+
+# ---------------------------------------------------------------------------
+# Tool: new_thread / list_threads / show_thread / close_thread
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def new_thread(
+    title: str,
+    artifact_id: str | None = None,
+    extra_links: list[str] | None = None,
+) -> dict[str, Any]:
+    """Create a new Limina thread (T###).
+
+    A thread is a forward-looking research concern broader than a single
+    hypothesis — it captures exploration that may spawn 2–5 hypotheses
+    over its lifetime. Threads are NOT in the H→E→F enforcement chain;
+    they're parent context. See ``docs/threads.md`` for the model.
+
+    Args:
+        title: Human-readable title; becomes the H1 heading + filename slug.
+        artifact_id: Optional explicit T### id. Defaults to smallest unused.
+        extra_links: Optional extra wikilink targets for ## Links.
+    """
+    try:
+        result = _new_thread(
+            title=title,
+            artifact_id=artifact_id,
+            extra_links=extra_links,
+        )
+    except ArtifactCreateError as exc:
+        return {"error": str(exc), "code": "artifact_create_error"}
+    return _artifact_result_to_dict(result, kind="T")
+
+
+@mcp.tool()
+def list_threads(
+    status: str | None = None,
+    tag: str | None = None,
+) -> list[dict[str, Any]]:
+    """List threads, optionally filtered by status or tag.
+
+    Args:
+        status: ``PROPOSED`` | ``EXPLORING`` | ``PROMOTED`` | ``CLOSED``.
+        tag: Match against the ``tags`` frontmatter list.
+    """
+    from aexp.utils.paths import find_repo_root
+
+    kb = find_repo_root() / "kb"
+    out: list[dict[str, Any]] = []
+    for t in _list_kb_artifacts(kb, kind="T"):
+        t_status = str(t.metadata.get("Status", "") or "").strip()
+        t_tags = t.metadata.get("tags") or []
+        if status is not None and t_status != status:
+            continue
+        if tag is not None:
+            tag_list = (
+                t_tags if isinstance(t_tags, list) else [str(t_tags)]
+            )
+            if tag not in tag_list:
+                continue
+        out.append(
+            {
+                "thread_id": t.id,
+                "title": t.title,
+                "path": t.path,
+                "status": t_status,
+                "created": t.metadata.get("Created", ""),
+                "last_updated": t.metadata.get("Last updated", ""),
+                "tags": list(t_tags) if isinstance(t_tags, list) else [],
+            }
+        )
+    return out
+
+
+@mcp.tool()
+def show_thread(thread_id: str) -> dict[str, Any]:
+    """Return one thread's frontmatter + body."""
+    from aexp.utils.paths import find_repo_root
+
+    kb = find_repo_root() / "kb"
+    try:
+        t = _load_thread(thread_id, kb_root=kb)
+    except _ArtifactNotFoundError as exc:
+        return {"error": str(exc), "code": "artifact_not_found"}
+    return {
+        "thread_id": t.id,
+        "title": t.title,
+        "path": t.path,
+        "status": t.metadata.get("Status", ""),
+        "created": t.metadata.get("Created", ""),
+        "last_updated": t.metadata.get("Last updated", ""),
+        "tags": list(t.metadata.get("tags") or []),
+        "body": t.body,
+    }
+
+
+@mcp.tool()
+def close_thread(
+    thread_id: str,
+    conclusion: str | None = None,
+    promoted: bool = False,
+) -> dict[str, Any]:
+    """Transition a thread to ``CLOSED`` (default) or ``PROMOTED``.
+
+    Args:
+        thread_id: T### id of the thread to close.
+        conclusion: Markdown body for the thread's ``## Conclusion``
+            section. If ``None``, existing body is preserved.
+        promoted: If True, set status to ``PROMOTED`` (one or more
+            hypotheses spawned, thread persists as parent context).
+            Otherwise, status becomes ``CLOSED`` (decided not to
+            pursue / out of scope / superseded).
+    """
+    target_status = "PROMOTED" if promoted else "CLOSED"
+    try:
+        result = _close_thread(
+            thread_id, conclusion=conclusion, new_status=target_status
+        )
+    except ArtifactCreateError as exc:
+        return {"error": str(exc), "code": "artifact_create_error"}
+    return {
+        "thread_id": result.thread_id,
+        "path": result.path,
+        "new_status": result.new_status,
+        "conclusion_written": result.conclusion_written,
+    }
 
 
 # ---------------------------------------------------------------------------

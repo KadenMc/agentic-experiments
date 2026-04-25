@@ -199,6 +199,8 @@ def test_install_drops_slash_commands_without_a_second_step(
         "aexp-finding-placeholder.md",
         "aexp-queue-add.md",
         "aexp-queue-materialize.md",
+        "aexp-new-thread.md",
+        "aexp-close-thread.md",
     ):
         assert (commands / name).is_file(), name
 

@@ -30,7 +30,7 @@
 
 **agentic-experiments** (import name `aexp`) is an opinionated research harness for ML experimentation done *with* an AI agent — typically [Claude Code](https://docs.anthropic.com/en/docs/claude-code). It forces a **Hypothesis → Experiment → Finding** chain on every run, ties that chain to git commits, and validates citation integrity at every turn.
 
-> **14 CLI verbs** &bull; **17 MCP tools** &bull; **14 slash commands** &bull; **4 research skills** &bull; **250+ tests**
+> **18 CLI verbs** &bull; **21 MCP tools** &bull; **18 slash commands** &bull; **4 research skills** &bull; **300+ tests**
 
 ### What this looks like in practice
 
@@ -121,8 +121,8 @@ The design bet: agents already know how to run experiments. What they need is a 
 | | |
 |---|---|
 | **MCP server** | FastMCP with 9 tools covering the full run lifecycle. Runs via `uvx --from agentic-experiments[mcp] aexp-mcp-server` — no absolute paths, no per-machine config, `.mcp.json` committable to git. |
-| **Slash commands** | Artifact creation: `/aexp-new-hypothesis`, `/aexp-new-experiment`, `/aexp-new-run`. Finding creation (pick by what the finding cites): `/aexp-finding-from-run`, `/aexp-finding-from-batch`, `/aexp-finding-placeholder`. Read / inspect: `/aexp-show-run`, `/aexp-show-batch`, `/aexp-list-runs`, `/aexp-status`, `/aexp-validate`. Queue: `/aexp-queue-add`, `/aexp-queue-list`, `/aexp-queue-materialize`. 14 total. |
-| **CLI** | 14 verbs covering install, artifact creation (H/E/F), run lifecycle, batch queries, tracker binding, validation, offline sync, and the `queue` subcommand group (add/list/remove/clear/materialize) + `run-queued`. See `aexp --help` for the full list. Python API is a one-line `from aexp import ...`. |
+| **Slash commands** | Artifact creation: `/aexp-new-hypothesis`, `/aexp-new-experiment`, `/aexp-new-run`. Threads (forward-looking research concerns broader than a hypothesis): `/aexp-new-thread`, `/aexp-list-threads`, `/aexp-show-thread`, `/aexp-close-thread`. Finding creation (pick by what the finding cites): `/aexp-finding-from-run`, `/aexp-finding-from-batch`, `/aexp-finding-placeholder`. Read / inspect: `/aexp-show-run`, `/aexp-show-batch`, `/aexp-list-runs`, `/aexp-status`, `/aexp-validate`. Queue: `/aexp-queue-add`, `/aexp-queue-list`, `/aexp-queue-materialize`. 18 total. |
+| **CLI** | 18 verbs covering install, artifact creation (H/E/F/T + thread lifecycle), run lifecycle, batch queries, tracker binding, validation, offline sync, and the `queue` subcommand group (add/list/remove/clear/materialize) + `run-queued`. See `aexp --help` for the full list. Python API is a one-line `from aexp import ...`. |
 | **Typed JSON contracts** | Pydantic models (`RunLink`, `BatchSelector`, `Issue`, …) back the schema; MCP tools and CLI return the same shapes. |
 
 ---
@@ -236,6 +236,7 @@ So a session can end cleanly with a broken `supporting_runs` citation still pres
 | [docs/mapping.md](docs/mapping.md) | `kb/` ↔ signac ↔ W&B mapping in gory detail |
 | [docs/tracker-adapters.md](docs/tracker-adapters.md) | Writing a new tracker adapter; why Weave isn't in v1 |
 | [docs/queue.md](docs/queue.md) | Queue, runner-script materialization, sp resolution, drift-proof provenance, cross-machine sync |
+| [docs/threads.md](docs/threads.md) | Threads (`T###`) — forward-looking research concerns broader than a hypothesis: lifecycle, linkage to H/E/F, required template sections |
 
 ---
 

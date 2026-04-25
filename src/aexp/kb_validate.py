@@ -29,7 +29,7 @@ except ImportError:
 META_RE = re.compile(r"^>\s+\*\*(.+?)\*\*:\s*(.+?)\s*$")
 FRONTMATTER_BLOCK_RE = re.compile(r"^---\n(.*?)\n---\n?", re.DOTALL)
 WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|[^\]]+)?\]\]")
-ARTIFACT_ID_RE = re.compile(r"^(?:CR|SR|H|E|F|L)\d{3}$")
+ARTIFACT_ID_RE = re.compile(r"^(?:CR|SR|H|E|F|L|T)\d{3}$")
 
 
 @dataclass(frozen=True)
@@ -59,6 +59,7 @@ CORE_ARTIFACTS: dict[str, ArtifactSpec] = {
     "L": ArtifactSpec("L", Path("research/literature"), ("Type", "Date reviewed", "Relevance")),
     "CR": ArtifactSpec("CR", Path("reports"), ("Target", "Requested by", "Reviewer", "Date")),
     "SR": ArtifactSpec("SR", Path("reports"), ("Scope", "Challenge Review", "Date")),
+    "T": ArtifactSpec("T", Path("research/threads"), ("Status", "Created")),
 }
 
 SPECIAL_NOTES = {
@@ -81,6 +82,7 @@ _FRONTMATTER_TO_META = {
     "status": "Status",
     "hypothesis": "Hypothesis",
     "experiment": "Experiment",
+    "thread": "Thread",
     "impact": "Impact",
     "source_type": "Type",
     "relevance": "Relevance",
@@ -492,6 +494,7 @@ _TEMPLATE_FILENAMES_FOR_HEADER_CHECK: dict[str, str] = {
     "H": "hypothesis.md",
     "E": "experiment.md",
     "F": "finding.md",
+    "T": "thread.md",
 }
 _VENDOR_TEMPLATES_DIR = (
     Path(__file__).resolve().parent / "vendor" / "limina" / "templates"
@@ -561,7 +564,10 @@ def validate_artifact(note: NoteRecord, artifacts: dict[str, NoteRecord], note_i
     validate_artifact_identity(note, result)
     validate_required_headers(note, result)
 
-    if note.kind == "E":
+    if note.kind == "H":
+        # Optional `Thread` field — when set, must reference an existing T###.
+        validate_ref(note, "Thread", "T", artifacts, result)
+    elif note.kind == "E":
         validate_ref(note, "Hypothesis", "H", artifacts, result)
         validate_conditions_block(note, result)
     elif note.kind == "F":
@@ -575,6 +581,10 @@ def validate_artifact(note: NoteRecord, artifacts: dict[str, NoteRecord], note_i
                     f"{note.path.name} links {hypothesis_id}, but {experiment_id} links {experiment_hypothesis}.",
                     note.path,
                 )
+    elif note.kind == "T":
+        # Threads are not in the H→E→F enforcement chain — they're parent
+        # context for hypotheses, validated structurally only.
+        pass
     elif note.kind == "CR":
         target_id = normalize_ref(note.metadata.get("Target ID", ""))
         if target_id and target_id not in note_index:
@@ -603,7 +613,11 @@ def required_links_for(note: NoteRecord) -> set[str]:
         return {"ACTIVE", "CHALLENGE"}
 
     required = {"ACTIVE", "CHALLENGE"}
-    if note.kind == "E":
+    if note.kind == "H":
+        thread_id = normalize_ref(note.metadata.get("Thread", ""))
+        if thread_id:
+            required.add(thread_id)
+    elif note.kind == "E":
         hypothesis_id = normalize_ref(note.metadata.get("Hypothesis", ""))
         if hypothesis_id:
             required.add(hypothesis_id)
@@ -651,7 +665,11 @@ def validate_backlink(parent_ref: str, child_note: NoteRecord, note_index: dict[
 
 
 def validate_backlinks(note: NoteRecord, note_index: dict[str, NoteRecord], result: ValidationResult) -> None:
-    if note.kind == "E":
+    if note.kind == "H":
+        thread_id = normalize_ref(note.metadata.get("Thread", ""))
+        if thread_id:
+            validate_backlink(thread_id, note, note_index, result)
+    elif note.kind == "E":
         hypothesis_id = normalize_ref(note.metadata.get("Hypothesis", ""))
         if hypothesis_id:
             validate_backlink(hypothesis_id, note, note_index, result)

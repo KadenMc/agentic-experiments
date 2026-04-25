@@ -27,10 +27,11 @@ _KIND_DIRS: dict[ArtifactKind, Path] = {
     "L": Path("research") / "literature",
     "CR": Path("reports"),
     "SR": Path("reports"),
+    "T": Path("research") / "threads",
 }
 
-_ID_RE = re.compile(r"^(CR|SR|H|E|F|L)(\d{3})$")
-_FILENAME_ID_RE = re.compile(r"^(CR|SR|H|E|F|L)(\d{3})-")
+_ID_RE = re.compile(r"^(CR|SR|H|E|F|L|T)(\d{3})$")
+_FILENAME_ID_RE = re.compile(r"^(CR|SR|H|E|F|L|T)(\d{3})-")
 _H1_RE = re.compile(r"^#\s+(.*?)\s*$", re.MULTILINE)
 
 
@@ -50,7 +51,7 @@ class ArtifactReadError(RuntimeError):
 def parse_artifact_id(artifact_id: str) -> tuple[ArtifactKind, int]:
     """Split an artifact id like ``"E018"`` into ``("E", 18)``.
 
-    Raises ``ValueError`` if ``artifact_id`` does not match ``^(CR|SR|H|E|F|L)\\d{3}$``.
+    Raises ``ValueError`` if ``artifact_id`` does not match ``^(CR|SR|H|E|F|L|T)\\d{3}$``.
     """
     m = _ID_RE.match(artifact_id)
     if not m:
@@ -201,6 +202,14 @@ def load_finding(artifact_id: str, *, kb_root: Path) -> LiminaArtifactRef:
     return ref
 
 
+def load_thread(artifact_id: str, *, kb_root: Path) -> LiminaArtifactRef:
+    """Load a thread artifact, asserting the kind."""
+    ref = load_artifact(artifact_id, kb_root=kb_root)
+    if ref.kind != "T":
+        raise ArtifactReadError(f"{artifact_id} is {ref.kind}, not T")
+    return ref
+
+
 def list_kb_artifacts(
     kb_root: Path,
     *,
@@ -247,5 +256,6 @@ __all__ = [
     "load_experiment",
     "load_finding",
     "load_hypothesis",
+    "load_thread",
     "parse_artifact_id",
 ]

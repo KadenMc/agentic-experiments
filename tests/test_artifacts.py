@@ -8,9 +8,12 @@ import pytest
 
 from aexp.artifacts import (
     ArtifactCreateError,
+    ThreadStatusUpdate,
+    close_thread,
     new_experiment,
     new_finding,
     new_hypothesis,
+    new_thread,
     next_artifact_id,
     slugify,
 )
@@ -324,6 +327,163 @@ def test_new_finding_skeleton_passes_validator_unmodified(
         e for e in result.errors if e.get("check") == "missing_template_header"
     ]
     assert header_errors == [], result.errors
+
+
+# ---------------------------------------------------------------------------
+# Threads (T###)
+# ---------------------------------------------------------------------------
+
+
+def test_new_thread_creates_validator_clean_skeleton(installed_repo: Path) -> None:
+    result = new_thread(title="hierarchy-aware scoring", repo_root=installed_repo)
+    assert result.artifact_id == "T001"
+    assert result.path.endswith("/T001-hierarchy-aware-scoring.md")
+    text = (installed_repo / result.path).read_text(encoding="utf-8")
+    assert 'id: "T001"' in text
+    assert 'aliases: ["T001"]' in text
+    assert 'status: PROPOSED' in text
+    # Must include all required template headers.
+    for header in (
+        "## Statement",
+        "## Sub-questions",
+        "## Promotion criteria",
+        "## Open links",
+        "## Notes",
+        "## Conclusion",
+        "## Links",
+    ):
+        assert header in text, header
+
+    inner = validate_kb(installed_repo / "kb")
+    header_errors = [
+        e for e in inner.errors if e.get("check") == "missing_template_header"
+    ]
+    assert header_errors == [], inner.errors
+
+
+def test_next_artifact_id_T_starts_at_001(installed_repo: Path) -> None:
+    kb = installed_repo / "kb"
+    assert next_artifact_id("T", kb_root=kb) == "T001"
+
+
+def test_new_hypothesis_with_thread_id_patches_thread_links(
+    installed_repo: Path,
+) -> None:
+    new_thread(title="t", repo_root=installed_repo, artifact_id="T001")
+    result = new_hypothesis(
+        title="h",
+        thread_id="T001",
+        repo_root=installed_repo,
+        artifact_id="H001",
+    )
+    assert result.artifact_id == "H001"
+    # Thread's ## Links should now include [[H001]] (auto-patched).
+    thread_path = installed_repo / "kb" / "research" / "threads" / "T001-t.md"
+    assert "[[H001]]" in thread_path.read_text(encoding="utf-8")
+    # Hypothesis frontmatter records the thread.
+    h_path = installed_repo / "kb" / "research" / "hypotheses" / "H001-h.md"
+    assert 'thread: "T001"' in h_path.read_text(encoding="utf-8")
+    # Backlinks list shows the thread file.
+    assert any("T001" in p for p in result.backlinks_patched)
+
+
+def test_new_hypothesis_rejects_unknown_thread_id(installed_repo: Path) -> None:
+    with pytest.raises(ArtifactCreateError):
+        new_hypothesis(
+            title="h", thread_id="T099", repo_root=installed_repo
+        )
+
+
+def test_new_hypothesis_rejects_malformed_thread_id(installed_repo: Path) -> None:
+    new_thread(title="t", repo_root=installed_repo, artifact_id="T001")
+    with pytest.raises(ArtifactCreateError):
+        new_hypothesis(
+            title="h", thread_id="bogus", repo_root=installed_repo
+        )
+
+
+def test_new_hypothesis_without_thread_leaves_thread_field_empty(
+    installed_repo: Path,
+) -> None:
+    new_hypothesis(title="h", repo_root=installed_repo, artifact_id="H001")
+    text = (
+        installed_repo / "kb" / "research" / "hypotheses" / "H001-h.md"
+    ).read_text(encoding="utf-8")
+    assert 'thread: ""' in text
+
+
+def test_h_e_f_chain_validates_clean_with_thread(installed_repo: Path) -> None:
+    """Full chain T → H → E → F should pass validate_kb."""
+    new_thread(title="root", repo_root=installed_repo, artifact_id="T001")
+    new_hypothesis(
+        title="h",
+        thread_id="T001",
+        repo_root=installed_repo,
+        artifact_id="H001",
+    )
+    new_experiment(
+        title="e",
+        hypothesis_id="H001",
+        repo_root=installed_repo,
+        artifact_id="E001",
+    )
+    new_finding(
+        title="f",
+        hypothesis_id="H001",
+        experiment_id="E001",
+        repo_root=installed_repo,
+        artifact_id="F001",
+    )
+    inner = validate_kb(installed_repo / "kb")
+    assert inner.ok, inner.errors
+
+
+def test_close_thread_transitions_status_and_writes_conclusion(
+    installed_repo: Path,
+) -> None:
+    new_thread(title="t", repo_root=installed_repo, artifact_id="T001")
+    update = close_thread(
+        "T001",
+        conclusion="Decided not to pursue — superseded by Thread A.",
+        repo_root=installed_repo,
+    )
+    assert isinstance(update, ThreadStatusUpdate)
+    assert update.new_status == "CLOSED"
+    assert update.conclusion_written is True
+
+    text = (
+        installed_repo / "kb" / "research" / "threads" / "T001-t.md"
+    ).read_text(encoding="utf-8")
+    assert "status: CLOSED" in text
+    assert "Decided not to pursue" in text
+
+
+def test_close_thread_promoted_status(installed_repo: Path) -> None:
+    new_thread(title="t", repo_root=installed_repo, artifact_id="T001")
+    update = close_thread(
+        "T001",
+        conclusion="Spawned [[H001]]; thread persists as parent context.",
+        new_status="PROMOTED",
+        repo_root=installed_repo,
+    )
+    assert update.new_status == "PROMOTED"
+    text = (
+        installed_repo / "kb" / "research" / "threads" / "T001-t.md"
+    ).read_text(encoding="utf-8")
+    assert "status: PROMOTED" in text
+
+
+def test_close_thread_unknown_id_errors(installed_repo: Path) -> None:
+    with pytest.raises(ArtifactCreateError):
+        close_thread("T099", repo_root=installed_repo)
+
+
+def test_close_thread_rejects_invalid_status(installed_repo: Path) -> None:
+    new_thread(title="t", repo_root=installed_repo, artifact_id="T001")
+    with pytest.raises(ArtifactCreateError):
+        close_thread(
+            "T001", new_status="GARBAGE", repo_root=installed_repo
+        )
 
 
 # ---------------------------------------------------------------------------

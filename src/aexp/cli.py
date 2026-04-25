@@ -16,9 +16,16 @@ from rich.table import Table
 from aexp import __version__
 from aexp.artifacts import (
     ArtifactCreateError,
+    close_thread,
     new_experiment,
     new_finding,
     new_hypothesis,
+    new_thread,
+)
+from aexp.limina_io import (
+    ArtifactNotFoundError,
+    list_kb_artifacts,
+    load_thread,
 )
 from aexp.install import install_limina
 from aexp.linking import (
@@ -260,10 +267,24 @@ def new_hypothesis_cmd(
     link: list[str] = typer.Option(
         [], "--link", help="Extra target to add to ## Links (repeatable)."
     ),
+    thread: str | None = typer.Option(
+        None,
+        "--thread",
+        help=(
+            "Optional T### parent thread this hypothesis was promoted from. "
+            "When set, the thread must exist on disk; its ## Links will be "
+            "auto-patched."
+        ),
+    ),
 ) -> None:
     """Create a new hypothesis (H###) with a validator-clean skeleton."""
     try:
-        result = new_hypothesis(title=title, artifact_id=id, extra_links=link or None)
+        result = new_hypothesis(
+            title=title,
+            artifact_id=id,
+            extra_links=link or None,
+            thread_id=thread,
+        )
     except ArtifactCreateError as exc:
         console.print(f"[red]{exc}[/red]")
         _exit(2)
@@ -329,6 +350,137 @@ def new_finding_cmd(
         console.print(f"[red]{exc}[/red]")
         _exit(2)
     _print_artifact_result("finding", result)
+
+
+# ---------------------------------------------------------------------------
+# thread lifecycle (T### — research direction broader than a hypothesis)
+# ---------------------------------------------------------------------------
+
+
+@app.command("new-thread")
+def new_thread_cmd(
+    title: str = typer.Option(..., "--title", help="Human-readable thread title."),
+    id: str | None = typer.Option(None, "--id", help="Force a specific T### id."),
+    link: list[str] = typer.Option(
+        [], "--link", help="Extra target to add to ## Links (repeatable)."
+    ),
+) -> None:
+    """Create a new thread (T###) — a forward-looking research concern
+    broader than a hypothesis.
+
+    Threads capture exploration that may spawn 2-5 hypotheses over their
+    lifetime. They're not in the H→E→F enforcement chain; they're parent
+    context. Promote a thread to a hypothesis with
+    ``aexp new-hypothesis --thread T###``. Close a thread with
+    ``aexp close-thread T###``.
+    """
+    try:
+        result = new_thread(
+            title=title, artifact_id=id, extra_links=link or None
+        )
+    except ArtifactCreateError as exc:
+        console.print(f"[red]{exc}[/red]")
+        _exit(2)
+    _print_artifact_result("thread", result)
+
+
+@app.command("list-threads")
+def list_threads_cmd(
+    status: str | None = typer.Option(
+        None,
+        "--status",
+        help="Filter: PROPOSED | EXPLORING | PROMOTED | CLOSED.",
+    ),
+    tag: str | None = typer.Option(
+        None, "--tag", help="Filter to threads with this tag in frontmatter."
+    ),
+) -> None:
+    """List every thread in kb/research/threads/."""
+    from aexp.utils.paths import find_repo_root
+
+    kb = find_repo_root() / "kb"
+    threads = list_kb_artifacts(kb, kind="T")
+    rows = []
+    for t in threads:
+        t_status = str(t.metadata.get("Status", "") or "").strip()
+        t_tags = t.metadata.get("tags") or []
+        if status is not None and t_status != status:
+            continue
+        if tag is not None:
+            tag_list = (
+                t_tags if isinstance(t_tags, list) else [str(t_tags)]
+            )
+            if tag not in tag_list:
+                continue
+        rows.append((t.id, t_status, t.title, t.path))
+
+    table = Table(title=f"threads ({len(rows)})", show_header=True)
+    for col in ("id", "status", "title", "path"):
+        table.add_column(col)
+    for row in sorted(rows):
+        table.add_row(*[str(c) for c in row])
+    console.print(table)
+
+
+@app.command("show-thread")
+def show_thread_cmd(thread_id: str) -> None:
+    """Show one thread's frontmatter + body summary."""
+    from aexp.utils.paths import find_repo_root
+
+    kb = find_repo_root() / "kb"
+    try:
+        t = load_thread(thread_id, kb_root=kb)
+    except ArtifactNotFoundError as exc:
+        console.print(f"[red]{exc}[/red]")
+        _exit(2)
+        return
+    console.print(f"[bold]{t.id}[/bold] — {t.title}")
+    console.print(f"  path: {t.path}")
+    status = t.metadata.get("Status", "") or "(unset)"
+    created = t.metadata.get("Created", "") or "(unset)"
+    last_updated = t.metadata.get("Last updated", "") or "(unset)"
+    console.print(f"  status: [cyan]{status}[/cyan]")
+    console.print(f"  created: {created}")
+    console.print(f"  last_updated: {last_updated}")
+
+
+@app.command("close-thread")
+def close_thread_cmd(
+    thread_id: str,
+    conclusion: str | None = typer.Option(
+        None,
+        "--conclusion",
+        help=(
+            "Markdown body to write into the thread's ## Conclusion "
+            "section. If omitted, existing body is preserved."
+        ),
+    ),
+    promoted: bool = typer.Option(
+        False,
+        "--promoted",
+        help=(
+            "Set status to PROMOTED instead of CLOSED. Use when one or "
+            "more hypotheses have been spawned and the thread persists "
+            "as parent context."
+        ),
+    ),
+) -> None:
+    """Transition a thread to CLOSED (default) or PROMOTED."""
+    target_status = "PROMOTED" if promoted else "CLOSED"
+    try:
+        result = close_thread(
+            thread_id, conclusion=conclusion, new_status=target_status
+        )
+    except ArtifactCreateError as exc:
+        console.print(f"[red]{exc}[/red]")
+        _exit(2)
+        return
+    console.print(
+        f"[green]{result.new_status}[/green] [bold]{result.thread_id}[/bold]"
+    )
+    console.print(f"  path: {result.path}")
+    if result.conclusion_written:
+        console.print("  conclusion: rewritten")
 
 
 # ---------------------------------------------------------------------------

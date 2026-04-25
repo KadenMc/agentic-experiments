@@ -3,6 +3,7 @@ id: "{ARTIFACT_ID}"
 aliases: ["{ARTIFACT_ID}"]
 type: hypothesis
 status: PROPOSED
+thread: "{THREAD_ID}"
 created: "{DATE}"
 last_updated: "{DATE}"
 tags: []

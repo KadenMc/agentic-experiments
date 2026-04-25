@@ -24,13 +24,16 @@ from aexp.install import (
     is_limina_installed,
 )
 
-# Artifact creation (H / E / F) --------------------------------------------
+# Artifact creation (H / E / F / T) ----------------------------------------
 from aexp.artifacts import (
     ArtifactCreateError,
     ArtifactCreateResult,
+    ThreadStatusUpdate,
+    close_thread,
     new_experiment,
     new_finding,
     new_hypothesis,
+    new_thread,
 )
 from aexp.backlinks import add_backlink
 
@@ -43,6 +46,7 @@ from aexp.limina_io import (
     load_experiment,
     load_finding,
     load_hypothesis,
+    load_thread,
 )
 
 # Linking + batch queries ---------------------------------------------------
@@ -139,13 +143,16 @@ __all__ = [
     "compute_vendor_sha",
     "install_limina",
     "is_limina_installed",
-    # artifacts (H/E/F creation + backlink patching)
+    # artifacts (H/E/F/T creation + backlink patching + thread lifecycle)
     "ArtifactCreateError",
     "ArtifactCreateResult",
+    "ThreadStatusUpdate",
     "add_backlink",
+    "close_thread",
     "new_experiment",
     "new_finding",
     "new_hypothesis",
+    "new_thread",
     # runs
     "RunNotFound",
     "RunStoreNotInitialized",
@@ -185,6 +192,7 @@ __all__ = [
     "load_experiment",
     "load_finding",
     "load_hypothesis",
+    "load_thread",
     # schema
     "BatchSelector",
     "BatchSummary",

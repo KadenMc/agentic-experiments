@@ -25,11 +25,13 @@ from pydantic import BaseModel, ConfigDict, Field
 # Shared literal type sets
 # ---------------------------------------------------------------------------
 
-ArtifactKind = Literal["H", "E", "F", "L", "CR", "SR"]
-"""The six Limina artifact kinds validated by vendored ``kb_validate.py``.
+ArtifactKind = Literal["H", "E", "F", "L", "CR", "SR", "T"]
+"""The seven Limina artifact kinds validated by vendored ``kb_validate.py``.
 
 ``H``=Hypothesis, ``E``=Experiment, ``F``=Finding, ``L``=Literature,
-``CR``=Challenge Review, ``SR``=Strategic Review.
+``CR``=Challenge Review, ``SR``=Strategic Review,
+``T``=Thread (forward-looking research concern broader than a single
+hypothesis; spawns one or more H### over its lifetime).
 """
 
 RunStatus = Literal[

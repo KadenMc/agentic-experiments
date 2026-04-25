@@ -22,17 +22,26 @@ Flow:
    block (rare — usually empty; skip unless the user mentions e.g.
    *"this supersedes H003"*). ``ACTIVE`` and ``CHALLENGE`` are always added
    automatically.
-3. Run:
+3. Optional: if this hypothesis is being **promoted from a thread**
+   (``T###``), pass ``--thread T###``. The thread must already exist
+   on disk; its ``## Links`` section will be auto-patched with
+   ``- [[H###]]`` and the H frontmatter will record
+   ``thread: T###``. After successful creation, consider running
+   `/aexp-close-thread <T###> --promoted` if the thread should now
+   transition from ``EXPLORING`` to ``PROMOTED``.
+
+4. Run:
 
    ```
-   python -m aexp new-hypothesis --title "<title>" [--link <extra>] [--link <extra>]
+   python -m aexp new-hypothesis --title "<title>" \
+       [--thread <T###>] [--link <extra>] [--link <extra>]
    ```
 
    The command allocates the smallest unused ``H###``, writes
-   ``kb/research/hypotheses/H###-<slug>.md`` from ``templates/hypothesis.md``,
-   and reports the new id + path.
+   ``kb/research/hypotheses/H###-<slug>.md`` from the shipped
+   template, and reports the new id + path.
 
-4. Open the new file and fill in the prose sections from what the user
+5. Open the new file and fill in the prose sections from what the user
    told you:
    - ``## Statement``, ``## Mechanism``, ``## Why This Might Generalize``,
      ``## Shortcut Risks``, ``## Evidence`` — straightforward.
@@ -46,7 +55,7 @@ Flow:
    Do NOT edit the frontmatter, the blockquote metadata, or the
    ``## Links`` section — those are already correct.
 
-5. Run `python -m aexp validate --kb-only` to confirm the new file is
+6. Run `python -m aexp validate --kb-only` to confirm the new file is
    clean. The validator now checks every shipped template header is
    present (`missing_template_header` issue code) — fill a placeholder
    rather than deleting a section.

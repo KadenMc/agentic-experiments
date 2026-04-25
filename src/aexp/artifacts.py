@@ -46,13 +46,14 @@ _TEMPLATE_FILENAMES: dict[ArtifactKind, str] = {
     "H": "hypothesis.md",
     "E": "experiment.md",
     "F": "finding.md",
+    "T": "thread.md",
 }
 
 # Placeholder keys replaced by the renderer. Lower-case ``{command}``,
 # ``{date}``, ``{step}`` etc. in the shipped templates are literal example
 # text (e.g. "Confirm if: `{command}` -> ...") and must be left intact.
 _PLACEHOLDER_RE = re.compile(
-    r"\{(ARTIFACT_ID|TITLE|DATE|HYPOTHESIS_ID|EXPERIMENT_ID|IMPACT|LINKS_BLOCK)\}"
+    r"\{(ARTIFACT_ID|TITLE|DATE|HYPOTHESIS_ID|EXPERIMENT_ID|THREAD_ID|IMPACT|LINKS_BLOCK)\}"
 )
 
 _ALWAYS_LINK = ("ACTIVE", "CHALLENGE")
@@ -247,6 +248,7 @@ def new_hypothesis(
     repo_root: str | Path | None = None,
     artifact_id: str | None = None,
     extra_links: list[str] | None = None,
+    thread_id: str | None = None,
 ) -> ArtifactCreateResult:
     """Create a new ``H###`` hypothesis artifact.
 
@@ -263,22 +265,43 @@ def new_hypothesis(
         Extra targets to include in the ``## Links`` block on top of the
         always-required ``ACTIVE`` / ``CHALLENGE`` (e.g. a prior hypothesis
         this one supersedes). No backlinks are patched for these.
+    thread_id
+        Optional ``T###`` parent thread this hypothesis was promoted
+        from. When set: (a) the hypothesis frontmatter records
+        ``thread: T###``, (b) the thread artifact must already exist on
+        disk, (c) the thread's ``## Links`` is auto-patched to add
+        ``- [[H###]]`` so the validator's bidirectional-link check
+        passes. Threads are *not* in the H→E→F enforcement chain — this
+        is opt-in extra context, not a hard requirement.
     """
     if not title.strip():
         raise ArtifactCreateError("title is required")
+    if thread_id is not None and not re.fullmatch(r"T\d{3}", thread_id):
+        raise ArtifactCreateError(
+            f"thread_id must match T###, got {thread_id!r}"
+        )
     repo, kb = _resolve_roots(repo_root)
+    if thread_id is not None and not _artifact_exists(thread_id, kb_root=kb):
+        raise ArtifactCreateError(
+            f"thread {thread_id} does not exist under {kb}"
+        )
     aid = artifact_id or next_artifact_id("H", kb_root=kb)
     if _artifact_exists(aid, kb_root=kb):
         raise ArtifactCreateError(f"hypothesis {aid} already exists")
 
     extras = list(extra_links or [])
-    link_targets = [*extras, *_ALWAYS_LINK]
+    # When a thread is set, include it in the ## Links block so the
+    # validator's required_links_for(H) check passes without manual edit.
+    link_targets = (
+        ([thread_id] if thread_id else []) + extras + list(_ALWAYS_LINK)
+    )
     rendered = _render_template(
         _load_template("H", repo_root=repo),
         {
             "ARTIFACT_ID": aid,
             "TITLE": title,
             "DATE": _today_iso(),
+            "THREAD_ID": thread_id or "",
             "LINKS_BLOCK": _render_links_block(link_targets),
         },
     )
@@ -290,12 +313,22 @@ def new_hypothesis(
         slug=slugify(title),
         rendered=rendered,
     )
-    # Hypotheses have no mandatory parents to backlink. Extra links are
-    # deliberately *not* patched — the semantics of "this H supersedes H007"
-    # are caller-defined; we don't want to silently graft bidirectional links.
+
+    patched: list[str] = []
+    already: list[str] = []
+    if thread_id:
+        patched, already = _patch_parents(
+            parent_ids=[thread_id],
+            child_id=aid,
+            kb_root=kb,
+            repo_root=repo,
+        )
+
     return ArtifactCreateResult(
         artifact_id=aid,
         path=_relative_posix(path, repo_root=repo),
+        backlinks_patched=patched,
+        backlinks_already_present=already,
     )
 
 
@@ -441,12 +474,192 @@ def new_finding(
     )
 
 
+def new_thread(
+    *,
+    title: str,
+    repo_root: str | Path | None = None,
+    artifact_id: str | None = None,
+    extra_links: list[str] | None = None,
+) -> ArtifactCreateResult:
+    """Create a new ``T###`` thread artifact.
+
+    A thread is a forward-looking research concern broader than a single
+    hypothesis — it captures the surrounding exploration that motivates
+    choosing which hypotheses to write later. See ``docs/threads.md``
+    for the full model.
+
+    Threads are *not* in the ``H→E→F`` enforcement chain — the
+    PreToolUse hook doesn't require a parent. They link to ``ACTIVE`` /
+    ``CHALLENGE`` like every other artifact, plus optionally any
+    ``extra_links`` the caller wants to include.
+
+    Use :func:`close_thread` to transition an existing thread to
+    ``CLOSED`` and fill its ``## Conclusion`` section. To promote a
+    thread (spawn a hypothesis from it), call
+    :func:`new_hypothesis` with ``thread_id="T###"``.
+    """
+    if not title.strip():
+        raise ArtifactCreateError("title is required")
+    repo, kb = _resolve_roots(repo_root)
+    aid = artifact_id or next_artifact_id("T", kb_root=kb)
+    if _artifact_exists(aid, kb_root=kb):
+        raise ArtifactCreateError(f"thread {aid} already exists")
+
+    extras = list(extra_links or [])
+    link_targets = [*extras, *_ALWAYS_LINK]
+    rendered = _render_template(
+        _load_template("T", repo_root=repo),
+        {
+            "ARTIFACT_ID": aid,
+            "TITLE": title,
+            "DATE": _today_iso(),
+            "LINKS_BLOCK": _render_links_block(link_targets),
+        },
+    )
+    path = _write_artifact(
+        kind="T",
+        kb_root=kb,
+        repo_root=repo,
+        artifact_id=aid,
+        slug=slugify(title),
+        rendered=rendered,
+    )
+    return ArtifactCreateResult(
+        artifact_id=aid,
+        path=_relative_posix(path, repo_root=repo),
+    )
+
+
+@dataclass(frozen=True)
+class ThreadStatusUpdate:
+    """Returned by :func:`close_thread` / status-mutating thread ops."""
+
+    thread_id: str
+    path: str  # repo-relative POSIX
+    new_status: str
+    conclusion_written: bool
+
+
+_THREAD_VALID_STATUSES: frozenset[str] = frozenset(
+    {"PROPOSED", "EXPLORING", "PROMOTED", "CLOSED"}
+)
+_FRONTMATTER_STATUS_RE = re.compile(
+    r'^(status:\s*["\']?)([A-Z]+)(["\']?\s*)$', re.MULTILINE
+)
+_FRONTMATTER_LAST_UPDATED_RE = re.compile(
+    r'^(last_updated:\s*["\']?)([^"\'\n]*)(["\']?\s*)$', re.MULTILINE
+)
+_CONCLUSION_SECTION_RE = re.compile(
+    r"^(## Conclusion\s*\n)(.*?)(?=\n## |\Z)", re.MULTILINE | re.DOTALL
+)
+
+
+def _set_thread_status(
+    text: str, *, new_status: str, today: str
+) -> str:
+    """Replace the ``status:`` and ``last_updated:`` frontmatter values."""
+    out, replaced = _FRONTMATTER_STATUS_RE.subn(
+        rf"\g<1>{new_status}\g<3>", text, count=1
+    )
+    if not replaced:
+        raise ArtifactCreateError(
+            "could not locate `status:` line in thread frontmatter; "
+            "frontmatter shape may have drifted from the shipped template"
+        )
+    out, _ = _FRONTMATTER_LAST_UPDATED_RE.subn(
+        rf'\g<1>{today}\g<3>', out, count=1
+    )
+    return out
+
+
+def _set_conclusion_section(text: str, conclusion_body: str) -> str:
+    """Replace the body of the ``## Conclusion`` section with the supplied text."""
+    replacement_body = "\n" + conclusion_body.strip() + "\n\n"
+
+    def _sub(match: re.Match[str]) -> str:
+        return match.group(1) + replacement_body
+
+    out, replaced = _CONCLUSION_SECTION_RE.subn(_sub, text, count=1)
+    if not replaced:
+        # Fall back: append a new section at end (shouldn't happen with the
+        # shipped template, but be permissive in case the user removed it).
+        suffix = "" if text.endswith("\n") else "\n"
+        out = text + suffix + "\n## Conclusion\n" + replacement_body
+    return out
+
+
+def close_thread(
+    thread_id: str,
+    *,
+    conclusion: str | None = None,
+    new_status: str = "CLOSED",
+    repo_root: str | Path | None = None,
+) -> ThreadStatusUpdate:
+    """Transition a thread to ``CLOSED`` (default) or ``PROMOTED`` and
+    optionally fill its ``## Conclusion`` section.
+
+    Parameters
+    ----------
+    thread_id
+        ``T###`` id of the thread to close.
+    conclusion
+        Markdown body to write into the thread's ``## Conclusion``
+        section. If ``None``, the existing body is left untouched (use
+        when the section was already filled before close-time).
+    new_status
+        Target status. ``"CLOSED"`` (default) for "decided not to
+        pursue / out of scope / superseded"; ``"PROMOTED"`` for
+        "spawned hypotheses; thread persists as parent context."
+        Other valid values: ``PROPOSED``, ``EXPLORING`` (in case you
+        want a re-open helper).
+
+    Returns
+    -------
+    ThreadStatusUpdate
+        Path, new status, and whether the conclusion section was
+        rewritten.
+    """
+    if not re.fullmatch(r"T\d{3}", thread_id):
+        raise ArtifactCreateError(
+            f"thread_id must match T###, got {thread_id!r}"
+        )
+    if new_status not in _THREAD_VALID_STATUSES:
+        raise ArtifactCreateError(
+            f"new_status must be one of {sorted(_THREAD_VALID_STATUSES)}, "
+            f"got {new_status!r}"
+        )
+    repo, kb = _resolve_roots(repo_root)
+    try:
+        path = find_artifact_path(thread_id, kb_root=kb)
+    except ArtifactNotFoundError as exc:
+        raise ArtifactCreateError(
+            f"thread {thread_id} not found under {kb}"
+        ) from exc
+
+    text = path.read_text(encoding="utf-8")
+    text = _set_thread_status(text, new_status=new_status, today=_today_iso())
+    wrote_conclusion = False
+    if conclusion is not None and conclusion.strip():
+        text = _set_conclusion_section(text, conclusion)
+        wrote_conclusion = True
+    atomic_write(path, text)
+    return ThreadStatusUpdate(
+        thread_id=thread_id,
+        path=_relative_posix(path, repo_root=repo),
+        new_status=new_status,
+        conclusion_written=wrote_conclusion,
+    )
+
+
 __all__ = [
     "ArtifactCreateError",
     "ArtifactCreateResult",
+    "ThreadStatusUpdate",
+    "close_thread",
     "new_experiment",
     "new_finding",
     "new_hypothesis",
+    "new_thread",
     "next_artifact_id",
     "slugify",
 ]
