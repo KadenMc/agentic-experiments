@@ -69,10 +69,31 @@ Flow:
    - **`## Conclusion`** — leave as the placeholder; filled later via
      `/aexp-close-thread`.
 
-5. Run `python -m aexp validate --kb-only` to confirm clean.
+5. **Status discipline.** The rendered file starts at ``PROPOSED``.
+   **Leave it there.** The stricter reading of ``PROPOSED`` vs.
+   ``EXPLORING`` is: ``PROPOSED`` = "the thread exists but no
+   concrete work is underway"; ``EXPLORING`` = "someone is actively
+   running a baseline / reviewing literature / pursuing a promotion
+   criterion — there's work-in-flight, not just intent." Salvaged
+   drafts, opportunistic threads, and backfilled ones all stay
+   ``PROPOSED`` until real work begins. (A 2026-04-24 salvage got
+   this wrong — the agent assumed "already thought about it →
+   EXPLORING"; Kaden corrected to PROPOSED. Default stricter.)
 
-6. Next step: when the user is ready to spawn a hypothesis from this
+6. **If this thread cross-links another artifact that doesn't exist
+   yet** (e.g. two threads that deliberately reference each other),
+   create both skeletons FIRST, then add the cross-links to each
+   one's ``## Links`` section. ``kb_write_guard`` blocks writes
+   whose wikilinks don't resolve; a two-pass create-then-link
+   sequence sidesteps that. See ``docs/threads.md`` →
+   "Cross-linked artifacts: create-then-link ordering."
+
+7. Run `python -m aexp validate --kb-only` to confirm clean.
+
+8. Next step: when the user is ready to spawn a hypothesis from this
    thread, they call `/aexp-new-hypothesis` with the ``--thread T###``
-   flag. The thread's status should also be advanced manually (edit
-   the frontmatter) from ``PROPOSED`` to ``EXPLORING`` once active
-   work begins.
+   flag. At that point, manually advance the thread to ``EXPLORING``
+   (edit the frontmatter) — spawning a hypothesis counts as work
+   in flight. If the whole thread becomes ``PROMOTED`` (one or more
+   hypotheses live, no more spawning planned), use
+   `/aexp-close-thread T### --promoted`.

@@ -13,6 +13,16 @@ tags: []
 > **Status**: PROPOSED | EXPLORING | PROMOTED | CLOSED
 > **Created**: {DATE}
 > **Last updated**: {DATE}
+>
+> Status discipline: ``PROPOSED`` = the thread exists but no concrete
+> work is underway to advance it — it's a parked idea. Writing it down
+> or occasionally thinking about it doesn't promote to ``EXPLORING``.
+> ``EXPLORING`` = someone is actively running a baseline, reviewing
+> literature toward a sub-question, pursuing a listed promotion
+> criterion. There's a work-in-flight signal, not just intent.
+> ``PROMOTED`` = ≥1 ``H###`` has been spawned via
+> ``aexp new-hypothesis --thread {ARTIFACT_ID}``. ``CLOSED`` = decided
+> not to pursue / superseded / out of scope (fill ``## Conclusion``).
 
 ## Statement
 

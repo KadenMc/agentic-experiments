@@ -34,21 +34,36 @@ PROPOSED → EXPLORING → PROMOTED   (one or more H### spawned; thread persists
                     └─→ CLOSED    (decided not to pursue / out of scope / superseded)
 ```
 
-- **`PROPOSED`** — created, not yet being actively explored.
-- **`EXPLORING`** — actively being explored. Set this manually (edit
-  the `status:` frontmatter) when work begins.
+- **`PROPOSED`** — the thread exists but no concrete work is underway
+  to advance it. It's a parked idea. **Writing it down or
+  occasionally thinking about it does NOT promote to `EXPLORING`.**
+  A thread that was drafted months ago and hasn't seen activity stays
+  `PROPOSED` indefinitely. That's fine — the status is a signal
+  about *current* work, not historical intent. (Salvaged or
+  backfilled threads should start here by default; the salvage
+  itself doesn't count as exploration work.)
+- **`EXPLORING`** — someone is actively running a baseline, reviewing
+  literature toward a sub-question, pursuing a listed promotion
+  criterion, or drafting the hypothesis language. There's a
+  work-in-flight signal, not just intent. When the work pauses,
+  manually demote back to `PROPOSED` — don't leave stale `EXPLORING`
+  threads that falsely suggest active effort.
 - **`PROMOTED`** — at least one `H###` has been spawned from the
   thread (via `aexp new-hypothesis --thread T###`). The thread
   persists as parent context for those hypotheses; it doesn't go
-  away.
+  away. Filling `## Conclusion` at PROMOTED-time is optional but
+  useful as a pointer to the spawned H artifacts.
 - **`CLOSED`** — explicitly closed without promoting. Decided not to
   pursue, turned out to be a non-issue, or superseded by another
-  thread / hypothesis.
+  thread / hypothesis. Fill `## Conclusion` to record *why*.
 
-Status transitions are manual (edit frontmatter or use
-`aexp close-thread`). aexp doesn't auto-transition based on what's
-happened in the kb graph — implicit state machinery is harder to
-reason about than a deliberate edit.
+Status transitions are manual (edit `status:` frontmatter or use
+`aexp close-thread` for the close/promote transitions). aexp doesn't
+auto-transition based on what's happened in the kb graph — implicit
+state machinery is harder to reason about than a deliberate edit.
+The common failure mode is over-promoting (calling a parked idea
+`EXPLORING` because it *feels* active, not because it is). Default
+to the stricter reading.
 
 ## Linkage to H/E/F
 
@@ -155,6 +170,59 @@ close_thread(
 )
 ```
 
+## Section boundary: `## Sub-questions` vs. `## Promotion criteria`
+
+These sections look similar but carry different weight, and edge
+cases blur them. The distinction that holds up in practice:
+
+- **`## Sub-questions`** lists the candidate *claims* this thread
+  could spawn — each bullet reads as a future hypothesis stub. If a
+  bullet says *"does technique X outperform baseline for rare
+  labels?"*, that's a sub-question. Preconditions that are specific
+  to *this individual sub-question* (e.g. "prerequisite: run a
+  per-label AUROC baseline first") can live inline with the bullet
+  — they're the sub-question's own setup, not a thread-wide gate.
+- **`## Promotion criteria`** lists preconditions that must hold
+  before *any* sub-question can be promoted to a hypothesis. This
+  is thread-wide scaffolding: empirical baselines the whole thread
+  depends on, external dependencies (clinician input, data access),
+  methodological scoping that has to be locked before committing
+  to a test plan.
+
+Rule of thumb: *"prerequisite to any promotion → `## Promotion
+criteria`; prerequisite to this specific sub-question → stays with
+the sub-question."* When uncertain, put it in `## Sub-questions`
+with prose that flags it as a prerequisite — moving up to
+`## Promotion criteria` later is cheap.
+
+## Cross-linked artifacts: create-then-link ordering
+
+`kb_write_guard` runs `validate_kb` on every write; it rejects
+writes with `links.missing_note` if a wikilink target doesn't exist
+on disk. This trips up **cross-referenced artifact pairs** — e.g.
+two threads that deliberately reference each other as "separate but
+related" research directions.
+
+**Pattern for cross-linked pairs:** create both skeletons first, then
+populate their `## Links` sections. For two threads T001 and T002
+that cross-reference:
+
+```
+# 1. Create both skeletons (default Links: [[ACTIVE]], [[CHALLENGE]]):
+aexp new-thread --title "Thread A topic"   # writes T001 w/ minimal links
+aexp new-thread --title "Thread B topic"   # writes T002 w/ minimal links
+
+# 2. NOW edit each to add the cross-link (both targets exist on disk):
+# Edit T001: add `- [[T002]]` to ## Links
+# Edit T002: add `- [[T001]]` to ## Links
+# Both writes pass validation — each references an existing artifact.
+```
+
+Same pattern applies to any cross-linked artifacts: e.g. an H that
+references a superseded-by H that doesn't exist yet, or two findings
+that cite each other. Writing the wikilink before the target exists
+will be blocked; write-both-then-link works.
+
 ## Idioms
 
 - **Naming.** Thread titles describe the *concern*, not the *answer*.
@@ -175,3 +243,7 @@ close_thread(
   schedule, doesn't have a deliverable, isn't task-managed. It's a
   research direction. If you find yourself wanting to track tasks,
   use whatever issue tracker fits — threads aren't for that.
+- **Default to PROPOSED on creation.** Salvaged drafts, backfilled
+  threads, and threads added opportunistically during other work all
+  start `PROPOSED`. Only promote to `EXPLORING` when you're actually
+  running work — not when you *intend to* later.

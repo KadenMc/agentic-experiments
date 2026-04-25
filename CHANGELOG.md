@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (thread docs — refinements from the first real use)
+
+Reports back from the electricrag-side agent after salvaging two
+threads under the new schema (commit `906809e` in electricrag on
+2026-04-25). The schema held up; three doc-level clarifications
+landed based on friction encountered:
+
+- **Status semantics made stricter + explicit.** The electricrag
+  agent defaulted to ``EXPLORING`` for salvaged drafts because "the
+  work had been thought about before parking." Kaden corrected to
+  ``PROPOSED``. The distinction: ``PROPOSED`` means the thread
+  exists but no concrete work is underway; ``EXPLORING`` means
+  someone is actively running a baseline / reviewing literature /
+  pursuing a promotion criterion — work-in-flight, not intent.
+  Writing a thread down doesn't promote it; only actually-running
+  work does. Clarified in the thread template blockquote metadata,
+  in ``docs/threads.md`` (expanded lifecycle section + new Idiom
+  "Default to PROPOSED on creation"), and in the
+  ``/aexp-new-thread`` slash command's flow guidance.
+- **Cross-linked-artifact create-then-link ordering documented.**
+  The electricrag agent hit a ``kb_write_guard`` block when T001's
+  first write included ``[[T002]]`` before T002 existed. Fixed
+  easily in practice (write both skeletons first, then add the
+  cross-links in a second pass) but undocumented. New section in
+  ``docs/threads.md`` spells out the pattern; ``/aexp-new-thread``
+  flow guidance flags it inline. Applies to any cross-linked
+  artifact pair, not just threads.
+- **`## Sub-questions` vs. `## Promotion criteria` edge case.**
+  When a sub-question has a specific prerequisite ("run a baseline
+  first"), it can blur with the thread-wide promotion criteria
+  section. New rule-of-thumb in ``docs/threads.md``:
+  prerequisite-to-*any*-promotion goes in ``## Promotion criteria``;
+  prerequisite-to-*this-specific-sub-question* stays with the
+  sub-question. Minor clarification — both threads in the salvage
+  test surfaced the pattern, neither was blocked by it.
+
+No code changes. Template + docs + one slash command.
+
 ### Added (threads — new artifact kind for forward-looking research concerns)
 
 - **`T###` artifact kind**, parallel to H/E/F. A thread is a
