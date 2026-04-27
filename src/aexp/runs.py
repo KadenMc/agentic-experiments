@@ -386,10 +386,13 @@ def run_lifecycle(
             try:
                 job.doc["heartbeat_at"] = iso_utc_now()
             except Exception:
-                # Doc-store contention or workspace deletion — caller
-                # will see the real failure on the main path. Don't
-                # let a heartbeat-thread crash mask that.
-                return
+                # Doc-store contention (Windows file-lock against the
+                # main thread's reads), workspace deletion, or other
+                # transient I/O errors. Continue to the next interval
+                # rather than returning — a single blip shouldn't kill
+                # the heartbeat for the lifetime of the run. The main
+                # path will surface the real failure if any.
+                continue
 
     def _stop_heartbeat() -> None:
         """Signal + join the heartbeat thread. Idempotent.

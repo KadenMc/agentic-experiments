@@ -324,14 +324,17 @@ def test_run_lifecycle_writes_heartbeat_during_run(
         repo_root=installed_repo,
     )
     seen: list[str] = []
-    with run_lifecycle(job, heartbeat_s=0.05):
-        # Poll the heartbeat field; collect distinct values until we have ≥2.
-        deadline = time.monotonic() + 3.0
+    # 0.15s heartbeat interval + 0.15s poll cadence is slow enough to
+    # avoid hammering the signac doc store on Windows (where reads
+    # and writes contend on the file lock) while still letting the
+    # test finish in well under the 6s deadline.
+    with run_lifecycle(job, heartbeat_s=0.15):
+        deadline = time.monotonic() + 6.0
         while time.monotonic() < deadline and len(seen) < 2:
             hb = job.doc.get("heartbeat_at")
             if hb and (not seen or hb != seen[-1]):
                 seen.append(hb)
-            time.sleep(0.05)
+            time.sleep(0.15)
     assert len(seen) >= 2, (
         f"expected ≥2 distinct heartbeat values, got {seen!r}"
     )
@@ -367,10 +370,14 @@ def test_run_lifecycle_heartbeat_env_override(installed_repo: Path) -> None:
         repo_root=installed_repo,
     )
     prior = os.environ.get("AEXP_HEARTBEAT_S")
-    os.environ["AEXP_HEARTBEAT_S"] = "0.1"
+    # 0.15s is slow enough to coexist cleanly with the doc-store
+    # writes on Windows; the test only needs the heartbeat to fire
+    # once (the initial enter-touch always fires regardless of
+    # interval, so even a single tick proves the env path works).
+    os.environ["AEXP_HEARTBEAT_S"] = "0.15"
     try:
         with run_lifecycle(job):
-            time.sleep(0.3)
+            time.sleep(0.5)
         # Heartbeat present despite no explicit kwarg.
         assert "heartbeat_at" in dict(job.doc)
     finally:
