@@ -376,6 +376,7 @@ def run_lifecycle(
     interval = _resolve_heartbeat_interval(heartbeat_s)
     stop_event = threading.Event() if interval > 0 else None
     hb_thread: threading.Thread | None = None
+    hb_stopped = False
 
     def _heartbeat_loop() -> None:
         # Run a tight-but-bounded loop. We sleep on the stop_event so
@@ -389,6 +390,24 @@ def run_lifecycle(
                 # will see the real failure on the main path. Don't
                 # let a heartbeat-thread crash mask that.
                 return
+
+    def _stop_heartbeat() -> None:
+        """Signal + join the heartbeat thread. Idempotent.
+
+        MUST be called before the main thread writes terminal-status
+        fields (``ended_at``, ``wallclock_s``, terminal ``status``).
+        On Windows, the signac doc store uses atomic-write file rename;
+        two threads writing simultaneously trip ``PermissionError`` on
+        the JSON file. Stopping the heartbeat first eliminates the race.
+        """
+        nonlocal hb_stopped
+        if hb_stopped:
+            return
+        hb_stopped = True
+        if stop_event is not None:
+            stop_event.set()
+        if hb_thread is not None:
+            hb_thread.join(timeout=1.0)
 
     if stop_event is not None:
         # Touch once on enter so consumers don't have to wait an interval
@@ -406,19 +425,26 @@ def run_lifecycle(
     try:
         yield job
     except Exception:
+        # Stop heartbeat BEFORE writing terminal status to avoid a
+        # Windows doc-store file-lock race (Python 3.13 + signac's
+        # atomic-write rename). Idempotent + safe under further
+        # exceptions in the writes below.
+        _stop_heartbeat()
         job.doc["status"] = "failed"
         job.doc["ended_at"] = iso_utc_now()
         job.doc["wallclock_s"] = round(perf_counter() - t0, 3)
         raise
     else:
+        _stop_heartbeat()
         job.doc["status"] = "complete"
         job.doc["ended_at"] = iso_utc_now()
         job.doc["wallclock_s"] = round(perf_counter() - t0, 3)
     finally:
-        if stop_event is not None:
-            stop_event.set()
-        if hb_thread is not None:
-            hb_thread.join(timeout=1.0)
+        # Belt-and-suspenders: if neither except nor else branch ran
+        # (shouldn't happen with the contextmanager protocol, but
+        # defensive), guarantee the heartbeat thread is dead before
+        # we leave the context.
+        _stop_heartbeat()
 
 
 def mark_status(job: signac.job.Job, status: RunStatus) -> None:
