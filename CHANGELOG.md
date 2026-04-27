@@ -9,6 +9,182 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.2.1] — 2026-04-27
+
+### Release summary
+
+0.2.1 is a queue-layer bugfix release driven by early-adopter findings
+from the electricrag F.1 inference session of 2026-04-26 → 2026-04-27.
+The 0.2.0 queue layer worked end-to-end but had three discrete design
+gaps that surfaced under real interactive cluster use; this release
+closes all three plus three smaller pieces of side friction the same
+session uncovered.
+
+### Fixed (gap 1) — `aexp run-queued` streams subprocess output live
+
+The 0.2.0 implementation invoked the runner via
+`subprocess.run(..., capture_output=True)`, which buffers stdout and
+stderr in memory until process exit then dumps them at once. For
+interactive consumers (notebook runners, terminal `aexp run-queued`
+calls) a 15-25 minute training run appeared totally silent until the
+end. During the electricrag F.1 session this caused multiple
+panic-kills of healthy jobs because the user couldn't tell whether
+the work was alive vs hung.
+
+`run_queued` now uses `subprocess.Popen` with line-by-line streaming
+(`bufsize=1`, stderr merged into stdout for interleave-correct
+ordering), and writes each line to the parent's stdout immediately
+with a flush. A bounded `deque(maxlen=200)` ring buffer captures the
+last ~16 KB of merged output for the failure-tail path; the rendered
+`last_error.stderr_tail` is still capped at ~2 KB of bytes for
+log-storage parity with 0.2.0.
+
+This fix obsoletes the in-place cluster patch that was applied during
+the 2026-04-26 session (`capture_output=True` line removed). The
+upstream version preserves both halves of the contract: live output
+to the caller AND a forensics-tail in `job.doc`.
+
+### Added (gap 2) — `aexp queue stop <jobid>` interrupts a running job
+
+0.2.0 had no verb to interrupt a running queued job. The only
+recourse was hand-rolled `ps aux | grep ... → kill -9 <pid>`,
+followed by `mark_status(job, 'failed')` via the Python API.
+Dangerous: SIGKILL on a recycled pid can nuke arbitrary cluster
+processes; multiple PIDs in the spawn tree (`aexp run-queued` parent
++ wrapper + inner training process) had to be killed individually.
+
+`run_queued` now spawns the subprocess in its own session/process
+group (POSIX `os.setsid` / Windows `CREATE_NEW_PROCESS_GROUP`) and
+records `pid`, `pgid`, hostname, and a process-start-time fingerprint
+in `job.doc["queue"]["proc"]` for the duration of the run. The
+record is cleared on every exit path so a downstream `queue stop`
+can't be tricked into killing a recycled pid.
+
+`stop_queued()` (CLI: `aexp queue stop <jobid>`) reads the proc
+record, refuses if the recorded host differs from this machine,
+checks the start-time fingerprint to detect pid recycling, sends
+SIGTERM to the process group, polls during a configurable grace
+window (default 5s, override with `--grace-s`), and escalates to
+SIGKILL if the runner ignores SIGTERM. `--force` skips SIGTERM
+entirely.
+
+A new `"stopped"` terminal status (added to `RunStatus`) distinguishes
+operator-stops from `"failed"` (runtime crash) and `"abandoned"`
+(never executed / pre-execution give-up). Validator's
+`VALID_STATUSES` constant updated to recognize the new status.
+
+### Added (gap 3) — `add_to_queue` dedupes recommit-only diffs
+
+0.2.0's `add_to_queue` silently created a new signac job whenever
+the sp differed, including when the only diff was the auto-injected
+`code_commit` from a working-tree commit between two queueings.
+Common footgun: queue, fix a docstring, queue again — now you have
+2N functionally identical pending jobs.
+
+`add_to_queue` (and `add_many_to_queue` via Cartesian product) now
+scans existing pending entries for the same `(experiment_id, tag)`
+and compares sps modulo `code_commit` and `code_dirty`. Matches
+return the existing job and emit a `DuplicatePendingJobWarning`
+(new) instead of creating a duplicate. Pass
+`allow_dup_on_recommit=True` (CLI: `--allow-dup-on-recommit`) when
+the recommit *is* the point of the new entries.
+
+Tag-scoped: different tags = different operational queues = no
+dedupe. Terminal-status entries (complete / failed / abandoned /
+stopped) are not deduped against — re-running a finished experiment
+is intentional, not a footgun.
+
+### Added (side-friction) — `{sp_json_shell}` placeholder
+
+The 0.2.0 `{sp_json}` placeholder emits raw JSON without shell
+escaping. Templates that wrap it in shell quotes
+(`runner_command: "python foo.py '{sp_json}'"`) break for any sp
+value containing the same quote character — apostrophes in
+sp.notes were the actual electricrag failure mode.
+
+New `{sp_json_shell}` placeholder applies `shlex.quote` to the
+JSON payload. Drop it in the template *unquoted* (the shell quoting
+is part of what `shlex.quote` produces). POSIX-safe; Windows cmd.exe
+caveat is documented (cluster is Linux, where it matters).
+
+The original `{sp_json}` is preserved unchanged for backward
+compatibility; the docstring now warns about the apostrophe trap and
+points consumers at `{sp_json_shell}` for any shell-quoted context.
+
+### Added (side-friction) — heartbeat in `run_lifecycle`
+
+0.2.0's signac job document had a `status='running'` flag set once
+at start of `run_lifecycle` and updated only on terminal transition.
+Consumers using doc mtime as a liveness signal got false-stale
+readings while jobs were working hard (no doc writes during inference
+loops). The electricrag F.1 session lost real time to this.
+
+`run_lifecycle` now starts a daemon heartbeat thread that touches
+`doc["heartbeat_at"]` (ISO-8601 UTC) every `heartbeat_s` seconds
+(default 30s; override per-call via the kwarg, globally via
+`AEXP_HEARTBEAT_S` env var, or set to 0 to disable). External
+liveness probes can compare `heartbeat_at` to wall-clock to
+distinguish "still working" (heartbeat advancing) from "wedged"
+(heartbeat stuck > N intervals ago).
+
+The heartbeat is daemon-threaded so SIGKILL of the parent doesn't
+leave it dangling; write exceptions inside the thread are swallowed
+silently so a heartbeat-thread crash can't mask the real failure on
+the main path.
+
+### Added (side-friction) — `code_diff_summary` capture for dirty trees
+
+When `code_dirty=True`, the bare `code_commit` SHA isn't a precise
+reproducer — there are uncommitted changes layered on top. 0.2.1
+captures a structured `queue.code_diff_summary` blob on dirty queue
+adds:
+
+- `diff_stat`: `git diff --stat HEAD` output (one line per changed
+  file plus totals row).
+- `modified_count`: number of modified/staged files.
+- `untracked_count`: number of untracked files (forensics for the
+  "did I forget to `git add`?" case).
+
+Best-effort: capture is wrapped in try/except so a queue add never
+fails because git is unavailable.
+
+### Behavior changes worth noting
+
+- `RunStatus` literal extended with `"stopped"`. Consumers that
+  enumerate `RunStatus` values exhaustively in match statements will
+  see a new lint warning until they handle it; semantically
+  `"stopped"` is a terminal state alongside `"complete"`,
+  `"failed"`, `"abandoned"`.
+- The new `proc` field under `job.doc["queue"]` is *transient* — it
+  exists only between Popen-spawn and process-wait-return. Don't
+  depend on it for post-hoc analysis.
+- `run_lifecycle` writes `doc["heartbeat_at"]` continually during
+  runs. This is small per-write (~80 bytes ISO timestamp) but does
+  bump signac doc-store I/O. Set `heartbeat_s=0` for short-lived
+  in-process runs that don't need it.
+
+### Test coverage
+
+Queue tests grow from 58 → 79 (Linux: 80, Windows: 76). New
+coverage:
+
+- Live-stream proof: parent stdout sees runner output before
+  subprocess exit (regression guard for capture_output buffer-then-
+  dump).
+- Stderr tail capture preserved through streaming refactor.
+- Proc info recorded during run / cleared after.
+- `stop_queued` no-live-proc / wrong-host / pid-recycle / SIGTERM /
+  `--force` paths.
+- Recommit dedupe: returns existing job + emits warning; respects
+  `--allow-dup-on-recommit`; doesn't fire against terminal entries;
+  scoped per tag; per-combo in sweeps.
+- `{sp_json_shell}` apostrophe-safety.
+- `code_diff_summary` written on dirty queue / skipped on clean.
+- `run_lifecycle` heartbeat write / disable / env-var override.
+
+`tests/test_validate.py::test_valid_statuses_constant_matches_run_status_literal`
+updated for the new `"stopped"` literal.
+
 ## [0.2.0] — 2026-04-25
 
 ### Release summary

@@ -283,3 +283,98 @@ def test_mark_status_sets_ended_at_on_terminal(installed_repo: Path) -> None:
     mark_status(job, "abandoned")
     assert job.doc["status"] == "abandoned"
     assert "ended_at" in job.doc
+
+
+# ---------------------------------------------------------------------------
+# Heartbeat (added 0.2.1) — `heartbeat_at` updated periodically during run
+# ---------------------------------------------------------------------------
+
+
+def test_run_lifecycle_writes_heartbeat_during_run(
+    installed_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``doc["heartbeat_at"]`` updates while the run is in progress.
+
+    Liveness probes outside the runner process can use this field to
+    distinguish "still working" (heartbeat advancing) from "wedged"
+    (heartbeat stuck > N intervals ago). The electricrag F.1 session
+    lost real time because the v0.2.0 doc only had ``status='running'``
+    set once at start — there was no advancing field to probe.
+
+    ``iso_utc_now()`` is second-precision, so two heartbeats within
+    the same wall-clock second collapse to the same string. We
+    monkeypatch a sub-second-aware fake clock so the test stays fast
+    and deterministic.
+    """
+    import time
+
+    from aexp import runs as _runs_mod
+
+    counter = {"n": 0}
+
+    def _fake_now() -> str:
+        counter["n"] += 1
+        return f"FAKE-{counter['n']:04d}"
+
+    monkeypatch.setattr(_runs_mod, "iso_utc_now", _fake_now)
+
+    job = create_run(
+        experiment_id="E001",
+        statepoint={"c": "heartbeat-test"},
+        repo_root=installed_repo,
+    )
+    seen: list[str] = []
+    with run_lifecycle(job, heartbeat_s=0.05):
+        # Poll the heartbeat field; collect distinct values until we have ≥2.
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and len(seen) < 2:
+            hb = job.doc.get("heartbeat_at")
+            if hb and (not seen or hb != seen[-1]):
+                seen.append(hb)
+            time.sleep(0.05)
+    assert len(seen) >= 2, (
+        f"expected ≥2 distinct heartbeat values, got {seen!r}"
+    )
+
+
+def test_run_lifecycle_disabled_heartbeat_writes_nothing(
+    installed_repo: Path,
+) -> None:
+    """``heartbeat_s=0`` disables the heartbeat thread entirely.
+
+    Useful for tests / short-lived in-process runs where the I/O cost
+    is unwanted.
+    """
+    job = create_run(
+        experiment_id="E001",
+        statepoint={"c": "no-hb"},
+        repo_root=installed_repo,
+    )
+    with run_lifecycle(job, heartbeat_s=0):
+        pass
+    # No heartbeat_at field was written.
+    assert "heartbeat_at" not in dict(job.doc)
+
+
+def test_run_lifecycle_heartbeat_env_override(installed_repo: Path) -> None:
+    """``AEXP_HEARTBEAT_S`` env var overrides the default."""
+    import os
+    import time
+
+    job = create_run(
+        experiment_id="E001",
+        statepoint={"c": "env-hb"},
+        repo_root=installed_repo,
+    )
+    prior = os.environ.get("AEXP_HEARTBEAT_S")
+    os.environ["AEXP_HEARTBEAT_S"] = "0.1"
+    try:
+        with run_lifecycle(job):
+            time.sleep(0.3)
+        # Heartbeat present despite no explicit kwarg.
+        assert "heartbeat_at" in dict(job.doc)
+    finally:
+        if prior is None:
+            os.environ.pop("AEXP_HEARTBEAT_S", None)
+        else:
+            os.environ["AEXP_HEARTBEAT_S"] = prior

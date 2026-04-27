@@ -52,6 +52,7 @@ from aexp.runs import (
 )
 from aexp.schema import MaterializeResult, QueueEntry, iso_utc_now
 from aexp.utils.atomic import atomic_write
+from aexp.utils.git import get_dirty_diff_summary
 from aexp.utils.paths import find_repo_root
 
 # ---------------------------------------------------------------------------
@@ -160,19 +161,38 @@ pass through untouched."""
 def render_runner_command(
     template: str, sp: dict[str, Any], job_id: str
 ) -> str:
-    """Substitute ``{key}`` / ``{sp_json}`` / ``{job_id}`` against ``sp``.
+    """Substitute ``{key}`` / ``{sp_json}`` / ``{sp_json_shell}`` /
+    ``{job_id}`` against ``sp``.
 
     - ``{key}`` where ``key`` is any sp field → ``str(sp[key])``.
-    - ``{sp_json}`` → the full sp serialized as JSON (sorted keys).
+    - ``{sp_json}`` → the full sp serialized as JSON (sorted keys, compact
+      separators). **Not shell-escaped.** If you wrap it in shell quotes
+      (``'{sp_json}'``) and any sp value contains the same quote
+      character, your runner will be invoked with broken argv. Use
+      ``{sp_json_shell}`` for any shell-quoted context.
+    - ``{sp_json_shell}`` → ``shlex.quote(<json>)``. POSIX-safe shell
+      escaping that you should drop into the template *unquoted*::
+
+          # CORRECT — drop in unquoted; shlex adds the quoting itself:
+          runner_command: "python -m foo {sp_json_shell}"
+
+          # WRONG — double-quoting; will result in single-quoted nest:
+          runner_command: "python -m foo '{sp_json_shell}'"
+
+      Windows cmd.exe doesn't honor POSIX single-quote shell rules; the
+      cluster (Linux) is unaffected. Windows-local users should read
+      ``signac_statepoint.json`` directly from ``$AEXP_JOB_WORKSPACE``
+      rather than relying on argv passing.
     - ``{job_id}`` → the full 32-hex job id.
     - Unknown ``{xxx}`` placeholders → left as-is (so shell-quoted literals
       and stray braces don't raise). Shell vars (``$HOSTNAME``, ``${USER}``)
       are untouched because our regex requires a non-``$`` prefix.
     """
     sp_json_cache: str | None = None
+    sp_json_shell_cache: str | None = None
 
     def _sub(match: re.Match[str]) -> str:
-        nonlocal sp_json_cache
+        nonlocal sp_json_cache, sp_json_shell_cache
         key = match.group(1)
         if key == "sp_json":
             if sp_json_cache is None:
@@ -185,6 +205,17 @@ def render_runner_command(
                     sp, sort_keys=True, separators=(",", ":"), default=str
                 )
             return sp_json_cache
+        if key == "sp_json_shell":
+            if sp_json_shell_cache is None:
+                payload = json.dumps(
+                    sp, sort_keys=True, separators=(",", ":"), default=str
+                )
+                # shlex.quote uses POSIX shell rules — single-quotes the
+                # whole blob and escapes any embedded single-quotes via
+                # the canonical ''\\'''-trick. Safe on bash/sh/zsh; the
+                # docstring warns about Windows cmd.exe.
+                sp_json_shell_cache = shlex.quote(payload)
+            return sp_json_shell_cache
         if key == "job_id":
             return job_id
         if key in sp:
@@ -443,6 +474,25 @@ def add_to_queue(
         queue_doc["runner_hint"] = runner_hint
     if runner_command_override is not None:
         queue_doc["runner_command_override"] = runner_command_override
+
+    # If the working tree was dirty when this job was queued, the bare
+    # ``code_commit`` SHA isn't a precise reproducer — there are
+    # uncommitted changes layered on top. Capture a structured summary
+    # of what differed (stat + counts) so post-hoc forensics has a
+    # fighting chance of reconstructing what was actually run.
+    if include_commit and job.sp.get("code_dirty"):
+        try:
+            root = (
+                Path(repo_root).resolve() if repo_root else find_repo_root()
+            )
+            queue_doc["code_diff_summary"] = get_dirty_diff_summary(root)
+        except Exception:
+            # Provenance capture is best-effort. Don't fail the queue
+            # add because git is unavailable or the tree is in an odd
+            # state — the queue functionality is more important than
+            # the forensics field.
+            pass
+
     job.doc["queue"] = queue_doc
     job.doc["status"] = "queued"
     return job

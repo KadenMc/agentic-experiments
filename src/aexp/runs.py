@@ -12,6 +12,8 @@ directly — we do *not* hide them — while owning two conventions:
 """
 from __future__ import annotations
 
+import os
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -26,6 +28,14 @@ from aexp.utils.paths import (
     find_repo_root,
     resolve_run_store_path,
 )
+
+# Default heartbeat interval (seconds). 30 is a good middle ground:
+# - signac's atomic-write doc store handles 30s writes without contention.
+# - liveness probes can detect a stalled run within a minute.
+# - mid-job processes (real ML training) won't notice the I/O.
+# Override per-run via ``run_lifecycle(..., heartbeat_s=)``; set to 0
+# to disable. Override globally via ``AEXP_HEARTBEAT_S`` env var.
+DEFAULT_HEARTBEAT_S: float = 30.0
 
 # ---------------------------------------------------------------------------
 # Errors
@@ -294,29 +304,103 @@ def find_runs(
 # ---------------------------------------------------------------------------
 
 
+def _resolve_heartbeat_interval(explicit: float | None) -> float:
+    """Pick the heartbeat interval: explicit > env var > module default.
+
+    A value of ``0`` (or negative) disables the heartbeat. The env-var
+    path lets cluster ops tune the cadence globally without touching
+    consumer code (e.g. lower it on jobs whose runtime is bounded by
+    a few minutes).
+    """
+    if explicit is not None:
+        return max(0.0, float(explicit))
+    raw = os.environ.get("AEXP_HEARTBEAT_S")
+    if raw is not None:
+        try:
+            return max(0.0, float(raw))
+        except ValueError:
+            return DEFAULT_HEARTBEAT_S
+    return DEFAULT_HEARTBEAT_S
+
+
 @contextmanager
 def run_lifecycle(
     job: signac.job.Job,
     *,
     mark_started: bool = True,
+    heartbeat_s: float | None = None,
 ) -> Iterator[signac.job.Job]:
     """Context manager that tracks a run's status transitions.
 
-    On enter: writes ``doc["status"]='running'`` and ``doc["started_at']``.
-    On clean exit: writes ``status='complete'``, ``ended_at``, ``wallclock_s``.
+    On enter: writes ``doc["status"]='running'`` and ``doc["started_at"]``,
+    and starts a daemon heartbeat thread that touches
+    ``doc["heartbeat_at"]`` (ISO-8601 UTC) every ``heartbeat_s`` seconds.
+    On clean exit: writes ``status='complete'``, ``ended_at``,
+    ``wallclock_s``, and stops the heartbeat thread.
     On exception: writes ``status='failed'``, ``ended_at``, ``wallclock_s``,
-    and re-raises.
+    stops the heartbeat thread, and re-raises.
+
+    Heartbeat
+    ---------
+    The heartbeat is the answer to "how does a separate process tell
+    whether this run is alive vs. wedged?" Without it, ``status='running'``
+    is set once and never updated; consumers using the doc's mtime as a
+    liveness signal get false-stale readings during jobs that are
+    working hard (no doc writes during inference loops). The electricrag
+    F.1 session lost real time to this misunderstanding.
 
     Parameters
     ----------
     job : signac.job.Job
     mark_started : bool
         If ``False``, leave status untouched on enter. Useful when the
-        caller wants to control the "created -> running" transition itself.
+        caller wants to control the "created -> running" transition
+        itself.
+    heartbeat_s : float | None
+        Heartbeat interval in seconds. ``None`` (default) defers to
+        ``AEXP_HEARTBEAT_S`` env var, then ``DEFAULT_HEARTBEAT_S`` (30 s).
+        Set to ``0`` to disable.
+
+    Notes
+    -----
+    The heartbeat thread is a daemon, so an unexpected interpreter exit
+    (SIGKILL, ``os._exit``) won't leave it dangling. The thread also
+    swallows write exceptions silently — if the signac doc-store lock
+    contends or the workspace disappears, we'd rather fail noisily on
+    the main path than mask it with a heartbeat-thread crash.
     """
     if mark_started:
         job.doc["status"] = "running"
         job.doc.setdefault("started_at", iso_utc_now())
+
+    interval = _resolve_heartbeat_interval(heartbeat_s)
+    stop_event = threading.Event() if interval > 0 else None
+    hb_thread: threading.Thread | None = None
+
+    def _heartbeat_loop() -> None:
+        # Run a tight-but-bounded loop. We sleep on the stop_event so
+        # exit happens within ~10ms of context-exit, not after a full
+        # interval — important for tests and for fast-failing runs.
+        while stop_event is not None and not stop_event.wait(interval):
+            try:
+                job.doc["heartbeat_at"] = iso_utc_now()
+            except Exception:
+                # Doc-store contention or workspace deletion — caller
+                # will see the real failure on the main path. Don't
+                # let a heartbeat-thread crash mask that.
+                return
+
+    if stop_event is not None:
+        # Touch once on enter so consumers don't have to wait an interval
+        # for the first liveness signal.
+        try:
+            job.doc["heartbeat_at"] = iso_utc_now()
+        except Exception:
+            pass
+        hb_thread = threading.Thread(
+            target=_heartbeat_loop, daemon=True, name=f"aexp-hb-{job.id[:8]}"
+        )
+        hb_thread.start()
 
     t0 = perf_counter()
     try:
@@ -330,6 +414,11 @@ def run_lifecycle(
         job.doc["status"] = "complete"
         job.doc["ended_at"] = iso_utc_now()
         job.doc["wallclock_s"] = round(perf_counter() - t0, 3)
+    finally:
+        if stop_event is not None:
+            stop_event.set()
+        if hb_thread is not None:
+            hb_thread.join(timeout=1.0)
 
 
 def mark_status(job: signac.job.Job, status: RunStatus) -> None:

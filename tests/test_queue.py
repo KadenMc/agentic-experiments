@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import os
-import signal as _signal
 import subprocess
 import sys
 import threading
@@ -343,6 +342,59 @@ def test_render_runner_command_injects_sp_json() -> None:
     payload = out.split("'")[1]
     parsed = json.loads(payload)
     assert parsed == {"condition": "full", "seed": 0, "max_turns": 12}
+
+
+def test_render_runner_command_sp_json_shell_quotes_apostrophe_safely() -> None:
+    """``{sp_json_shell}`` shell-escapes JSON that contains apostrophes.
+
+    Regression: the v0.2.0 ``{sp_json}`` placeholder, when wrapped in
+    shell single quotes, would break for any sp value containing an
+    apostrophe (e.g. ``notes: "KED's MIMIC split..."``). The cluster
+    runner would receive broken argv and fail at GPU-execution time
+    rather than at queue-time. ``{sp_json_shell}`` calls ``shlex.quote``
+    on the JSON payload so the rendered command is parse-safe regardless
+    of what's inside the sp.
+    """
+    out = render_runner_command(
+        "python train.py --cfg {sp_json_shell}",
+        {"notes": "KED's MIMIC split", "seed": 0},
+        "x" * 32,
+    )
+    # Must NOT contain an unescaped, unbalanced apostrophe between the
+    # shlex-managed quotes — `shlex.quote` will produce something like:
+    #   'literal 'before' \\'\\' 'literal after'
+    # which parses as one argv even with the embedded apostrophe.
+    import shlex as _shlex
+
+    # `shlex.split` on the rendered command should produce exactly:
+    # ["python", "train.py", "--cfg", "<json with apostrophe>"]
+    parsed = _shlex.split(out)
+    assert parsed[0:3] == ["python", "train.py", "--cfg"]
+    cfg = json.loads(parsed[3])
+    assert cfg["notes"] == "KED's MIMIC split"
+    assert cfg["seed"] == 0
+
+
+def test_render_runner_command_sp_json_shell_unquoted_in_template() -> None:
+    """The placeholder is meant to be dropped in *unquoted*.
+
+    Confirms the docstring's "drop in unquoted" guidance: the rendered
+    output already includes shell quoting, so wrapping the placeholder
+    in additional quotes would create a broken nested-quote string.
+    """
+    out = render_runner_command(
+        "echo {sp_json_shell}",
+        {"key": "value"},
+        "x" * 32,
+    )
+    # Should start with the shlex-managed open quote, not be wrapped.
+    body = out.split("echo ", 1)[1]
+    # shlex.quote of {"key":"value"} returns '{"key":"value"}' on POSIX
+    # (single-quote-wrapped because of the JSON's special chars).
+    import shlex as _shlex
+
+    parts = _shlex.split(out)
+    assert parts == ["echo", '{"key":"value"}'] or parts == ["echo", body.strip()]
 
 
 def test_render_runner_command_ignores_unknown_placeholders() -> None:
@@ -1767,6 +1819,80 @@ def test_add_to_queue_dedupe_scoped_per_tag(installed_repo: Path) -> None:
     assert len(morning) == 1
     assert len(evening) == 1
     assert morning[0].job_id != evening[0].job_id
+
+
+# ---------------------------------------------------------------------------
+# Side-friction — code_diff_summary capture for dirty trees
+# ---------------------------------------------------------------------------
+
+
+def test_add_to_queue_captures_diff_summary_when_dirty(
+    installed_repo: Path,
+) -> None:
+    """``code_dirty=True`` jobs include a ``queue.code_diff_summary`` blob.
+
+    Bare ``code_commit`` is insufficient when the tree is dirty — there
+    are uncommitted changes layered on top. The summary captures the
+    diff stat (one line per changed file) plus modified/untracked
+    counts so post-hoc forensics can tell *what* differed.
+    """
+    _make_experiment(installed_repo)
+    # Make the tree dirty by editing a tracked file (seed.txt is tracked
+    # by the installed_repo fixture's _git_commit). Also create an
+    # untracked file so we can observe both counts.
+    (installed_repo / "seed.txt").write_text("dirty-now", encoding="utf-8")
+    (installed_repo / "untracked.txt").write_text("hello", encoding="utf-8")
+
+    job = add_to_queue(
+        experiment_id="E001",
+        statepoint={"condition": "full"},
+        repo_root=installed_repo,
+    )
+    assert job.sp.get("code_dirty") is True
+    summary = job.doc["queue"].get("code_diff_summary")
+    assert summary is not None, "expected code_diff_summary on dirty queue"
+    # Stat mentions the modified file.
+    assert "seed.txt" in summary["diff_stat"]
+    assert summary["modified_count"] >= 1
+    # Untracked file counted separately.
+    assert summary["untracked_count"] >= 1
+
+
+def test_add_to_queue_skips_diff_summary_when_clean(
+    installed_repo: Path,
+) -> None:
+    """A clean tree means no diff_summary — the SHA is precise."""
+    _make_experiment(installed_repo)
+    # Commit everything _make_experiment generated so the tree is clean.
+    subprocess.run(
+        ["git", "add", "-A"],
+        cwd=str(installed_repo),
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-c", "user.email=t@e.com",
+            "-c", "user.name=T",
+            "commit", "-q", "-m", "clean tree for queue test",
+        ],
+        cwd=str(installed_repo),
+        check=True,
+        capture_output=True,
+    )
+    job = add_to_queue(
+        experiment_id="E001",
+        statepoint={"condition": "full"},
+        repo_root=installed_repo,
+    )
+    assert job.sp.get("code_dirty") is False
+    assert "code_diff_summary" not in job.doc["queue"]
+
+
+# ---------------------------------------------------------------------------
+# Continuing recommit-dedupe — sweeps
+# ---------------------------------------------------------------------------
 
 
 def test_add_many_to_queue_dedupes_each_combo(installed_repo: Path) -> None:
