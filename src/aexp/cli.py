@@ -7,6 +7,8 @@ text when stdout is not a terminal).
 """
 from __future__ import annotations
 
+import warnings
+from contextlib import contextmanager
 from pathlib import Path
 
 import typer
@@ -35,7 +37,9 @@ from aexp.linking import (
     summarize_run,
 )
 from aexp.queue import (
+    DuplicatePendingJobWarning,
     RunnerCommandMissing,
+    StopJobError,
     SubprocessFailed,
     SweepParseError,
     add_many_to_queue,
@@ -47,6 +51,7 @@ from aexp.queue import (
     remove_from_queue,
     run_queue,
     run_queued,
+    stop_queued,
 )
 from aexp.runs import create_run, find_runs, open_run
 from aexp.trackers import NoopAdapter, TrackerInitError, bind_tracker
@@ -89,6 +94,35 @@ def _parse_sp_kv(spec: str | None) -> dict:
 
 def _exit(code: int) -> None:  # pragma: no cover - trivial
     raise typer.Exit(code=code)
+
+
+@contextmanager
+def _capture_dup_warnings():
+    """Catch DuplicatePendingJobWarning during a queue-add CLI invocation.
+
+    The Python API surfaces dedupe events via ``warnings.warn`` so library
+    consumers can route them however they like (logger, error, ignore).
+    The CLI converts them into a single rich-styled summary line so the
+    user gets actionable feedback without a stderr dump of the warning's
+    internals.
+
+    Usage::
+
+        with _capture_dup_warnings() as captured:
+            jobs = add_many_to_queue(...)
+        if captured:
+            console.print("[yellow]skipped N duplicate(s)[/yellow]")
+
+    The ``captured`` list is populated by the context manager's ``__exit__``
+    so it is *empty* during the with-block body and *full* afterward.
+    """
+    captured: list[warnings.WarningMessage] = []
+    with warnings.catch_warnings(record=True) as raw:
+        warnings.simplefilter("always", DuplicatePendingJobWarning)
+        yield captured
+        for entry in raw:
+            if issubclass(entry.category, DuplicatePendingJobWarning):
+                captured.append(entry)
 
 
 # ---------------------------------------------------------------------------
@@ -862,8 +896,24 @@ def queue_add_cmd(
             "block is merged into sp."
         ),
     ),
+    allow_dup_on_recommit: bool = typer.Option(
+        False,
+        "--allow-dup-on-recommit",
+        help=(
+            "Add the new entry even if a pending entry with the same sp "
+            "modulo code_commit/code_dirty already exists. Without this "
+            "flag (default), recommit duplicates are skipped with a "
+            "warning."
+        ),
+    ),
 ) -> None:
-    """Register one or more pending runs."""
+    """Register one or more pending runs.
+
+    Pending entries that match an existing pending entry's sp modulo
+    `code_commit`/`code_dirty` (i.e. the only diff is the auto-captured
+    commit hash) are skipped by default with a warning — pass
+    `--allow-dup-on-recommit` to insert them anyway.
+    """
     base_sp = _parse_sp_kv(sp)
     sweep_dict = _parse_sweep_or_exit(sweep)
 
@@ -876,16 +926,23 @@ def queue_add_cmd(
         _exit(2)
 
     if sweep_dict:
-        jobs = add_many_to_queue(
-            experiment_id=experiment,
-            hypothesis_id=hypothesis,
-            base_sp=base_sp,
-            sweep=sweep_dict,
-            tag=tag,
-            runner_hint=runner_hint,
-            include_commit=not no_commit,
-            resolve_conditions=not no_resolve,
-        )
+        with _capture_dup_warnings() as captured:
+            jobs = add_many_to_queue(
+                experiment_id=experiment,
+                hypothesis_id=hypothesis,
+                base_sp=base_sp,
+                sweep=sweep_dict,
+                tag=tag,
+                runner_hint=runner_hint,
+                include_commit=not no_commit,
+                resolve_conditions=not no_resolve,
+                allow_dup_on_recommit=allow_dup_on_recommit,
+            )
+        if captured:
+            console.print(
+                f"[yellow]skipped {len(captured)} recommit duplicate(s); "
+                "rerun with --allow-dup-on-recommit to add them.[/yellow]"
+            )
         console.print(
             f"[green]queued[/green] [bold]{len(jobs)}[/bold] job(s)"
             + (f" under tag=[cyan]{tag}[/cyan]" if tag else "")
@@ -894,15 +951,23 @@ def queue_add_cmd(
             console.print(f"  {job.id[:8]}  {dict(job.sp)}")
         return
 
-    job = add_to_queue(
-        experiment_id=experiment,
-        hypothesis_id=hypothesis,
-        statepoint=base_sp,
-        tag=tag,
-        runner_hint=runner_hint,
-        include_commit=not no_commit,
-        resolve_conditions=not no_resolve,
-    )
+    with _capture_dup_warnings() as captured:
+        job = add_to_queue(
+            experiment_id=experiment,
+            hypothesis_id=hypothesis,
+            statepoint=base_sp,
+            tag=tag,
+            runner_hint=runner_hint,
+            include_commit=not no_commit,
+            resolve_conditions=not no_resolve,
+            allow_dup_on_recommit=allow_dup_on_recommit,
+        )
+    if captured:
+        console.print(
+            f"[yellow]skipped — recommit duplicate of pending {job.id[:8]}. "
+            "rerun with --allow-dup-on-recommit to add anyway.[/yellow]"
+        )
+        return
     console.print(f"[green]queued[/green] [bold]{job.id}[/bold]")
     console.print(f"  workspace: {job.path}")
     if tag:
@@ -952,6 +1017,44 @@ def queue_remove_cmd(job_id: str) -> None:
     """Mark one queued job ``abandoned`` without executing it."""
     remove_from_queue(job_id)
     console.print(f"[yellow]abandoned[/yellow] {job_id[:8]}")
+
+
+@queue_app.command("stop")
+def queue_stop_cmd(
+    job_id: str,
+    grace_s: float = typer.Option(
+        5.0,
+        "--grace-s",
+        help=(
+            "Seconds to wait between SIGTERM and SIGKILL. Set to 0 to "
+            "skip the grace period and SIGKILL immediately."
+        ),
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Skip SIGTERM, send SIGKILL straight away.",
+    ),
+) -> None:
+    """Interrupt a running queued job (the live `aexp run-queued <id>` subprocess).
+
+    Reads the live-process pointer that ``run_queued`` writes into the
+    job doc, sends SIGTERM (or SIGKILL with ``--force``), and transitions
+    the job's status to ``stopped`` — distinct from ``failed`` (runtime
+    crash) and ``abandoned`` (never ran).
+
+    Refuses when the recorded host is not this machine; ssh into the
+    recording host and rerun there. PID-recycle is detected via
+    process-start-time fingerprints on Linux; on other platforms a small
+    race window remains and is documented.
+    """
+    try:
+        stop_queued(job_id, grace_s=grace_s, force=force)
+    except StopJobError as exc:
+        console.print(f"[red]{exc}[/red]")
+        _exit(2)
+        return
+    console.print(f"[yellow]stopped[/yellow] {job_id[:8]}")
 
 
 @queue_app.command("clear")

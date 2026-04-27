@@ -2,15 +2,23 @@
 from __future__ import annotations
 
 import json
+import os
+import signal as _signal
 import subprocess
 import sys
+import threading
+import time
+import warnings
+from io import StringIO
 from pathlib import Path
 
 import pytest
 
 from aexp.install import install_limina
 from aexp.queue import (
+    DuplicatePendingJobWarning,
     RunnerCommandMissing,
+    StopJobError,
     SubprocessFailed,
     SweepParseError,
     add_many_to_queue,
@@ -24,8 +32,9 @@ from aexp.queue import (
     resolve_sp,
     run_queue,
     run_queued,
+    stop_queued,
 )
-from aexp.runs import create_run, open_run
+from aexp.runs import create_run, mark_status, open_run
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -1215,3 +1224,585 @@ def test_create_run_skips_resolution_when_disabled(installed_repo: Path) -> None
         repo_root=installed_repo,
     )
     assert "max_turns" not in job.sp
+
+
+# ---------------------------------------------------------------------------
+# Gap 1 — run_queued streams output live (no buffer-then-dump)
+# ---------------------------------------------------------------------------
+
+
+def _python_runner_command(body: str) -> str:
+    """Build a quoted ``"<python>" -c "<body>"`` runner command string.
+
+    Centralized to dodge per-call quoting bugs across the new tests; ``body``
+    must already be valid Python (no embedded ``"`` characters that would
+    break the outer quote).
+    """
+    safe_body = body.replace('"', '\\"')
+    return f'"{sys.executable}" -c "{safe_body}"'
+
+
+def test_run_queued_streams_output_live_to_parent_stdout(
+    installed_repo: Path, tmp_path: Path
+) -> None:
+    """Parent stdout must see runner output BEFORE the subprocess exits.
+
+    Regression guard: the v0.2.0 implementation used
+    ``subprocess.run(..., capture_output=True)`` which buffers stdout/stderr
+    in memory until process exit, then dumps the whole thing. For a
+    15-25 minute interactive run that broke live observability completely
+    (the electricrag F.1 session: 4 hours of debugging, multiple
+    panic-kills of healthy jobs that were just silent).
+
+    Strategy: spawn ``run_queued`` in a thread under a runner that writes
+    READY, drops a sentinel file, then sleeps. The main thread polls the
+    redirected stdout — if streaming works, READY shows up while the
+    sentinel file (and thus the subprocess) is still active. If buffered,
+    READY only appears after the thread joins.
+    """
+    sentinel = tmp_path / "subprocess_alive.flag"
+    body = (
+        "import sys, time, pathlib; "
+        "sys.stdout.write('READY\\n'); sys.stdout.flush(); "
+        f"pathlib.Path(r'{sentinel}').write_text('alive'); "
+        "time.sleep(2.0)"
+    )
+    runner = _python_runner_command(body)
+    job_id = _queue_with_runner(installed_repo, runner_command=runner)
+
+    # Capture parent stdout via a StringIO redirect. Capfd-style fixtures
+    # only show the buffer at end-of-test, which can't distinguish "saw
+    # READY at t=0.1s" from "saw READY at t=2.0s" — we need real-time.
+    captured = StringIO()
+    real_stdout = sys.stdout
+    sys.stdout = captured
+
+    result_box: list[int] = []
+
+    def _runner_thread() -> None:
+        try:
+            result_box.append(
+                run_queued(job_id, repo_root=installed_repo)
+            )
+        finally:
+            pass
+
+    thread = threading.Thread(target=_runner_thread)
+    try:
+        thread.start()
+        # Wait for sentinel to appear — proves the subprocess started and
+        # is in the sleep window. Bound the wait so the test fails fast
+        # rather than hanging if anything goes wrong.
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline:
+            if sentinel.exists():
+                break
+            time.sleep(0.05)
+        assert sentinel.exists(), "subprocess never reached the sleep window"
+
+        # Now wait for READY to land in parent stdout WHILE the subprocess
+        # is still running. With Popen streaming this is ~immediate; with
+        # the old capture_output=True it would never happen until the
+        # subprocess exits and the thread joins (~2 seconds later).
+        ready_deadline = time.monotonic() + 1.0
+        saw_ready = False
+        while time.monotonic() < ready_deadline:
+            if "READY" in captured.getvalue():
+                saw_ready = True
+                break
+            time.sleep(0.05)
+        assert thread.is_alive(), (
+            "subprocess already exited before we could verify streaming"
+        )
+        assert saw_ready, (
+            "READY did not appear in parent stdout before subprocess exit; "
+            "this is the buffer-then-dump regression that v0.2.1 fixed."
+        )
+    finally:
+        sys.stdout = real_stdout
+        thread.join(timeout=10.0)
+
+    # Sanity: the runner did succeed end-to-end.
+    assert result_box == [0]
+
+
+def test_run_queued_captures_stderr_tail_via_ring_buffer_on_failure(
+    installed_repo: Path,
+) -> None:
+    """`last_error.stderr_tail` is preserved post-streaming.
+
+    The streaming refactor merges stderr into stdout; the failure-tail
+    capture path now reads from a ring buffer of recent merged lines
+    rather than from ``proc.stderr`` directly. Regression: prove the
+    tail still ends up in ``job.doc["queue"]["last_error"]`` so post-hoc
+    forensics still work.
+    """
+    body = (
+        "import sys; "
+        "sys.stderr.write('this is the failure tail\\n'); "
+        "sys.exit(7)"
+    )
+    job_id = _queue_with_runner(
+        installed_repo, runner_command=_python_runner_command(body)
+    )
+    with pytest.raises(SubprocessFailed):
+        run_queued(job_id, repo_root=installed_repo)
+    final = open_run(job_id, repo_root=installed_repo)
+    err = final.doc["queue"]["last_error"]
+    assert err["returncode"] == 7
+    assert "this is the failure tail" in err["stderr_tail"]
+
+
+def test_run_queued_records_proc_pid_during_run_clears_after(
+    installed_repo: Path,
+) -> None:
+    """``job.doc["queue"]["proc"]`` is set during run, cleared after.
+
+    This is what makes ``stop_queued`` work — ``run_queued`` records the
+    pid (and pgid + host + start fingerprint) so a separate shell can
+    look up the subprocess and signal it. After the run completes, the
+    pointer must be cleared; otherwise a downstream ``queue stop`` would
+    target a recycled pid.
+    """
+    job_id = _queue_with_runner(installed_repo, runner_command="echo hi")
+    run_queued(job_id, repo_root=installed_repo)
+    final = open_run(job_id, repo_root=installed_repo)
+    queue_doc = dict(final.doc.get("queue") or {})
+    assert "proc" not in queue_doc, (
+        f"expected proc cleared after run; got {queue_doc.get('proc')!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Gap 2 — stop_queued + 'stopped' status
+# ---------------------------------------------------------------------------
+
+
+def test_stop_queued_no_live_proc_transitions_status_only(
+    installed_repo: Path,
+) -> None:
+    """No-op safe path: stop on a job that never recorded a live proc.
+
+    Useful for cleaning up the rare case where ``run_queued``'s parent
+    crashed mid-run and left the status as ``running`` with no proc
+    pointer. stop_queued should transition cleanly without errors.
+    """
+    job_id = _queue_with_runner(installed_repo, runner_command="echo hi")
+    # Manually flip to running without spawning anything (simulates
+    # a crashed parent).
+    job = open_run(job_id, repo_root=installed_repo)
+    job.doc["status"] = "running"
+    rc = stop_queued(job_id, repo_root=installed_repo)
+    assert rc == 0
+    final = open_run(job_id, repo_root=installed_repo)
+    assert final.doc["status"] == "stopped"
+    assert final.doc["queue"]["last_error"]["cause"] == "operator_stop"
+    assert final.doc["queue"]["last_error"]["returncode"] == 0
+
+
+def test_stop_queued_already_complete_is_idempotent(
+    installed_repo: Path,
+) -> None:
+    """Stopping a complete job transitions status to ``stopped``.
+
+    This is intentional: an operator who calls `queue stop` on an
+    already-finished job is asserting "I want this row marked stopped"
+    (e.g. they're cleaning up a notebook). The alternative — refuse to
+    transition out of a terminal status — adds a force-flag pothole.
+    """
+    job_id = _queue_with_runner(installed_repo, runner_command="echo hi")
+    run_queued(job_id, repo_root=installed_repo)
+    rc = stop_queued(job_id, repo_root=installed_repo)
+    assert rc == 0
+    final = open_run(job_id, repo_root=installed_repo)
+    assert final.doc["status"] == "stopped"
+
+
+def test_stop_queued_rejects_wrong_host(installed_repo: Path) -> None:
+    """Operator running ``stop`` from a different machine is refused.
+
+    This is the most dangerous failure mode if not guarded: pids are
+    local, so SIGKILL on a recycled pid on the wrong host could nuke
+    arbitrary cluster processes.
+    """
+    job_id = _queue_with_runner(installed_repo, runner_command="echo hi")
+    job = open_run(job_id, repo_root=installed_repo)
+    # Plant a fake "running on different host" proc record.
+    job.doc["queue"] = {
+        **dict(job.doc.get("queue") or {}),
+        "proc": {
+            "pid": 99999,
+            "host": "definitely-not-this-host",
+            "started_at": "2026-04-26T23:59:59Z",
+        },
+    }
+    job.doc["status"] = "running"
+    with pytest.raises(StopJobError) as exc_info:
+        stop_queued(job_id, repo_root=installed_repo)
+    assert "definitely-not-this-host" in str(exc_info.value)
+
+
+def test_stop_queued_pid_recycled_path(installed_repo: Path) -> None:
+    """Recorded fingerprint ≠ live PID's fingerprint ⇒ no signal sent.
+
+    Plants a fake proc record with our own (this test process's) PID
+    but a deliberately-mismatched start_fingerprint. stop_queued's
+    recycle guard should detect the mismatch and transition status
+    without trying to kill us.
+    """
+    if not sys.platform.startswith("linux"):
+        pytest.skip(
+            "PID-recycle fingerprinting requires /proc/<pid>/stat (Linux only)"
+        )
+    job_id = _queue_with_runner(installed_repo, runner_command="echo hi")
+    job = open_run(job_id, repo_root=installed_repo)
+    import socket as _socket
+
+    job.doc["queue"] = {
+        **dict(job.doc.get("queue") or {}),
+        "proc": {
+            "pid": os.getpid(),  # this process — we'd be very unhappy if killed
+            "pgid": os.getpgid(os.getpid()) if hasattr(os, "getpgid") else None,
+            "host": _socket.gethostname(),
+            "started_at": "2026-04-26T23:59:59Z",
+            # Fingerprint that cannot match our actual /proc/<pid>/stat
+            # starttime (which is positive). Negative = guaranteed mismatch.
+            "start_fingerprint": -1.0,
+        },
+    }
+    job.doc["status"] = "running"
+    rc = stop_queued(job_id, repo_root=installed_repo)
+    assert rc == 0
+    final = open_run(job_id, repo_root=installed_repo)
+    assert final.doc["status"] == "stopped"
+    # The note in stderr_tail mentions recycle to make the path observable.
+    tail = final.doc["queue"]["last_error"]["stderr_tail"]
+    assert "recycled" in tail.lower() or "no live process" in tail.lower()
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason=(
+        "POSIX signal semantics — SIGTERM/SIGKILL behavior. Windows uses "
+        "CTRL_BREAK_EVENT and is exercised by the no-live-proc + wrong-host "
+        "tests above which are platform-independent."
+    ),
+)
+def test_stop_queued_kills_running_subprocess_via_sigterm(
+    installed_repo: Path, tmp_path: Path
+) -> None:
+    """End-to-end: stop_queued from one thread interrupts the run.
+
+    Spawns ``run_queued`` in a thread with a runner that sleeps 30s.
+    Polls until the subprocess records its pid in job.doc, then calls
+    ``stop_queued`` from the main thread. SIGTERM should propagate
+    through the new process group, the runner exits, and the job
+    transitions to ``stopped``.
+    """
+    body = (
+        "import time, sys, pathlib; "
+        f"pathlib.Path(r'{tmp_path / 'started.flag'}').write_text('1'); "
+        "sys.stdout.write('STARTED\\n'); sys.stdout.flush(); "
+        "time.sleep(30.0)"
+    )
+    job_id = _queue_with_runner(
+        installed_repo, runner_command=_python_runner_command(body)
+    )
+
+    # Run in a thread; suppress its stdout so capfd doesn't interfere.
+    thread_box: list[BaseException | None] = [None]
+
+    def _runner_thread() -> None:
+        try:
+            run_queued(job_id, repo_root=installed_repo)
+        except SubprocessFailed:
+            # SIGTERM is a non-zero exit; expected.
+            pass
+        except BaseException as exc:  # pragma: no cover — diagnostic
+            thread_box[0] = exc
+
+    thread = threading.Thread(target=_runner_thread, daemon=True)
+    thread.start()
+    try:
+        # Wait for the subprocess to record its pid AND become alive.
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline:
+            job = open_run(job_id, repo_root=installed_repo)
+            if (job.doc.get("queue") or {}).get("proc"):
+                if (tmp_path / "started.flag").exists():
+                    break
+            time.sleep(0.1)
+        assert (tmp_path / "started.flag").exists(), (
+            "subprocess never recorded its proc info / never started"
+        )
+
+        # Stop it. With SIGTERM grace, the python child returns quickly.
+        rc = stop_queued(job_id, grace_s=5.0, repo_root=installed_repo)
+        assert rc == 0
+    finally:
+        thread.join(timeout=15.0)
+
+    assert thread_box[0] is None, f"runner thread errored: {thread_box[0]!r}"
+    final = open_run(job_id, repo_root=installed_repo)
+    assert final.doc["status"] == "stopped", (
+        f"expected stopped, got {final.doc['status']}"
+    )
+    err = final.doc["queue"]["last_error"]
+    assert err["cause"] == "operator_stop"
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="POSIX SIGTERM/SIGKILL semantics; Windows uses CTRL_BREAK_EVENT.",
+)
+def test_stop_queued_force_skips_sigterm(
+    installed_repo: Path, tmp_path: Path
+) -> None:
+    """``--force`` (force=True) goes straight to SIGKILL.
+
+    Use case: runner ignores SIGTERM (signal.SIG_IGN), so the grace
+    window is wasted time. The force path skips it entirely.
+    """
+    body = (
+        "import signal, time, pathlib; "
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+        f"pathlib.Path(r'{tmp_path / 'ignoring_sigterm.flag'}').write_text('1'); "
+        "time.sleep(30.0)"
+    )
+    job_id = _queue_with_runner(
+        installed_repo, runner_command=_python_runner_command(body)
+    )
+
+    def _runner_thread() -> None:
+        try:
+            run_queued(job_id, repo_root=installed_repo)
+        except SubprocessFailed:
+            pass
+
+    thread = threading.Thread(target=_runner_thread, daemon=True)
+    thread.start()
+    try:
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline:
+            if (tmp_path / "ignoring_sigterm.flag").exists():
+                break
+            time.sleep(0.1)
+        assert (tmp_path / "ignoring_sigterm.flag").exists()
+
+        t0 = time.monotonic()
+        stop_queued(job_id, force=True, repo_root=installed_repo)
+        elapsed = time.monotonic() - t0
+        # SIGKILL is immediate; the only delay is the post-kill liveness
+        # poll (~2s ceiling). force=True means we never spent the 5s
+        # SIGTERM grace.
+        assert elapsed < 4.0, f"force-stop took {elapsed:.2f}s; expected <4s"
+    finally:
+        thread.join(timeout=15.0)
+    final = open_run(job_id, repo_root=installed_repo)
+    assert final.doc["status"] == "stopped"
+
+
+# ---------------------------------------------------------------------------
+# Gap 3 — add_to_queue dedupes on recommit
+# ---------------------------------------------------------------------------
+
+
+def _commit_one_file_change(repo: Path, filename: str = "tickle.txt") -> None:
+    """Make a single trivial commit to bump the working-tree HEAD.
+
+    Used by recommit-dedupe tests: they queue, commit, queue again, and
+    assert the second queueing dedupes despite the auto-injected
+    ``code_commit`` field differing.
+    """
+    p = repo / filename
+    p.write_text(f"tickle-{time.time_ns()}", encoding="utf-8")
+    subprocess.run(
+        ["git", "add", filename], cwd=str(repo), check=True, capture_output=True
+    )
+    subprocess.run(
+        [
+            "git",
+            "-c", "user.email=t@e.com",
+            "-c", "user.name=T",
+            "commit", "-q", "-m", f"tickle {filename}",
+        ],
+        cwd=str(repo),
+        check=True,
+        capture_output=True,
+    )
+
+
+def test_add_to_queue_dedupes_on_recommit_returns_existing_job(
+    installed_repo: Path,
+) -> None:
+    """The exact electricrag failure mode: queue, commit, queue again.
+
+    Without dedupe, the second queueing creates a parallel signac job
+    (different ``code_commit`` in sp). With the v0.2.1 default, the
+    second call returns the first job and emits a warning.
+    """
+    _make_experiment(installed_repo)
+    job1 = add_to_queue(
+        experiment_id="E001",
+        statepoint={"condition": "full", "seed": 0},
+        tag="grid",
+        repo_root=installed_repo,
+    )
+
+    _commit_one_file_change(installed_repo)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", DuplicatePendingJobWarning)
+        job2 = add_to_queue(
+            experiment_id="E001",
+            statepoint={"condition": "full", "seed": 0},
+            tag="grid",
+            repo_root=installed_repo,
+        )
+
+    # Same job returned (signac id = sp content hash, but our dedupe
+    # short-circuits before create_run, so we hand back the original).
+    assert job2.id == job1.id
+    # And only one pending entry exists.
+    pending = list_queue(tag="grid", repo_root=installed_repo)
+    assert len(pending) == 1
+    # A duplicate warning was raised.
+    assert any(
+        issubclass(w.category, DuplicatePendingJobWarning) for w in caught
+    ), f"no DuplicatePendingJobWarning emitted; got {[w.category for w in caught]}"
+
+
+def test_add_to_queue_allow_dup_on_recommit_creates_new_entry(
+    installed_repo: Path,
+) -> None:
+    """``allow_dup_on_recommit=True`` overrides dedupe.
+
+    Used when the new commit *is* the point of the new entries (e.g.
+    evaluating a fix in parallel with the pre-fix queued runs).
+    """
+    _make_experiment(installed_repo)
+    add_to_queue(
+        experiment_id="E001",
+        statepoint={"condition": "full", "seed": 0},
+        tag="grid",
+        repo_root=installed_repo,
+    )
+    _commit_one_file_change(installed_repo)
+    add_to_queue(
+        experiment_id="E001",
+        statepoint={"condition": "full", "seed": 0},
+        tag="grid",
+        repo_root=installed_repo,
+        allow_dup_on_recommit=True,
+    )
+    pending = list_queue(tag="grid", repo_root=installed_repo)
+    assert len(pending) == 2
+    # The two entries differ exactly on code_commit.
+    commits = {e.sp.get("code_commit") for e in pending}
+    assert len(commits) == 2
+
+
+def test_add_to_queue_does_not_dedupe_against_terminal_entries(
+    installed_repo: Path,
+) -> None:
+    """Terminal-status entries are not duplicates.
+
+    Re-running an experiment after it completed (or was abandoned, or
+    failed, or stopped) is intentional, not a footgun. Dedupe only
+    looks at *pending* entries.
+    """
+    _make_experiment(installed_repo)
+    job1 = add_to_queue(
+        experiment_id="E001",
+        statepoint={"condition": "full", "seed": 0},
+        tag="grid",
+        repo_root=installed_repo,
+    )
+    # Mark it complete to take it out of the pending pool.
+    mark_status(job1, "complete")
+
+    _commit_one_file_change(installed_repo)
+    job2 = add_to_queue(
+        experiment_id="E001",
+        statepoint={"condition": "full", "seed": 0},
+        tag="grid",
+        repo_root=installed_repo,
+    )
+    # New pending job; not the original.
+    assert job2.doc["status"] == "queued"
+    # job1 (terminal) and job2 (pending) coexist.
+    all_entries = list_queue(
+        tag="grid", include_terminal=True, repo_root=installed_repo
+    )
+    assert len(all_entries) == 2
+    # Specifically: pending count == 1 (the new one).
+    pending = list_queue(tag="grid", repo_root=installed_repo)
+    assert len(pending) == 1
+    assert pending[0].job_id == job2.id
+
+
+def test_add_to_queue_dedupe_scoped_per_tag(installed_repo: Path) -> None:
+    """Different tags partition the dedupe scope.
+
+    An operator who tags runs differently is signaling a real partition
+    of work. Two pending entries with same sp under different tags are
+    not duplicates and should both be created.
+    """
+    _make_experiment(installed_repo)
+    add_to_queue(
+        experiment_id="E001",
+        statepoint={"condition": "full", "seed": 0},
+        tag="morning",
+        repo_root=installed_repo,
+    )
+    _commit_one_file_change(installed_repo)
+    add_to_queue(
+        experiment_id="E001",
+        statepoint={"condition": "full", "seed": 0},
+        tag="evening",
+        repo_root=installed_repo,
+    )
+    morning = list_queue(tag="morning", repo_root=installed_repo)
+    evening = list_queue(tag="evening", repo_root=installed_repo)
+    assert len(morning) == 1
+    assert len(evening) == 1
+    assert morning[0].job_id != evening[0].job_id
+
+
+def test_add_many_to_queue_dedupes_each_combo(installed_repo: Path) -> None:
+    """Per-combo dedupe in sweeps: queue grid → commit → queue grid again.
+
+    The whole grid should be deduped; the second call returns the same
+    six entries, not twelve.
+    """
+    _make_experiment(installed_repo)
+    first = add_many_to_queue(
+        experiment_id="E001",
+        sweep={"condition": ["full", "classify"], "seed": [0, 1, 2]},
+        tag="grid",
+        repo_root=installed_repo,
+    )
+    assert len(first) == 6
+
+    _commit_one_file_change(installed_repo)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", DuplicatePendingJobWarning)
+        second = add_many_to_queue(
+            experiment_id="E001",
+            sweep={"condition": ["full", "classify"], "seed": [0, 1, 2]},
+            tag="grid",
+            repo_root=installed_repo,
+        )
+    # Six warnings — one per matched combo.
+    dup_warnings = [
+        w for w in caught if issubclass(w.category, DuplicatePendingJobWarning)
+    ]
+    assert len(dup_warnings) == 6
+    # Total pending still 6, not 12.
+    pending = list_queue(tag="grid", repo_root=installed_repo)
+    assert len(pending) == 6
+    # The returned jobs from the second call are the SAME jobs.
+    first_ids = {j.id for j in first}
+    second_ids = {j.id for j in second}
+    assert first_ids == second_ids

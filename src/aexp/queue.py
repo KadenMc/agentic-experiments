@@ -24,12 +24,18 @@ Two orthogonal pieces live here:
 """
 from __future__ import annotations
 
+import errno
 import itertools
 import json
 import os
 import re
+import shlex
+import signal
+import socket
 import subprocess
 import sys
+import time
+from collections import deque
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, Literal
@@ -67,6 +73,24 @@ class SubprocessFailed(RuntimeError):
 
 class SweepParseError(ValueError):
     """Raised by the CLI when a ``--sweep`` string can't be parsed."""
+
+
+class StopJobError(RuntimeError):
+    """Raised by :func:`stop_queued` when stopping a job can't proceed.
+
+    Distinguishes user-facing stop failures (host mismatch, kill refused,
+    etc.) from generic ``RuntimeError`` so the CLI can surface them with
+    actionable messages instead of a stack trace.
+    """
+
+
+# How many lines of subprocess stdout/stderr to retain for ``last_error``
+# forensics. ~200 lines × ~80 chars/line ≈ 16 KB ceiling — well above the
+# original 2 KB byte cap, which routinely truncated useful stack traces
+# mid-sentence. Tail is rendered as the last ~2 KB of bytes so log-storage
+# behavior matches the previous contract for short outputs.
+_OUTPUT_TAIL_LINES: int = 200
+_OUTPUT_TAIL_BYTES: int = 2048
 
 
 # ---------------------------------------------------------------------------
@@ -253,6 +277,75 @@ def _kb_root(repo_root: str | Path | None) -> Path:
     return (Path(repo_root).resolve() if repo_root else find_repo_root()) / "kb"
 
 
+# Provenance keys that participate in signac's content-addressed sp hash
+# but do *not* affect experiment identity. Two queue entries that differ
+# only on these keys are logical duplicates (the second one was created
+# because the user committed code in between, not because the
+# experiment-level intent changed).
+_PROVENANCE_SP_KEYS: frozenset[str] = frozenset({"code_commit", "code_dirty"})
+
+
+def _sp_modulo_provenance(sp: dict[str, Any]) -> dict[str, Any]:
+    """Drop provenance-only sp keys so two entries can be compared by intent."""
+    return {k: v for k, v in sp.items() if k not in _PROVENANCE_SP_KEYS}
+
+
+class DuplicatePendingJobWarning(UserWarning):
+    """Emitted by :func:`add_to_queue` when a pending entry already matches
+    the would-be-new sp modulo provenance fields.
+
+    Captures the existing job id so callers can decide what to do
+    (`-W error` to fail the queue add, default behavior to keep going).
+    """
+
+
+def _find_pending_dup(
+    *,
+    experiment_id: str,
+    hypothesis_id: str | None,
+    sub_hypothesis_id: str | None,
+    target_sp: dict[str, Any],
+    tag: str | None,
+    repo_root: str | Path | None,
+) -> signac.job.Job | None:
+    """Return the first pending queued entry that matches ``target_sp``
+    modulo provenance, scoped to ``(experiment_id, tag)``.
+
+    Tag scope is deliberate: an operator who tags two queueings differently
+    (e.g. ``2026-04-26-morning`` vs ``2026-04-26-evening``) is signaling a
+    real partition of work, not asking aexp to merge them. Tag-less and
+    tag-less always match each other; tag=X matches tag=X only.
+
+    The comparison reconstructs the *would-be* sp on the target side
+    (user_sp + auto-injected ``experiment_id`` + optional hypothesis ids),
+    minus provenance, so it lines up with what ``_build_statepoint`` will
+    put on disk when ``create_run`` is invoked. Without this reconstruction
+    the target lacks ``experiment_id`` and the comparison spuriously
+    misses every existing entry.
+    """
+    # Mirror what create_run / _build_statepoint will inject so the target
+    # sp matches the on-disk shape of existing entries.
+    target_full: dict[str, Any] = {**target_sp, "experiment_id": experiment_id}
+    if hypothesis_id is not None:
+        target_full["hypothesis_id"] = hypothesis_id
+    if sub_hypothesis_id is not None:
+        target_full["sub_hypothesis_id"] = sub_hypothesis_id
+    target_modulo = _sp_modulo_provenance(target_full)
+
+    existing_entries = list_queue(
+        experiment_id=experiment_id, tag=tag, repo_root=repo_root
+    )
+    for entry in existing_entries:
+        if entry.status != "queued":
+            # list_queue already excludes terminal statuses by default;
+            # this guards the rare in-flight ``running`` row.
+            continue
+        if _sp_modulo_provenance(entry.sp) == target_modulo:
+            # Re-open the actual job for the caller to inspect / return.
+            return open_run(entry.job_id, repo_root=repo_root)
+    return None
+
+
 def add_to_queue(
     *,
     experiment_id: str,
@@ -265,6 +358,7 @@ def add_to_queue(
     resolve_conditions: bool = True,
     repo_root: str | Path | None = None,
     include_commit: bool = True,
+    allow_dup_on_recommit: bool = False,
 ) -> signac.job.Job:
     """Register one pending run — signac job with ``status="queued"``.
 
@@ -281,11 +375,55 @@ def add_to_queue(
     ``runner_command_override`` pins a per-job command template that
     supersedes the experiment's ``runner_command`` frontmatter. Rare;
     useful for one-off tweaks.
+
+    Recommit deduplication
+    ----------------------
+    By default (``allow_dup_on_recommit=False``), if a pending queue
+    entry already exists for the same ``experiment_id`` + ``tag`` whose
+    sp matches the about-to-be-added sp *modulo* the provenance keys
+    ``code_commit`` and ``code_dirty``, ``add_to_queue`` returns the
+    existing job and emits a :class:`DuplicatePendingJobWarning` instead
+    of creating a near-duplicate signac job. This catches the common
+    footgun of "queue, commit a docstring fix, queue again — now you
+    have N+N pending jobs that are functionally identical."
+
+    Pass ``allow_dup_on_recommit=True`` (or ``--allow-dup-on-recommit``
+    on the CLI) when the new code_commit *is* the point of the new
+    entries — e.g. evaluating a fix in parallel with the pre-fix runs.
+    Terminal-status entries (complete / failed / abandoned / stopped)
+    are never deduped against; they're historical, and re-running an
+    experiment after it completed is not a duplicate-by-mistake case.
     """
+    import warnings
+
     user_sp = dict(statepoint or {})
     if resolve_conditions:
         kb = _kb_root(repo_root)
         user_sp = resolve_sp(experiment_id, user_sp, kb_root=kb)
+
+    if not allow_dup_on_recommit:
+        existing = _find_pending_dup(
+            experiment_id=experiment_id,
+            hypothesis_id=hypothesis_id,
+            sub_hypothesis_id=sub_hypothesis_id,
+            target_sp=user_sp,
+            tag=tag,
+            repo_root=repo_root,
+        )
+        if existing is not None:
+            warnings.warn(
+                (
+                    f"queue add skipped: pending entry {existing.id[:8]} "
+                    f"already matches sp modulo code_commit/code_dirty "
+                    f"(experiment={experiment_id}"
+                    f"{', tag=' + tag if tag else ''}). "
+                    "Pass allow_dup_on_recommit=True (or "
+                    "--allow-dup-on-recommit) to add the new entry anyway."
+                ),
+                DuplicatePendingJobWarning,
+                stacklevel=2,
+            )
+            return existing
 
     job = create_run(
         experiment_id=experiment_id,
@@ -322,12 +460,19 @@ def add_many_to_queue(
     resolve_conditions: bool = True,
     repo_root: str | Path | None = None,
     include_commit: bool = True,
+    allow_dup_on_recommit: bool = False,
 ) -> list[signac.job.Job]:
     """Bulk :func:`add_to_queue` via Cartesian product over ``sweep``.
 
     ``base_sp`` keys are applied to every job; ``sweep`` keys vary across
     jobs. ``base_sp`` and ``sweep`` must not overlap — pass the key in
     one or the other.
+
+    Recommit deduplication is applied per-combo via :func:`add_to_queue`.
+    A sweep that overlaps an existing pending grid will return the
+    existing pending jobs (one warning per matched combo) instead of
+    materializing a parallel set of dups; pass
+    ``allow_dup_on_recommit=True`` to override.
     """
     base = dict(base_sp or {})
     sweep = dict(sweep or {})
@@ -351,6 +496,7 @@ def add_many_to_queue(
                 resolve_conditions=resolve_conditions,
                 repo_root=repo_root,
                 include_commit=include_commit,
+                allow_dup_on_recommit=allow_dup_on_recommit,
             )
         )
     return jobs
@@ -371,7 +517,9 @@ def _job_to_queue_entry(job: signac.job.Job) -> QueueEntry:
     )
 
 
-_TERMINAL_STATUSES: frozenset[str] = frozenset({"complete", "failed", "abandoned"})
+_TERMINAL_STATUSES: frozenset[str] = frozenset(
+    {"complete", "failed", "abandoned", "stopped"}
+)
 
 
 def list_queue(
@@ -649,6 +797,115 @@ def _resolve_runner_template(
     return template
 
 
+def _proc_create_time(pid: int) -> float | None:
+    """Best-effort process-start-time fingerprint for PID-recycle detection.
+
+    Returns ``None`` when we can't read a stable identifier for the PID's
+    start time. Callers treat ``None`` as "no fingerprint available; skip
+    the recycle check" — same semantics as the rare race we accept on
+    Windows / non-procfs platforms.
+
+    Implementation:
+
+    - Linux: read field 22 (``starttime``, in clock ticks since boot) from
+      ``/proc/<pid>/stat``. Stable across the lifetime of the process and
+      cheap to read; survives container-vs-host quirks because procfs is
+      always the running pid namespace's view.
+    - Other platforms: ``None``. ``psutil`` would give us this portably
+      but adding a dep just for stop-job recycling is overkill — the
+      cluster is Linux, which is where this matters.
+    """
+    if sys.platform.startswith("linux"):
+        try:
+            with open(f"/proc/{pid}/stat", encoding="ascii") as fh:
+                # comm field can contain spaces in parentheses; rsplit
+                # off the trailing fields to dodge that.
+                content = fh.read()
+        except (OSError, FileNotFoundError):
+            return None
+        # Strip up to the closing paren of comm, then split the rest.
+        try:
+            tail = content[content.rindex(")") + 2:]
+            fields = tail.split()
+            # starttime is the (22 - 2)th field after the comm split.
+            return float(fields[19])
+        except (ValueError, IndexError):
+            return None
+    return None
+
+
+def _record_running_proc(
+    job: signac.job.Job, *, pid: int, pgid: int | None, host: str
+) -> None:
+    """Stamp ``job.doc["queue"]["proc"]`` so :func:`stop_queued` can find us."""
+    queue_doc = dict(job.doc.get("queue") or {})
+    proc_info: dict[str, Any] = {
+        "pid": pid,
+        "host": host,
+        "started_at": iso_utc_now(),
+    }
+    if pgid is not None:
+        proc_info["pgid"] = pgid
+    fingerprint = _proc_create_time(pid)
+    if fingerprint is not None:
+        proc_info["start_fingerprint"] = fingerprint
+    queue_doc["proc"] = proc_info
+    job.doc["queue"] = queue_doc
+
+
+def _clear_running_proc(job: signac.job.Job) -> None:
+    """Drop ``job.doc["queue"]["proc"]`` once the subprocess has exited.
+
+    Leaving stale proc info in place is a footgun: an operator running
+    ``aexp queue stop`` after the job exited would think they were
+    targeting a live process. We blow away ``proc`` on every exit path
+    so the only time it's present is between Popen-spawn and wait-return.
+    """
+    queue_doc = dict(job.doc.get("queue") or {})
+    queue_doc.pop("proc", None)
+    job.doc["queue"] = queue_doc
+
+
+def _spawn_subprocess(
+    command: str, *, env: dict[str, str], cwd: str
+) -> tuple[subprocess.Popen[str], int | None]:
+    """Spawn the runner subprocess in its own process group.
+
+    Returns ``(proc, pgid)``. On POSIX, ``pgid`` is the new session/group id
+    (``os.setsid`` makes the child the leader of a new session — which makes
+    its pid equal to its pgid — so ``stop_queued`` can SIGTERM the whole
+    tree with one ``os.killpg``). On Windows, we set
+    ``CREATE_NEW_PROCESS_GROUP`` instead and return ``pgid=None``; the
+    Windows kill path uses ``CTRL_BREAK_EVENT`` against the pid directly.
+    """
+    popen_kwargs: dict[str, Any] = {
+        "shell": True,
+        "env": env,
+        "cwd": cwd,
+        "stdout": subprocess.PIPE,
+        # Merge stderr into stdout so a single line-iteration loop preserves
+        # interleaving order (which is what an interactive notebook user
+        # actually wants — the runner's own stderr context lands next to
+        # the stdout it's commenting on, not at the end of the run).
+        "stderr": subprocess.STDOUT,
+        "bufsize": 1,
+        "text": True,
+    }
+    if sys.platform == "win32":
+        # Windows: detach into its own process group so we can later send
+        # CTRL_BREAK_EVENT. CREATE_NEW_PROCESS_GROUP=0x00000200.
+        popen_kwargs["creationflags"] = 0x00000200
+        proc = subprocess.Popen(command, **popen_kwargs)
+        return proc, None
+    # POSIX: start a new session via setsid so the runner + its descendants
+    # share a pgid distinct from the parent. preexec_fn is documented as
+    # not-thread-safe on the parent side; we call from the run_queued main
+    # thread only, so this is fine.
+    popen_kwargs["preexec_fn"] = os.setsid
+    proc = subprocess.Popen(command, **popen_kwargs)
+    return proc, proc.pid  # session-leader: pgid == pid
+
+
 def run_queued(
     job_id: str,
     *,
@@ -661,20 +918,35 @@ def run_queued(
     Behavior:
 
     - If ``job.doc["status"]`` is ``complete`` / ``failed`` / ``abandoned``
-      and ``force=False``: print a skip message and return 0. Idempotent
-      re-execution of materialized scripts.
+      / ``stopped`` and ``force=False``: print a skip message and return
+      0. Idempotent re-execution of materialized scripts.
     - Otherwise: render the experiment's ``runner_command`` template (or
       the per-job override) against the job's resolved sp, invoke via
-      ``subprocess.run(..., shell=True)`` inside :func:`run_lifecycle` so
-      status transitions ``queued`` → ``running`` → ``complete``/``failed``
-      automatically.
-    - On non-zero exit, stderr tail (last 2KB) is captured into
-      ``job.doc["queue"]["last_error"]`` before ``run_lifecycle`` marks
-      the job failed.
+      ``subprocess.Popen(..., shell=True)`` inside :func:`run_lifecycle`
+      with stdout/stderr streamed line-by-line to the parent's stdout
+      so interactive consumers (notebooks, terminals) see live progress.
+      Status transitions ``queued`` → ``running`` →
+      ``complete`` / ``failed`` automatically.
+    - The last ~200 lines of merged output are kept in a ring buffer and
+      written into ``job.doc["queue"]["last_error"].stderr_tail`` (last
+      ~2 KB, matching the prior contract) on non-zero exit.
+    - During execution, ``job.doc["queue"]["proc"]`` records the
+      subprocess pid / pgid / host / start fingerprint so
+      :func:`stop_queued` can interrupt the run from another shell.
 
     The subprocess inherits env plus ``AEXP_JOB_ID`` and
     ``AEXP_JOB_WORKSPACE`` so training scripts can re-open their own job
     or find their own workspace without argument threading.
+
+    Notes
+    -----
+    stderr is merged into stdout (``stderr=STDOUT``) before streaming, so
+    the parent only sees one combined stream. This was a deliberate trade
+    for the v0.2.1 fix: a single iteration loop preserves the interleave
+    order that interactive users expect, at the cost of distinguishing
+    streams in the ``last_error`` capture. If a future use case needs them
+    separate, the right path is two ``selectors``-monitored pipes; the
+    ring-buffer-tee structure here is the same.
     """
     root = Path(repo_root).resolve() if repo_root else find_repo_root()
     job = open_run(job_id, repo_root=root)
@@ -699,34 +971,51 @@ def run_queued(
         "AEXP_JOB_WORKSPACE": str(Path(job.path).resolve()),
     }
 
+    returncode = -1
     with run_lifecycle(job):
-        proc = subprocess.run(
-            command,
-            shell=True,
-            env=env,
-            capture_output=True,
-            text=True,
-            cwd=str(root),
-        )
-        # Stream captured output so slurm logs aren't empty.
-        if proc.stdout:
-            sys.stdout.write(proc.stdout)
-        if proc.stderr:
-            sys.stderr.write(proc.stderr)
-        if proc.returncode != 0:
-            # Enrich job.doc with error context before run_lifecycle catches.
-            existing = dict(job.doc.get("queue") or {})
-            existing["last_error"] = {
-                "returncode": proc.returncode,
-                "stderr_tail": (proc.stderr or "")[-2048:],
-                "failed_at": iso_utc_now(),
-            }
-            job.doc["queue"] = existing
-            raise SubprocessFailed(
-                f"runner exited with code {proc.returncode}: "
-                f"{(proc.stderr or '')[-512:]}"
+        proc, pgid = _spawn_subprocess(command, env=env, cwd=str(root))
+        try:
+            _record_running_proc(
+                job, pid=proc.pid, pgid=pgid, host=socket.gethostname()
             )
-    return proc.returncode
+            # Bounded ring buffer of recent lines for the failure-tail
+            # capture path. We tail-truncate to ~2 KB at write time so the
+            # signac doc doesn't bloat with megabytes of normal output.
+            tail_buffer: deque[str] = deque(maxlen=_OUTPUT_TAIL_LINES)
+            assert proc.stdout is not None  # bounded by Popen kwargs above
+            for line in proc.stdout:
+                # Stream live to the parent. Flush after every line so a
+                # JupyterLab user sees output as it lands instead of after
+                # cell completion. ``line`` already includes the trailing
+                # newline; don't add another.
+                sys.stdout.write(line)
+                sys.stdout.flush()
+                tail_buffer.append(line)
+            proc.wait()
+            returncode = proc.returncode
+            if returncode != 0:
+                tail_text = "".join(tail_buffer)[-_OUTPUT_TAIL_BYTES:]
+                existing = dict(job.doc.get("queue") or {})
+                existing["last_error"] = {
+                    "returncode": returncode,
+                    "stderr_tail": tail_text,
+                    "failed_at": iso_utc_now(),
+                }
+                job.doc["queue"] = existing
+                raise SubprocessFailed(
+                    f"runner exited with code {returncode}: "
+                    f"{tail_text[-512:]}"
+                )
+        finally:
+            # Always drop the proc pointer so a downstream `queue stop` can't
+            # be tricked into killing a recycled PID. Lives in `finally`
+            # rather than after the wait so even an unexpected exception
+            # path scrubs the ledger. run_lifecycle has its own try/except
+            # that catches SubprocessFailed and marks status=failed; clearing
+            # proc *before* that runs is fine because run_lifecycle only
+            # writes status / wallclock_s, not queue.proc.
+            _clear_running_proc(job)
+    return returncode
 
 
 def run_queue(
@@ -834,10 +1123,248 @@ def run_queue(
     return returncodes
 
 
+# ---------------------------------------------------------------------------
+# stop_queued — interrupt a running job from another shell
+# ---------------------------------------------------------------------------
+
+
+def _send_signal_safely(
+    pid: int, pgid: int | None, sig: signal.Signals
+) -> bool:
+    """Send ``sig`` to the process group if known, else the pid alone.
+
+    Returns ``True`` on success, ``False`` if the target was already gone
+    (ESRCH). Any other ``OSError`` propagates so the caller can surface
+    permission errors etc. with context.
+    """
+    try:
+        if sys.platform == "win32":
+            # No process-group kill on Windows; CTRL_BREAK_EVENT against
+            # the pid hits the whole new-process-group spawned by
+            # _spawn_subprocess.
+            if sig == signal.SIGTERM:
+                os.kill(pid, signal.CTRL_BREAK_EVENT)  # type: ignore[attr-defined]
+            else:
+                os.kill(pid, signal.SIGTERM)  # SIGKILL doesn't exist on Win32
+            return True
+        if pgid is not None:
+            os.killpg(pgid, sig)
+        else:
+            os.kill(pid, sig)
+        return True
+    except ProcessLookupError:
+        return False
+    except OSError as exc:
+        if exc.errno == errno.ESRCH:
+            return False
+        raise
+
+
+def _proc_alive(pid: int, pgid: int | None) -> bool:
+    """Best-effort liveness probe.
+
+    POSIX: signal 0 to the pgid (if known) or pid; ESRCH means dead.
+    Windows: signal 0 to the pid.
+    """
+    try:
+        if sys.platform == "win32":
+            os.kill(pid, 0)
+        elif pgid is not None:
+            os.killpg(pgid, 0)
+        else:
+            os.kill(pid, 0)
+        return True
+    except (ProcessLookupError, OSError):
+        return False
+
+
+def stop_queued(
+    job_id: str,
+    *,
+    grace_s: float = 5.0,
+    force: bool = False,
+    repo_root: str | Path | None = None,
+) -> int:
+    """Interrupt a live :func:`run_queued` subprocess. Returns 0 on success.
+
+    Reads the live-process pointer that ``run_queued`` writes into
+    ``job.doc["queue"]["proc"]`` (pid + optional pgid + host +
+    start-time fingerprint) and sends signals to interrupt the runner:
+
+    1. Validate the host: refuses to send signals if the recorded host
+       differs from this machine. (Job pids are local to the machine that
+       spawned them; a cluster operator running ``stop`` from a different
+       login node would otherwise be SIGKILLing a recycled pid on the
+       wrong host.) Override is impossible by design — the right answer
+       is to ssh / re-launch the verb on the recording host.
+    2. PID-recycle guard: if a start-time fingerprint was recorded, compare
+       it to the current PID's fingerprint. Mismatch ⇒ original process
+       is gone; we transition status to ``stopped`` without sending any
+       signals, so we never accidentally kill an unrelated process.
+    3. Send ``SIGTERM`` to the process group (POSIX) /
+       ``CTRL_BREAK_EVENT`` (Windows). Poll for exit up to ``grace_s``.
+    4. If still alive, escalate to ``SIGKILL`` (POSIX) / ``SIGTERM``
+       (Windows) and poll again briefly.
+    5. Stamp ``last_error = {returncode, stderr_tail: "stopped via aexp
+       queue stop", failed_at}`` and transition status to ``stopped``.
+
+    Parameters
+    ----------
+    job_id : str
+        Signac job id of a job currently being executed by ``run_queued``.
+        Jobs that aren't running (no ``queue.proc``) end up as ``stopped``
+        with ``last_error.returncode = 0`` and a note that no process was
+        live — useful for cleaning up after an aexp parent process crash
+        that left the status as ``running``.
+    grace_s : float
+        Seconds to wait between SIGTERM and SIGKILL escalation. Set to 0
+        to skip the grace period; ``--force`` does the same on the CLI.
+    force : bool
+        If ``True``, skip SIGTERM and go straight to SIGKILL. Use only
+        when a graceful shutdown is known not to work (the runner ignores
+        SIGTERM, or you need the kernel to free GPU memory immediately).
+    repo_root : str | Path | None
+
+    Returns
+    -------
+    int
+        0 — process killed / already dead / never recorded as live.
+        Non-zero is currently never returned; failure modes (host
+        mismatch, kill refused) raise :class:`StopJobError` instead.
+
+    Raises
+    ------
+    StopJobError
+        On host mismatch or unrecoverable kill failure.
+    RunNotFound
+        If the job id doesn't exist in the run store.
+    """
+    job = open_run(job_id, repo_root=repo_root)
+    queue_doc = dict(job.doc.get("queue") or {})
+    proc_info = queue_doc.get("proc")
+
+    # Path A: no live process recorded. Either the job never ran, or it
+    # finished cleanly (proc is cleared on every exit). Transition status
+    # without signaling anything.
+    if not proc_info:
+        return _finalize_stopped(
+            job, returncode=0, note="no live process recorded; status only"
+        )
+
+    pid = int(proc_info.get("pid", 0))
+    pgid_raw = proc_info.get("pgid")
+    pgid = int(pgid_raw) if pgid_raw is not None else None
+    recorded_host = str(proc_info.get("host") or "")
+    recorded_fp = proc_info.get("start_fingerprint")
+
+    # Step 1: host guard. signals are local; refusing the wrong-host case
+    # avoids the worst-case of SIGKILLing an unrelated process on a
+    # recycled pid.
+    this_host = socket.gethostname()
+    if recorded_host and recorded_host != this_host:
+        raise StopJobError(
+            f"job {job_id[:8]} was started on host {recorded_host!r}; "
+            f"this machine is {this_host!r}. signals don't cross hosts — "
+            "ssh into the recording host and rerun `aexp queue stop "
+            f"{job_id[:8]}` there."
+        )
+
+    # Step 2: PID-recycle guard. If we have a stable start-time fingerprint
+    # and it doesn't match the current PID, the original process is gone
+    # and the PID may belong to something completely unrelated.
+    if recorded_fp is not None and pid > 0:
+        current_fp = _proc_create_time(pid)
+        if current_fp is not None and abs(current_fp - float(recorded_fp)) > 0.5:
+            return _finalize_stopped(
+                job,
+                returncode=0,
+                note=(
+                    f"recorded pid {pid} was recycled; original process "
+                    "is gone. status only."
+                ),
+            )
+
+    # If the pid is already gone, we're done — just transition.
+    if pid > 0 and not _proc_alive(pid, pgid):
+        return _finalize_stopped(
+            job, returncode=0, note=f"pid {pid} already exited; status only"
+        )
+
+    # Step 3: SIGTERM (skipped if --force).
+    sigterm_returncode = -int(signal.SIGTERM)
+    if not force:
+        sent = _send_signal_safely(pid, pgid, signal.SIGTERM)
+        if not sent:
+            return _finalize_stopped(
+                job, returncode=0, note=f"pid {pid} vanished before SIGTERM"
+            )
+        # Poll for exit during the grace window.
+        deadline = time.monotonic() + max(0.0, float(grace_s))
+        while time.monotonic() < deadline:
+            if not _proc_alive(pid, pgid):
+                return _finalize_stopped(
+                    job,
+                    returncode=sigterm_returncode,
+                    note="terminated cleanly via SIGTERM",
+                )
+            time.sleep(0.1)
+
+    # Step 4: SIGKILL escalation.
+    sigkill = signal.SIGKILL if hasattr(signal, "SIGKILL") else signal.SIGTERM
+    sigkill_returncode = -int(sigkill)
+    sent = _send_signal_safely(pid, pgid, sigkill)
+    if not sent:
+        # Might've died between the SIGTERM-escalate-deadline and now.
+        return _finalize_stopped(
+            job,
+            returncode=sigterm_returncode if not force else 0,
+            note=(
+                "process exited between SIGTERM grace and SIGKILL "
+                "(no SIGKILL needed)"
+            ),
+        )
+    # Brief wait so the kernel actually reaps; if it's still listed as
+    # alive after ~2s post-SIGKILL something is genuinely wrong (zombie,
+    # uninterruptible sleep on dead I/O).
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        if not _proc_alive(pid, pgid):
+            break
+        time.sleep(0.1)
+    return _finalize_stopped(
+        job,
+        returncode=sigkill_returncode,
+        note=("force-killed via SIGKILL" if force else "escalated to SIGKILL"),
+    )
+
+
+def _finalize_stopped(
+    job: signac.job.Job, *, returncode: int, note: str
+) -> int:
+    """Stamp ``last_error`` + transition to ``stopped`` and return 0.
+
+    Centralized so every stop-path emits the same shape into ``job.doc``
+    regardless of whether the kill needed SIGKILL escalation or the
+    process was already dead.
+    """
+    queue_doc = dict(job.doc.get("queue") or {})
+    queue_doc["last_error"] = {
+        "returncode": returncode,
+        "stderr_tail": f"stopped via `aexp queue stop`: {note}",
+        "failed_at": iso_utc_now(),
+        "cause": "operator_stop",
+    }
+    queue_doc.pop("proc", None)
+    job.doc["queue"] = queue_doc
+    mark_status(job, "stopped")
+    return 0
+
+
 __all__ = [
     "MaterializeResult",
     "QueueEntry",
     "RunnerCommandMissing",
+    "StopJobError",
     "SubprocessFailed",
     "SweepParseError",
     "add_many_to_queue",
@@ -851,4 +1378,5 @@ __all__ = [
     "resolve_sp",
     "run_queue",
     "run_queued",
+    "stop_queued",
 ]

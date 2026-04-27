@@ -572,7 +572,18 @@ def test_validate_flags_empty_batch_citation(installed_repo: Path) -> None:
 
 
 def test_valid_statuses_constant_matches_run_status_literal() -> None:
-    assert VALID_STATUSES == {"created", "running", "complete", "failed", "abandoned"}
+    # ``stopped`` joined the literal in 0.2.1 (operator-stop terminal status,
+    # set by `aexp queue stop <jobid>`); ``queued`` is intentionally excluded
+    # from VALID_STATUSES because the validator runs against post-hoc /
+    # finished runs, not pending entries.
+    assert VALID_STATUSES == {
+        "created",
+        "running",
+        "complete",
+        "failed",
+        "abandoned",
+        "stopped",
+    }
 
 
 def test_mode_kb_only_skips_run_checks(installed_repo: Path) -> None:
