@@ -160,10 +160,12 @@ if you deliberately want to store a bare label.
 
 ```
 aexp queue add         --experiment E001 [--sp K=V,...] [--sweep "K=V|V,K=a..b"] [--tag T] [--hypothesis H001]
+                       [--allow-dup-on-recommit]
 aexp queue list        [--experiment E001] [--tag T] [--include-terminal]
 aexp queue run         [--experiment E001] [--tag T] [--index N]
                        [--continue-on-failure] [--force] [--dry-run]
 aexp queue remove      <job_id>
+aexp queue stop        <job_id> [--grace-s 5] [--force]
 aexp queue clear       [--experiment E001] [--tag T] [--yes]
 aexp queue materialize [--runner shell|slurm|manual] [--output PATH] [--tag T]
                        [--slurm-time 04:00:00] [--slurm-mem 32G] [--slurm-gpus 1]
@@ -231,14 +233,99 @@ Jobs are enumerated in stable order (ascending ``queued_at``, then by
 ```python
 from aexp import (
     add_to_queue, add_many_to_queue, list_queue, remove_from_queue,
-    clear_queue, materialize_queue, run_queued, resolve_sp,
+    clear_queue, materialize_queue, run_queued, run_queue, stop_queued,
+    resolve_sp,
 )
 ```
 
 All surfaces — CLI, MCP tools (`queue_add`, `queue_list`, `queue_remove`,
-`queue_clear`, `queue_materialize`), slash commands (`/aexp-queue-add`,
-`/aexp-queue-list`, `/aexp-queue-materialize`) — are thin wrappers over
-the same Python API.
+`queue_stop`, `queue_clear`, `queue_materialize`), slash commands
+(`/aexp-queue-add`, `/aexp-queue-list`, `/aexp-queue-materialize`,
+`/aexp-queue-stop`) — are thin wrappers over the same Python API.
+
+### Live observability + lifecycle control (0.2.1)
+
+`aexp run-queued` streams subprocess output line-by-line to the parent's
+stdout (`subprocess.Popen` with merged stderr, `bufsize=1`, immediate
+flush per line). Interactive consumers — JupyterLab notebooks running
+`aexp run-queued` directly — see live progress instead of waiting for
+the buffered dump that 0.2.0's `subprocess.run(capture_output=True)`
+forced. The last ~200 lines of merged output are kept in a ring buffer
+and flushed into `job.doc["queue"]["last_error"].stderr_tail` (capped
+at ~2 KB) on non-zero exit, so failure forensics are preserved.
+
+`aexp queue stop <jobid>` interrupts a live run from another shell.
+`run_queued` records the subprocess's pid, pgid, hostname, and a
+process-start-time fingerprint in `job.doc["queue"]["proc"]` for the
+duration of the run; `stop_queued` reads that, refuses to signal across
+hosts, detects pid recycling on Linux via the fingerprint, and sends
+SIGTERM to the process group followed by a SIGKILL escalation if the
+runner ignores it. The job transitions to a new `"stopped"` terminal
+status (distinct from `"failed"` / `"abandoned"`) with
+`last_error.cause = "operator_stop"` so post-hoc forensics can tell
+operator-stops from real failures.
+
+`run_lifecycle` writes `doc["heartbeat_at"]` (ISO-8601 UTC) every
+`heartbeat_s` seconds while a run is active (default 30 s; override
+per-call, globally via `AEXP_HEARTBEAT_S`, or set to 0 to disable).
+External liveness probes can compare `heartbeat_at` to wall-clock to
+distinguish "still working" from "wedged" — a gap that 0.2.0's
+write-once-at-start `status='running'` flag couldn't fill.
+
+### Recommit deduplication (0.2.1)
+
+`aexp queue add` (and sweeps) skip new entries whose sp matches an
+existing pending entry's sp *modulo* the auto-injected `code_commit`
+and `code_dirty` provenance fields. The common footgun this catches:
+queue, fix a docstring, queue again — without dedupe, you get 2N
+functionally identical pending jobs because the only sp diff is the
+new commit hash.
+
+The skip emits a `DuplicatePendingJobWarning`; the existing job is
+returned. Pass `--allow-dup-on-recommit` (CLI) /
+`allow_dup_on_recommit=True` (Python) when the recommit *is* the point
+of the new entries — e.g. evaluating a fix in parallel with the
+pre-fix queued runs.
+
+Tag-scoped: different tags = different operational queues = no dedupe.
+Terminal-status entries (complete / failed / abandoned / stopped) are
+never deduped against — re-running a finished experiment is intentional.
+
+### Shell-safe `{sp_json_shell}` placeholder (0.2.1)
+
+`runner_command` templates that need the full resolved sp as a JSON
+blob can use `{sp_json_shell}`, which applies `shlex.quote` to the
+payload. Drop it in *unquoted*; shlex emits the shell quoting itself:
+
+```yaml
+# ✓ correct — shlex emits the quoting:
+runner_command: "python -m mypkg.train {sp_json_shell}"
+
+# ✗ wrong — double-quoting; nested-quote breakage:
+runner_command: "python -m mypkg.train '{sp_json_shell}'"
+```
+
+The original `{sp_json}` is preserved unchanged for backward
+compatibility, but its docstring now warns about the apostrophe trap
+that breaks shell-quoted templates when an sp value contains the same
+quote character. Use `{sp_json_shell}` for any shell-quoted context.
+
+### Dirty-tree diff capture (0.2.1)
+
+When `code_dirty=True`, `add_to_queue` writes a structured
+`queue.code_diff_summary` blob alongside the bare `code_commit` SHA:
+
+```python
+job.doc["queue"]["code_diff_summary"] = {
+    "diff_stat": "<git diff --stat HEAD>",
+    "modified_count": <int>,
+    "untracked_count": <int>,
+}
+```
+
+Lets post-hoc forensics tell "queued from a clean commit" apart from
+"queued with 12 modified files". Best-effort: capture is wrapped so a
+queue add never fails because git is unavailable.
 
 ### MCP caveat: no `run_queued` tool
 

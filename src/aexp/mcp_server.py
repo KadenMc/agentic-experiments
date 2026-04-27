@@ -66,6 +66,9 @@ from aexp.linking import (
     summarize_run as _summarize_run,
 )
 from aexp.queue import (
+    StopJobError as _StopJobError,
+)
+from aexp.queue import (
     SweepParseError,
 )
 from aexp.queue import (
@@ -88,6 +91,9 @@ from aexp.queue import (
 )
 from aexp.queue import (
     remove_from_queue as _remove_from_queue,
+)
+from aexp.queue import (
+    stop_queued as _stop_queued,
 )
 from aexp.runs import (
     create_run as _create_run,
@@ -792,6 +798,42 @@ def queue_remove(job_id: str) -> dict[str, Any]:
     """Mark one queued job ``abandoned`` without executing it."""
     job = _remove_from_queue(job_id)
     return {"job_id": job.id, "status": job.doc.get("status")}
+
+
+# ---------------------------------------------------------------------------
+# Tool: queue_stop
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def queue_stop(
+    job_id: str,
+    grace_s: float = 5.0,
+    force: bool = False,
+) -> dict[str, Any]:
+    """Interrupt a running queued job (live ``aexp run-queued`` subprocess).
+
+    Reads the live-process pointer that ``run_queued`` writes into the
+    job doc, sends SIGTERM to the process group (default), polls during
+    a configurable grace window, and escalates to SIGKILL if the runner
+    ignores SIGTERM. Sets the job status to ``"stopped"`` (distinct
+    from ``"failed"`` and ``"abandoned"``).
+
+    Refuses if the recorded host is not the MCP host (signals don't
+    cross hosts); ssh into the recording host and rerun there. Detects
+    pid recycling on Linux via process-start-time fingerprinting.
+
+    Args:
+        job_id: Signac job id (full or short prefix).
+        grace_s: Seconds to wait between SIGTERM and SIGKILL. Default 5.
+            Set to 0 to skip the grace period.
+        force: If True, skip SIGTERM and send SIGKILL straight away.
+    """
+    try:
+        _stop_queued(job_id, grace_s=grace_s, force=force)
+    except _StopJobError as exc:
+        return {"error": str(exc), "code": "stop_failed"}
+    return {"job_id": job_id, "status": "stopped"}
 
 
 # ---------------------------------------------------------------------------

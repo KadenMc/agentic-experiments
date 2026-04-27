@@ -98,6 +98,7 @@ teammates get the MCP server on clone.
 | `bind_tracker` | Attach a noop or wandb tracker to a run | `job_id` |
 | `validate` | Compose KB + run-link + finding-citation checks | — |
 | `sync_offline` | `wandb sync` every offline run in the store | — |
+| `queue_stop` | Interrupt a running queued job; transitions to `"stopped"` | `job_id` |
 
 All return JSON-serializable dicts. Errors surface either as
 `{"error": ..., "code": ...}` in the return value or as MCP error
