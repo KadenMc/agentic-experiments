@@ -31,6 +31,7 @@ from aexp.artifacts import (
 from aexp.backlinks import add_backlink
 from aexp.install import (
     InstallAction,
+    InstallRefused,
     compute_vendor_sha,
     install_limina,
     is_limina_installed,
@@ -142,6 +143,7 @@ __all__ = [
     "__version__",
     # install
     "InstallAction",
+    "InstallRefused",
     "compute_vendor_sha",
     "install_limina",
     "is_limina_installed",

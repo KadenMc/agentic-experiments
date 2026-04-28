@@ -20,6 +20,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -33,6 +34,58 @@ from aexp.utils.paths import (
     read_installed_marker,
     write_installed_marker,
 )
+
+
+class InstallRefused(RuntimeError):
+    """Raised by :func:`install_limina` when install must not proceed.
+
+    Currently only raised by the source-tree-self-install guard (refusing
+    to install a consumer-side scaffold inside the agentic-experiments
+    package's own source tree). The CLI catches this and exits with a
+    rich-printed message; programmatic callers can branch on it.
+    """
+
+
+# Regex for detecting the agentic-experiments source tree's pyproject.toml.
+# Matches `name = "agentic-experiments"` (or single-quoted) in any context
+# of the file. Text-based rather than TOML-parsed so the guard runs before
+# any import-heavy machinery and stays dependency-light.
+_AEXP_SOURCE_NAME_RE = re.compile(
+    r'^\s*name\s*=\s*["\']agentic-experiments["\']\s*$',
+    re.MULTILINE,
+)
+
+
+def _find_aexp_source_tree(start: Path) -> Path | None:
+    """Walk up from ``start`` looking for the agentic-experiments source tree.
+
+    Returns the absolute path of the directory containing a
+    ``pyproject.toml`` whose ``[project].name`` is ``"agentic-experiments"``,
+    or ``None`` if no such pyproject is found in the walk-up chain.
+
+    The walk-up is deliberate so an invocation from any subdirectory of
+    the source tree (e.g. ``src/``, ``tests/``) is also detected, not
+    just the root.
+
+    No legitimate consumer would set this name in their pyproject, so a
+    match is unambiguous evidence that the caller is pointing
+    ``install`` at the dev repo itself — almost always a mistake (the
+    install would materialize a Limina/signac consumer scaffold inside
+    the package source tree).
+    """
+    cur = start.resolve()
+    while True:
+        pyp = cur / "pyproject.toml"
+        if pyp.is_file():
+            try:
+                content = pyp.read_text(encoding="utf-8")
+            except OSError:
+                return None
+            if _AEXP_SOURCE_NAME_RE.search(content):
+                return cur
+        if cur.parent == cur:
+            return None
+        cur = cur.parent
 
 VENDOR_LIMINA = Path(__file__).resolve().parent / "vendor" / "limina"
 
@@ -601,6 +654,7 @@ def install_limina(
     assert_git: bool = True,
     dry_run: bool = False,
     dev: bool = False,
+    allow_self_install: bool = False,
 ) -> list[InstallAction]:
     """Install the vendored Limina harness into ``repo_root``.
 
@@ -628,6 +682,18 @@ def install_limina(
         edits flow through to the MCP surface — at the cost of baking a
         machine-specific path into ``.mcp.json``. Do not commit the file
         to git while using this mode.
+    allow_self_install : bool, optional
+        If ``False`` (default), refuse to install when ``repo_root`` (or
+        any ancestor) is the agentic-experiments source tree itself —
+        detected by walking up looking for ``pyproject.toml`` with
+        ``name = "agentic-experiments"``. This catches the common
+        footgun of running ``poetry -C <aexp-repo> run aexp install``
+        from a separate scratch directory: Poetry's ``-C`` swaps the
+        subprocess cwd to the project, so the install ends up
+        materializing the consumer scaffold inside the dev repo
+        instead of the user's intended target. Pass ``True`` to
+        override (e.g. dogfooding the consumer scaffold against the
+        dev repo on purpose).
 
     Returns
     -------
@@ -643,6 +709,9 @@ def install_limina(
         If ``repo_root`` exists but is not a directory.
     RuntimeError
         If ``assert_git=True`` and ``repo_root/.git`` is missing.
+    InstallRefused
+        If ``allow_self_install=False`` and ``repo_root`` resolves into
+        the agentic-experiments source tree.
     """
     root = Path(repo_root).resolve()
     if not root.exists():
@@ -654,6 +723,33 @@ def install_limina(
             f"repo_root is not a git repo: {root}. "
             "Run `git init` first or pass assert_git=False."
         )
+
+    # Source-tree self-install guard. Runs *before* any filesystem writes
+    # so a refused install leaves the source tree completely untouched.
+    if not allow_self_install:
+        src_tree = _find_aexp_source_tree(root)
+        if src_tree is not None:
+            raise InstallRefused(
+                f"refusing to install into the agentic-experiments source "
+                f"tree ({src_tree}).\n\n"
+                f"`aexp install` materializes a consumer-side scaffold "
+                f"(kb/, templates/, .claude/, .runs/, etc.) — running it "
+                f"inside the package's own source tree pollutes the dev "
+                f"repo with non-package files and creates a Limina/signac "
+                f"project layered on top of itself.\n\n"
+                f"You almost certainly meant to install into a separate "
+                f"consumer repo. `cd` there and re-run.\n\n"
+                f"Common cause: `poetry -C <aexp-repo> run aexp install` "
+                f"from a scratch directory — Poetry's `-C` swaps the "
+                f"subprocess cwd to the project, so the install lands in "
+                f"the dev repo instead of where you `cd`'d. Invoke the "
+                f"venv's `aexp` executable directly (or use `--directory` "
+                f"with care) to keep cwd at your intended target.\n\n"
+                f"If you really need to install into this tree (e.g. "
+                f"dogfooding the consumer scaffold against the dev repo), "
+                f"pass --allow-self-install (CLI) or "
+                f"allow_self_install=True (Python API)."
+            )
 
     actions: list[InstallAction] = []
 

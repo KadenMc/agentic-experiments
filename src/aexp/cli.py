@@ -24,7 +24,7 @@ from aexp.artifacts import (
     new_hypothesis,
     new_thread,
 )
-from aexp.install import install_limina
+from aexp.install import InstallRefused, install_limina
 from aexp.limina_io import (
     ArtifactNotFoundError,
     list_kb_artifacts,
@@ -227,6 +227,17 @@ def install(
             "`.mcp.json` is machine-specific — do not commit."
         ),
     ),
+    allow_self_install: bool = typer.Option(
+        False,
+        "--allow-self-install",
+        help=(
+            "Permit installing into the agentic-experiments source tree "
+            "itself. Default is to refuse — running install inside the "
+            "package's own source tree pollutes the dev repo and is "
+            "almost always the result of a cwd mishap (e.g. `poetry -C "
+            "<aexp-repo> run aexp install` from a scratch directory)."
+        ),
+    ),
 ) -> None:
     """Install the aexp harness into the current repo.
 
@@ -248,14 +259,19 @@ def install(
 
     if dry_run:
         console.print(_INSTALL_HEADS_UP)
-        actions = install_limina(
-            cwd,
-            run_store=run_store,
-            force=force,
-            assert_git=assert_git,
-            dry_run=True,
-            dev=dev,
-        )
+        try:
+            actions = install_limina(
+                cwd,
+                run_store=run_store,
+                force=force,
+                assert_git=assert_git,
+                dry_run=True,
+                dev=dev,
+                allow_self_install=allow_self_install,
+            )
+        except InstallRefused as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(code=2) from exc
         _print_actions(actions, dry_run=True)
         return
 
@@ -270,9 +286,18 @@ def install(
             console.print("[yellow]Aborted.[/yellow]")
             raise typer.Exit(code=1)
 
-    actions = install_limina(
-        cwd, run_store=run_store, force=force, assert_git=assert_git, dev=dev
-    )
+    try:
+        actions = install_limina(
+            cwd,
+            run_store=run_store,
+            force=force,
+            assert_git=assert_git,
+            dev=dev,
+            allow_self_install=allow_self_install,
+        )
+    except InstallRefused as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=2) from exc
     _print_actions(actions, dry_run=False)
 
 

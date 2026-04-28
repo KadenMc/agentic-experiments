@@ -9,6 +9,7 @@ import pytest
 
 from aexp.install import (
     InstallAction,
+    InstallRefused,
     block_merge_markdown,
     compute_vendor_sha,
     install_limina,
@@ -639,3 +640,117 @@ def test_install_overwrites_stale_aexp_mcp_entry_on_reinstall(
     )
     assert "aexp-mcp-server" in combined
     assert "stale_module" not in combined
+
+
+# ---------------------------------------------------------------------------
+# Source-tree self-install guard (added 0.2.1)
+# ---------------------------------------------------------------------------
+#
+# Motivating failure: invoking ``poetry -C <aexp-repo> run aexp install``
+# from a separate scratch directory. Poetry's ``-C`` swaps the subprocess
+# cwd to the project, so the install ended up materializing the consumer
+# scaffold inside the dev repo instead of the user's intended target. The
+# guard refuses this class of mistake before any filesystem writes.
+
+
+def _plant_aexp_source_tree(path: Path) -> None:
+    """Plant a fake ``pyproject.toml`` that names the dir as the aexp source tree.
+
+    Used by the self-install-guard tests — the guard's detection rule is
+    text-based on pyproject contents, so any directory with a matching
+    pyproject is treated as the source tree regardless of what else lives
+    there. Tests use this to simulate the dev repo without copying its
+    full contents.
+    """
+    (path / "pyproject.toml").write_text(
+        '[project]\nname = "agentic-experiments"\nversion = "0.0.0"\n',
+        encoding="utf-8",
+    )
+
+
+def test_install_refuses_aexp_source_tree(fresh_git_repo: Path) -> None:
+    """``install_limina`` refuses when cwd is the aexp source tree itself."""
+    _plant_aexp_source_tree(fresh_git_repo)
+    with pytest.raises(InstallRefused) as exc_info:
+        install_limina(fresh_git_repo)
+    msg = str(exc_info.value)
+    assert "agentic-experiments source tree" in msg
+    assert "--allow-self-install" in msg
+    # No filesystem pollution: the guard runs before any writes.
+    assert not (fresh_git_repo / "kb").exists()
+    assert not (fresh_git_repo / ".aexp").exists()
+    assert not (fresh_git_repo / ".claude").exists()
+
+
+def test_install_refuses_subdirectory_of_source_tree(
+    fresh_git_repo: Path,
+) -> None:
+    """The guard's walk-up matches when invoked from a subdir of the source tree.
+
+    Real-world equivalent: invoking ``aexp install`` from inside ``src/``
+    or ``tests/`` of the dev repo by mistake. The pyproject.toml lives at
+    the parent; the walk-up has to find it.
+    """
+    _plant_aexp_source_tree(fresh_git_repo)
+    subdir = fresh_git_repo / "src"
+    subdir.mkdir()
+    # `assert_git=False` because the subdir doesn't have its own .git.
+    with pytest.raises(InstallRefused):
+        install_limina(subdir, assert_git=False)
+
+
+def test_install_allow_self_install_overrides_guard(
+    fresh_git_repo: Path,
+) -> None:
+    """``allow_self_install=True`` lets the install proceed inside the source tree.
+
+    Used when dogfooding the consumer scaffold against the dev repo on
+    purpose. Should be rare; the flag exists so the guard is policy, not
+    an inescapable hard block.
+    """
+    _plant_aexp_source_tree(fresh_git_repo)
+    actions = install_limina(fresh_git_repo, allow_self_install=True)
+    # Got past the guard and produced a normal install action list.
+    assert any(a.kind == "wrote_marker" for a in actions)
+    assert (fresh_git_repo / ".aexp" / "installed.json").is_file()
+
+
+def test_install_allows_consumer_repo_with_different_name(
+    fresh_git_repo: Path,
+) -> None:
+    """Consumer repos (different package name) are unaffected by the guard."""
+    (fresh_git_repo / "pyproject.toml").write_text(
+        '[project]\nname = "my-research"\nversion = "0.1.0"\n',
+        encoding="utf-8",
+    )
+    actions = install_limina(fresh_git_repo)
+    assert any(a.kind == "wrote_marker" for a in actions)
+    assert (fresh_git_repo / ".aexp" / "installed.json").is_file()
+
+
+def test_install_allows_repo_without_pyproject(fresh_git_repo: Path) -> None:
+    """Repos with no pyproject anywhere in the walk-up are unaffected.
+
+    The typical "consumer is just a research repo, not a Python package"
+    case. The guard's walk-up walks all the way to the filesystem root
+    without finding a matching pyproject and falls through to the normal
+    install path.
+    """
+    # No pyproject.toml planted.
+    actions = install_limina(fresh_git_repo)
+    assert any(a.kind == "wrote_marker" for a in actions)
+    assert (fresh_git_repo / ".aexp" / "installed.json").is_file()
+
+
+def test_install_dry_run_also_refuses_source_tree(fresh_git_repo: Path) -> None:
+    """The guard fires under ``dry_run`` too, so previewing doesn't leak files.
+
+    Important because the install summary printed under dry-run could
+    otherwise mislead a user into thinking the install would succeed.
+    """
+    _plant_aexp_source_tree(fresh_git_repo)
+    with pytest.raises(InstallRefused):
+        install_limina(fresh_git_repo, dry_run=True)
+    # Confirm dry_run path didn't leak anything before the raise.
+    assert not (fresh_git_repo / "kb").exists()
+    assert not (fresh_git_repo / ".aexp").exists()

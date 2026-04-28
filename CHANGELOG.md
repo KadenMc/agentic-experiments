@@ -148,6 +148,28 @@ adds:
 Best-effort: capture is wrapped in try/except so a queue add never
 fails because git is unavailable.
 
+### Added (defensive) — `aexp install` refuses the aexp source tree
+
+`aexp install` (and the underlying `install_limina`) now detects when
+`repo_root` is — or is a descendant of — the agentic-experiments source
+tree itself, and refuses with a clear error before any filesystem
+writes. Detection: walk up from the target directory looking for a
+`pyproject.toml` whose `[project].name` is `"agentic-experiments"`.
+
+The mechanism that motivated this defense: invoking `aexp install`
+through `poetry -C <aexp-repo> run aexp install` from a separate
+scratch directory. Poetry's `-C` flag swaps the subprocess cwd to the
+project, so the install ended up materializing a consumer-side scaffold
+(`kb/`, `templates/`, `.claude/`, `.runs/`, etc.) inside the package's
+own source tree instead of the user's intended target. The guard
+catches this class of mistake at install time so the dev repo stays
+clean.
+
+Pass `--allow-self-install` (CLI) / `allow_self_install=True` (Python
+API) to override when dogfooding the consumer scaffold against the dev
+repo is genuinely intended. New `InstallRefused(RuntimeError)` exception
+re-exported from `aexp` so programmatic callers can branch on it.
+
 ### Behavior changes worth noting
 
 - `RunStatus` literal extended with `"stopped"`. Consumers that
