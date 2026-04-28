@@ -1046,12 +1046,28 @@ def run_queued(
             if returncode != 0:
                 tail_text = "".join(tail_buffer)[-_OUTPUT_TAIL_BYTES:]
                 existing = dict(job.doc.get("queue") or {})
-                existing["last_error"] = {
-                    "returncode": returncode,
-                    "stderr_tail": tail_text,
-                    "failed_at": iso_utc_now(),
-                }
-                job.doc["queue"] = existing
+                # Don't clobber an operator_stop record: when ``aexp queue
+                # stop`` killed the subprocess, it already wrote a
+                # last_error with cause="operator_stop" to the doc.
+                # Overwriting that here with a generic "subprocess
+                # failed" record would bury the operator's intent in
+                # post-hoc forensics. The status guard in run_lifecycle
+                # similarly preserves "stopped" status.
+                prior_cause = (
+                    existing.get("last_error", {}).get("cause")
+                    if isinstance(existing.get("last_error"), dict)
+                    else None
+                )
+                if prior_cause != "operator_stop":
+                    existing["last_error"] = {
+                        "returncode": returncode,
+                        "stderr_tail": tail_text,
+                        "failed_at": iso_utc_now(),
+                    }
+                    job.doc["queue"] = existing
+                # Still raise SubprocessFailed so run_lifecycle records
+                # an exception exit (it just won't overwrite a stopped
+                # status thanks to the preservation guard there).
                 raise SubprocessFailed(
                     f"runner exited with code {returncode}: "
                     f"{tail_text[-512:]}"
@@ -1186,17 +1202,63 @@ def _send_signal_safely(
     Returns ``True`` on success, ``False`` if the target was already gone
     (ESRCH). Any other ``OSError`` propagates so the caller can surface
     permission errors etc. with context.
+
+    Windows specifics
+    -----------------
+    - **SIGTERM (graceful)**: ``CTRL_BREAK_EVENT`` against the pid. Per
+      the Win32 console API, this signal is only delivered to processes
+      that share a console with the sender. ``aexp queue stop`` invoked
+      from a different shell than the one running ``run-queued`` runs
+      in a different console, so the signal is silently dropped — the
+      ``os.kill`` call succeeds but the target never receives anything.
+      We attempt it anyway because the same-console case (a script that
+      runs and stops a job in one terminal) does work, and the failure
+      mode is benign: the SIGKILL escalation below catches the case
+      where the grace expired.
+    - **SIGKILL (forceful)**: ``taskkill /PID <pid> /F /T``. ``/F``
+      invokes ``TerminateProcess`` directly (works cross-console;
+      doesn't depend on the console-attached signal API). ``/T`` walks
+      the process tree, so the inner ``python.exe`` running the runner
+      command dies along with the ``cmd.exe`` shell wrapper that
+      ``shell=True`` spawns. Without ``/T``, killing only ``cmd.exe``
+      leaves the inner process orphaned and still owning the stdout
+      pipe, which is exactly the symptom we shipped in the first
+      0.2.1-rc cut and caught during manual smoke testing. ``taskkill``
+      is built into Windows since XP (lives at
+      ``%WinDir%\\System32\\taskkill.exe``); we invoke it via
+      ``subprocess.run`` to avoid a hard dep on a Windows-specific
+      ctypes shim.
     """
     try:
         if sys.platform == "win32":
-            # No process-group kill on Windows; CTRL_BREAK_EVENT against
-            # the pid hits the whole new-process-group spawned by
-            # _spawn_subprocess.
             if sig == signal.SIGTERM:
+                # Best-effort graceful interrupt; see docstring for why
+                # this is expected to silently no-op cross-console.
                 os.kill(pid, signal.CTRL_BREAK_EVENT)  # type: ignore[attr-defined]
-            else:
-                os.kill(pid, signal.SIGTERM)  # SIGKILL doesn't exist on Win32
-            return True
+                return True
+            # SIGKILL escalation (or any non-SIGTERM signal): tree-kill
+            # via taskkill. Capture stderr to disambiguate "process
+            # already gone" (rc=128, "not found") from real failures.
+            result = subprocess.run(
+                ["taskkill", "/PID", str(pid), "/F", "/T"],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode == 0:
+                return True
+            stderr = (result.stderr or "").strip()
+            # taskkill returns 128 / says "not found" for dead pids —
+            # the cross-platform analog of ESRCH on POSIX.
+            if (
+                result.returncode == 128
+                or "not found" in stderr.lower()
+                or "no running instance" in stderr.lower()
+            ):
+                return False
+            raise OSError(
+                f"taskkill /PID {pid} /F /T exited "
+                f"{result.returncode}: {stderr}"
+            )
         if pgid is not None:
             os.killpg(pgid, sig)
         else:

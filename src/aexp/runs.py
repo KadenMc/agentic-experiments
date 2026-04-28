@@ -425,6 +425,14 @@ def run_lifecycle(
         hb_thread.start()
 
     t0 = perf_counter()
+    # Statuses set out-of-band by a concurrent process (e.g. ``stop_queued``
+    # racing against ``run_queued``'s exit) that this lifecycle's exit
+    # branches must NOT overwrite. ``"stopped"`` is the canonical case:
+    # an operator's ``aexp queue stop`` writes status="stopped" + last_error
+    # at roughly the same instant ``run_queued``'s subprocess.wait returns
+    # a non-zero rc; without the guard, our ``except`` branch would
+    # immediately overwrite the operator-stop record with status="failed".
+    _PRESERVE_TERMINAL_STATUSES = ("stopped", "abandoned")
     try:
         yield job
     except Exception:
@@ -433,13 +441,15 @@ def run_lifecycle(
         # atomic-write rename). Idempotent + safe under further
         # exceptions in the writes below.
         _stop_heartbeat()
-        job.doc["status"] = "failed"
+        if job.doc.get("status") not in _PRESERVE_TERMINAL_STATUSES:
+            job.doc["status"] = "failed"
         job.doc["ended_at"] = iso_utc_now()
         job.doc["wallclock_s"] = round(perf_counter() - t0, 3)
         raise
     else:
         _stop_heartbeat()
-        job.doc["status"] = "complete"
+        if job.doc.get("status") not in _PRESERVE_TERMINAL_STATUSES:
+            job.doc["status"] = "complete"
         job.doc["ended_at"] = iso_utc_now()
         job.doc["wallclock_s"] = round(perf_counter() - t0, 3)
     finally:

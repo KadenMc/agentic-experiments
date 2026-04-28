@@ -148,6 +148,57 @@ adds:
 Best-effort: capture is wrapped in try/except so a queue add never
 fails because git is unavailable.
 
+### Fixed — `aexp queue stop` actually kills the process tree on Windows
+
+The 0.2.1-rc Windows path for `stop_queued`'s SIGKILL escalation was
+broken in two layered ways, caught during manual smoke testing
+between two PowerShell windows:
+
+1. **`CTRL_BREAK_EVENT` doesn't deliver across consoles.** Per Win32
+   docs the signal is only delivered to processes that share a console
+   with the sender; `aexp queue stop` invoked from a different shell
+   than the one running `run-queued` runs in a different console, so
+   the call succeeded but the signal was silently dropped.
+2. **The SIGKILL escalation also fell back to `CTRL_BREAK_EVENT`.**
+   `signal.SIGKILL` doesn't exist on Windows, so the escalation path
+   resolved to `signal.SIGTERM`, which the dispatch handled by sending
+   `CTRL_BREAK_EVENT` again — same broken signal, same silent no-op.
+
+Net effect: stop_queued returned "stopped" (status flipped on disk)
+but the actual subprocess and its child python.exe both kept running
+to completion.
+
+The Windows escalation path now invokes
+`taskkill /PID <pid> /F /T`:
+
+- `/F` invokes `TerminateProcess` — works cross-console.
+- `/T` walks the process tree, killing the inner `python.exe` along
+  with the `cmd.exe` shell wrapper that `subprocess.Popen(shell=True)`
+  spawns. Without `/T`, killing only `cmd.exe` orphans the inner
+  process and the user sees no behavior change.
+
+The SIGTERM grace path still attempts `CTRL_BREAK_EVENT` (it works in
+the same-console case — unit tests, single-shell scripts) but the
+escalation no longer relies on it.
+
+Concurrent-write race fixes layered on top:
+
+- `run_lifecycle`'s exception and clean-exit branches now respect any
+  terminal status already on disk (specifically `"stopped"` or
+  `"abandoned"`) and don't overwrite. Without this, `stop_queued`'s
+  status="stopped" would be clobbered with status="failed" by the
+  losing-runner's exception handler when its `subprocess.wait`
+  returned a non-zero rc from the kill.
+- `run_queued`'s failure-tail capture now skips the `last_error`
+  write when `cause="operator_stop"` is already on disk, preserving
+  the operator's record over the generic "subprocess failed" record.
+
+Tests:
+
+- The previously POSIX-only `test_stop_queued_kills_running_subprocess_via_sigterm`
+  and `test_stop_queued_force_skips_sigterm` are now run on Windows
+  too, validating the `taskkill` path.
+
 ### Added (defensive) — `aexp install` refuses the aexp source tree
 
 `aexp install` (and the underlying `install_limina`) now detects when

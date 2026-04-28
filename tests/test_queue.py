@@ -1532,14 +1532,6 @@ def test_stop_queued_pid_recycled_path(installed_repo: Path) -> None:
     assert "recycled" in tail.lower() or "no live process" in tail.lower()
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason=(
-        "POSIX signal semantics — SIGTERM/SIGKILL behavior. Windows uses "
-        "CTRL_BREAK_EVENT and is exercised by the no-live-proc + wrong-host "
-        "tests above which are platform-independent."
-    ),
-)
 def test_stop_queued_kills_running_subprocess_via_sigterm(
     installed_repo: Path, tmp_path: Path
 ) -> None:
@@ -1547,9 +1539,18 @@ def test_stop_queued_kills_running_subprocess_via_sigterm(
 
     Spawns ``run_queued`` in a thread with a runner that sleeps 30s.
     Polls until the subprocess records its pid in job.doc, then calls
-    ``stop_queued`` from the main thread. SIGTERM should propagate
-    through the new process group, the runner exits, and the job
-    transitions to ``stopped``.
+    ``stop_queued`` from the main thread. The runner exits and the
+    job transitions to ``stopped``.
+
+    Cross-platform notes:
+
+    - **POSIX**: SIGTERM propagates through the ``os.setsid`` process
+      group; the python child returns quickly within the grace window.
+    - **Windows**: ``CTRL_BREAK_EVENT`` is sent same-console (test
+      thread + spawned subprocess share the test process's console)
+      so it should deliver. If it doesn't, the post-grace escalation
+      to ``taskkill /F /T`` ensures the process tree dies. Either way,
+      ``stop_queued`` returns 0 and status transitions to ``stopped``.
     """
     body = (
         "import time, sys, pathlib; "
@@ -1603,17 +1604,16 @@ def test_stop_queued_kills_running_subprocess_via_sigterm(
     assert err["cause"] == "operator_stop"
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="POSIX SIGTERM/SIGKILL semantics; Windows uses CTRL_BREAK_EVENT.",
-)
 def test_stop_queued_force_skips_sigterm(
     installed_repo: Path, tmp_path: Path
 ) -> None:
-    """``--force`` (force=True) goes straight to SIGKILL.
+    """``--force`` (force=True) skips the graceful interrupt entirely.
 
     Use case: runner ignores SIGTERM (signal.SIG_IGN), so the grace
-    window is wasted time. The force path skips it entirely.
+    window is wasted time. The force path skips it and goes straight
+    to the unconditional kill — POSIX ``SIGKILL`` via ``os.killpg``,
+    Windows ``taskkill /F /T``. Both terminate the process tree
+    promptly.
     """
     body = (
         "import signal, time, pathlib; "
