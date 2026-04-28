@@ -11,15 +11,16 @@ import os
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 
-def doc_op_with_retry[T](
-    fn: Callable[[], T],
+def doc_op_with_retry(
+    fn: Callable[[], Any],
     *,
     attempts: int = 10,
     base_delay: float = 0.05,
     max_delay: float = 0.5,
-) -> T:
+) -> Any:
     """Run a signac-doc operation with retry on Windows file-rename races.
 
     signac's atomic-rename doc writes (and the corresponding loads) collide
