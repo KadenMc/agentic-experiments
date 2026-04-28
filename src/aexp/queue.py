@@ -1194,51 +1194,62 @@ def run_queue(
 # ---------------------------------------------------------------------------
 
 
-def _send_signal_safely(
-    pid: int, pgid: int | None, sig: signal.Signals
+def _send_stop_signal(
+    pid: int, pgid: int | None, *, force: bool
 ) -> bool:
-    """Send ``sig`` to the process group if known, else the pid alone.
+    """Send a graceful or forceful stop signal to the process (group).
 
-    Returns ``True`` on success, ``False`` if the target was already gone
-    (ESRCH). Any other ``OSError`` propagates so the caller can surface
-    permission errors etc. with context.
+    Parameters
+    ----------
+    pid : int
+        Target process id.
+    pgid : int | None
+        Process group id on POSIX (sent the signal preferentially, so
+        the runner's children die with it). Ignored on Windows.
+    force : bool
+        ``False``: graceful. POSIX → ``SIGTERM`` to pgid (or pid).
+        Windows → ``CTRL_BREAK_EVENT`` to pid (best-effort; only delivers
+        same-console — cross-shell invocations silently no-op, and that's
+        a Win32 console-API limitation we can't work around without
+        kernel-level injection. The force-kill escalation below is the
+        safety net for cross-console use cases.)
+        ``True``: forceful. POSIX → ``SIGKILL`` to pgid (or pid).
+        Windows → ``taskkill /PID <pid> /F /T``: ``/F`` invokes
+        ``TerminateProcess`` (works cross-console; doesn't depend on the
+        console-attached signal API), ``/T`` walks the process tree so
+        the inner ``python.exe`` running the runner command dies along
+        with the ``cmd.exe`` shell wrapper that
+        ``subprocess.Popen(shell=True)`` spawns.
 
-    Windows specifics
-    -----------------
-    - **SIGTERM (graceful)**: ``CTRL_BREAK_EVENT`` against the pid. Per
-      the Win32 console API, this signal is only delivered to processes
-      that share a console with the sender. ``aexp queue stop`` invoked
-      from a different shell than the one running ``run-queued`` runs
-      in a different console, so the signal is silently dropped — the
-      ``os.kill`` call succeeds but the target never receives anything.
-      We attempt it anyway because the same-console case (a script that
-      runs and stops a job in one terminal) does work, and the failure
-      mode is benign: the SIGKILL escalation below catches the case
-      where the grace expired.
-    - **SIGKILL (forceful)**: ``taskkill /PID <pid> /F /T``. ``/F``
-      invokes ``TerminateProcess`` directly (works cross-console;
-      doesn't depend on the console-attached signal API). ``/T`` walks
-      the process tree, so the inner ``python.exe`` running the runner
-      command dies along with the ``cmd.exe`` shell wrapper that
-      ``shell=True`` spawns. Without ``/T``, killing only ``cmd.exe``
-      leaves the inner process orphaned and still owning the stdout
-      pipe, which is exactly the symptom we shipped in the first
-      0.2.1-rc cut and caught during manual smoke testing. ``taskkill``
-      is built into Windows since XP (lives at
-      ``%WinDir%\\System32\\taskkill.exe``); we invoke it via
-      ``subprocess.run`` to avoid a hard dep on a Windows-specific
-      ctypes shim.
+    Returns
+    -------
+    bool
+        ``True`` on successful signal/kill send, ``False`` if the target
+        was already gone (POSIX ESRCH / Windows "process not found").
+        Any other I/O failure propagates as ``OSError``.
+
+    Why this signature instead of ``(pid, pgid, sig)``
+    --------------------------------------------------
+    The previous shape took a ``signal.Signals`` value and dispatched
+    on ``sig == signal.SIGTERM``. That broke on Windows because
+    ``signal.SIGKILL`` doesn't exist there: the escalation path
+    fell back to ``signal.SIGTERM`` which the dispatch routed to
+    ``CTRL_BREAK_EVENT``, never reaching ``taskkill``. Encoding
+    *intent* (force=bool) instead of *signal value* removes that whole
+    class of dispatch ambiguity — the force path can never be confused
+    for the graceful path no matter which constants the platform
+    happens to define.
     """
     try:
         if sys.platform == "win32":
-            if sig == signal.SIGTERM:
+            if not force:
                 # Best-effort graceful interrupt; see docstring for why
                 # this is expected to silently no-op cross-console.
                 os.kill(pid, signal.CTRL_BREAK_EVENT)  # type: ignore[attr-defined]
                 return True
-            # SIGKILL escalation (or any non-SIGTERM signal): tree-kill
-            # via taskkill. Capture stderr to disambiguate "process
-            # already gone" (rc=128, "not found") from real failures.
+            # Forceful: tree-kill via taskkill. Capture stderr to
+            # disambiguate "process already gone" (rc=128, "not found")
+            # from real failures.
             result = subprocess.run(
                 ["taskkill", "/PID", str(pid), "/F", "/T"],
                 capture_output=True,
@@ -1259,6 +1270,8 @@ def _send_signal_safely(
                 f"taskkill /PID {pid} /F /T exited "
                 f"{result.returncode}: {stderr}"
             )
+        # POSIX
+        sig = signal.SIGKILL if force else signal.SIGTERM
         if pgid is not None:
             os.killpg(pgid, sig)
         else:
@@ -1402,10 +1415,10 @@ def stop_queued(
             job, returncode=0, note=f"pid {pid} already exited; status only"
         )
 
-    # Step 3: SIGTERM (skipped if --force).
+    # Step 3: graceful stop (skipped if --force).
     sigterm_returncode = -int(signal.SIGTERM)
     if not force:
-        sent = _send_signal_safely(pid, pgid, signal.SIGTERM)
+        sent = _send_stop_signal(pid, pgid, force=False)
         if not sent:
             return _finalize_stopped(
                 job, returncode=0, note=f"pid {pid} vanished before SIGTERM"
@@ -1421,10 +1434,14 @@ def stop_queued(
                 )
             time.sleep(0.1)
 
-    # Step 4: SIGKILL escalation.
-    sigkill = signal.SIGKILL if hasattr(signal, "SIGKILL") else signal.SIGTERM
-    sigkill_returncode = -int(sigkill)
-    sent = _send_signal_safely(pid, pgid, sigkill)
+    # Step 4: forceful kill (escalation after grace, or immediate when
+    # ``force=True``). On POSIX this is SIGKILL via ``os.killpg``; on
+    # Windows it's ``taskkill /F /T``. The forensics returncode we
+    # record is -9 (SIGKILL on POSIX) by convention; Windows doesn't
+    # define SIGKILL but the same value is conventional for "force-
+    # killed" exit codes.
+    sigkill_returncode = -int(getattr(signal, "SIGKILL", 9))
+    sent = _send_stop_signal(pid, pgid, force=True)
     if not sent:
         # Might've died between the SIGTERM-escalate-deadline and now.
         return _finalize_stopped(
@@ -1432,11 +1449,11 @@ def stop_queued(
             returncode=sigterm_returncode if not force else 0,
             note=(
                 "process exited between SIGTERM grace and SIGKILL "
-                "(no SIGKILL needed)"
+                "(no force-kill needed)"
             ),
         )
     # Brief wait so the kernel actually reaps; if it's still listed as
-    # alive after ~2s post-SIGKILL something is genuinely wrong (zombie,
+    # alive after ~2s post-kill something is genuinely wrong (zombie,
     # uninterruptible sleep on dead I/O).
     deadline = time.monotonic() + 2.0
     while time.monotonic() < deadline:
@@ -1446,7 +1463,7 @@ def stop_queued(
     return _finalize_stopped(
         job,
         returncode=sigkill_returncode,
-        note=("force-killed via SIGKILL" if force else "escalated to SIGKILL"),
+        note=("force-killed" if force else "escalated to force-kill"),
     )
 
 

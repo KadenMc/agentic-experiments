@@ -1604,6 +1604,110 @@ def test_stop_queued_kills_running_subprocess_via_sigterm(
     assert err["cause"] == "operator_stop"
 
 
+@pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="Tests Windows-specific dispatch (taskkill); POSIX uses SIGKILL.",
+)
+def test_stop_queued_force_invokes_taskkill_on_windows(
+    installed_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: ``stop_queued(force=True)`` must invoke ``taskkill``
+    on Windows, regardless of whether ``signal.SIGKILL`` is defined.
+
+    The 0.2.1-rc bug: when ``signal.SIGKILL`` doesn't exist on Windows
+    (it doesn't, in Python 3.13), the escalation path fell back to
+    ``signal.SIGTERM``, which the dispatch routed to
+    ``CTRL_BREAK_EVENT`` — same broken cross-console signal as the
+    original bug. ``taskkill`` was dead code.
+
+    This test monkeypatches ``subprocess.run`` to record what happens
+    on the force path. If ``taskkill`` isn't called, the test fails
+    regardless of whether the higher-level smoke test happens to pass
+    via in-process console magic.
+    """
+    from aexp import queue as _queue_mod
+
+    # Plant a fake "running on this host" proc record without actually
+    # spawning a subprocess. stop_queued's polling will see proc_alive
+    # via os.kill(pid, 0) which we'll let succeed by using our own pid.
+    job = create_run(
+        experiment_id="E001",
+        statepoint={"c": "force-windows"},
+        repo_root=installed_repo,
+    )
+    import socket as _socket
+
+    job.doc["queue"] = {
+        "queued_at": "2026-04-28T00:00:00Z",
+        "proc": {
+            "pid": os.getpid(),  # this process — kept alive by the test runner
+            "pgid": None,
+            "host": _socket.gethostname(),
+            "started_at": "2026-04-28T00:00:00Z",
+            # No start_fingerprint -> recycle guard skipped on non-Linux.
+        },
+    }
+    job.doc["status"] = "running"
+
+    captured_calls: list[list[str]] = []
+
+    def _fake_run(args, **kwargs):
+        # Record the argv so the test can assert taskkill was invoked.
+        if isinstance(args, list):
+            captured_calls.append(list(args))
+        # Don't actually run taskkill on us — return a fake "success"
+        # result so stop_queued thinks the kill succeeded. We then
+        # also need _proc_alive to return False after this so
+        # stop_queued's post-kill liveness loop exits quickly.
+        class _FakeResult:
+            returncode = 0
+            stderr = ""
+        return _FakeResult()
+
+    monkeypatch.setattr(_queue_mod.subprocess, "run", _fake_run)
+
+    # Make _proc_alive return False after the fake taskkill so the
+    # post-kill 2s liveness loop exits immediately. Patch the helper
+    # to flip after first call.
+    proc_alive_calls = {"n": 0}
+
+    def _fake_proc_alive(pid, pgid):
+        # Alive on the pre-kill check (stop_queued's "is the pid even
+        # alive?" gate just before SIGTERM grace), then dead after the
+        # fake taskkill so we exit cleanly.
+        proc_alive_calls["n"] += 1
+        return proc_alive_calls["n"] <= 1
+
+    monkeypatch.setattr(_queue_mod, "_proc_alive", _fake_proc_alive)
+
+    rc = _queue_mod.stop_queued(
+        job.id, force=True, repo_root=installed_repo
+    )
+    assert rc == 0
+
+    # The crucial assertion: taskkill was actually invoked.
+    taskkill_calls = [
+        call for call in captured_calls
+        if call and call[0] == "taskkill"
+    ]
+    assert taskkill_calls, (
+        f"expected taskkill to be invoked on Windows force-kill path; "
+        f"got captured calls: {captured_calls!r}"
+    )
+    # And invoked with /F (force) and /T (tree) flags.
+    cmd = taskkill_calls[0]
+    assert "/F" in cmd, f"taskkill missing /F flag: {cmd!r}"
+    assert "/T" in cmd, f"taskkill missing /T flag: {cmd!r}"
+    assert str(os.getpid()) in cmd, (
+        f"taskkill not targeted at recorded pid: {cmd!r}"
+    )
+
+    # And the job transitioned to stopped with operator_stop cause.
+    final = open_run(job.id, repo_root=installed_repo)
+    assert final.doc["status"] == "stopped"
+    assert final.doc["queue"]["last_error"]["cause"] == "operator_stop"
+
+
 def test_stop_queued_force_skips_sigterm(
     installed_repo: Path, tmp_path: Path
 ) -> None:
