@@ -51,7 +51,7 @@ from aexp.runs import (
     run_lifecycle,
 )
 from aexp.schema import MaterializeResult, QueueEntry, iso_utc_now
-from aexp.utils.atomic import atomic_write
+from aexp.utils.atomic import atomic_write, doc_op_with_retry
 from aexp.utils.git import get_dirty_diff_summary
 from aexp.utils.paths import find_repo_root
 
@@ -910,10 +910,20 @@ def _clear_running_proc(job: signac.job.Job) -> None:
     ``aexp queue stop`` after the job exited would think they were
     targeting a live process. We blow away ``proc`` on every exit path
     so the only time it's present is between Popen-spawn and wait-return.
+
+    Tolerates Windows doc-store rename races: if a concurrent writer
+    (typically ``stop_queued``'s ``_finalize_stopped``) wins the
+    atomic-write race, our cleanup is redundant — they've already
+    cleared ``proc`` in the same write that flipped status. Catching
+    and dropping the ``PermissionError`` here keeps run_queued's
+    ``finally``-block from raising over a benign loss-of-race.
     """
     queue_doc = dict(job.doc.get("queue") or {})
     queue_doc.pop("proc", None)
-    job.doc["queue"] = queue_doc
+    try:
+        doc_op_with_retry(lambda: job.doc.__setitem__("queue", queue_doc))
+    except PermissionError:
+        return
 
 
 def _spawn_subprocess(
@@ -1045,7 +1055,6 @@ def run_queued(
             returncode = proc.returncode
             if returncode != 0:
                 tail_text = "".join(tail_buffer)[-_OUTPUT_TAIL_BYTES:]
-                existing = dict(job.doc.get("queue") or {})
                 # Don't clobber an operator_stop record: when ``aexp queue
                 # stop`` killed the subprocess, it already wrote a
                 # last_error with cause="operator_stop" to the doc.
@@ -1053,18 +1062,41 @@ def run_queued(
                 # failed" record would bury the operator's intent in
                 # post-hoc forensics. The status guard in run_lifecycle
                 # similarly preserves "stopped" status.
-                prior_cause = (
-                    existing.get("last_error", {}).get("cause")
-                    if isinstance(existing.get("last_error"), dict)
-                    else None
-                )
-                if prior_cause != "operator_stop":
+                #
+                # The whole "read existing doc, check cause, write back"
+                # cycle can race against ``stop_queued``'s atomic rename
+                # on Windows — both the load AND the rename can raise
+                # PermissionError. We tolerate both: if we can't read,
+                # assume the concurrent writer is already doing the
+                # right thing; if we can't write, their record stands.
+                try:
+                    existing = dict(job.doc.get("queue") or {})
+                    prior_cause = (
+                        existing.get("last_error", {}).get("cause")
+                        if isinstance(existing.get("last_error"), dict)
+                        else None
+                    )
+                except PermissionError:
+                    # Concurrent writer is mid-rename. Their last_error
+                    # record will reflect their cause; ours is skipped.
+                    prior_cause = "operator_stop"
+                    existing = None
+                if prior_cause != "operator_stop" and existing is not None:
                     existing["last_error"] = {
                         "returncode": returncode,
                         "stderr_tail": tail_text,
                         "failed_at": iso_utc_now(),
                     }
-                    job.doc["queue"] = existing
+                    try:
+                        doc_op_with_retry(
+                            lambda: job.doc.__setitem__("queue", existing)
+                        )
+                    except PermissionError:
+                        # Lost the doc-store rename race even after
+                        # retrying. Their record stands; ours is
+                        # redundant since both are recording the same
+                        # termination event.
+                        pass
                 # Still raise SubprocessFailed so run_lifecycle records
                 # an exception exit (it just won't overwrite a stopped
                 # status thanks to the preservation guard there).
@@ -1289,12 +1321,53 @@ def _proc_alive(pid: int, pgid: int | None) -> bool:
     """Best-effort liveness probe.
 
     POSIX: signal 0 to the pgid (if known) or pid; ESRCH means dead.
-    Windows: signal 0 to the pid.
+
+    Windows: ``OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)`` +
+    ``GetExitCodeProcess``. Specifically *not* ``os.kill(pid, 0)`` —
+    Python's Windows ``os.kill`` does not special-case ``sig=0`` as a
+    liveness probe (the way POSIX does). Instead it tries to dispatch
+    through ``TerminateProcess`` with exit code ``0``, which the kernel
+    rejects with ``ERROR_INVALID_PARAMETER`` (WinError 87) for an
+    alive process. Catching that exception and returning ``False``
+    means we'd report alive processes as dead — the exact bug that
+    caused ``stop_queued`` to short-circuit through "pid already
+    exited; status only" without ever invoking taskkill on the running
+    subprocess. The Win32 ``OpenProcess`` + ``GetExitCodeProcess``
+    pattern is the correct shape for "is this pid still a running
+    process?": OpenProcess returns NULL if the pid doesn't exist;
+    if it does exist, GetExitCodeProcess returns ``STILL_ACTIVE``
+    (259) iff the process hasn't yet exited.
+
+    PROCESS_QUERY_LIMITED_INFORMATION is the minimum access right —
+    granted to any process the caller could plausibly own — and
+    avoids the access-token issues that PROCESS_ALL_ACCESS would
+    sometimes hit for processes in different sessions.
     """
+    if sys.platform == "win32":
+        import ctypes  # local: only needed on the Windows path
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        STILL_ACTIVE = 259
+
+        handle = kernel32.OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION, False, pid
+        )
+        if not handle:
+            return False
+        try:
+            exit_code = ctypes.c_ulong(0)
+            ok = kernel32.GetExitCodeProcess(
+                handle, ctypes.byref(exit_code)
+            )
+            if not ok:
+                return False
+            return exit_code.value == STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
+
     try:
-        if sys.platform == "win32":
-            os.kill(pid, 0)
-        elif pgid is not None:
+        if pgid is not None:
             os.killpg(pgid, 0)
         else:
             os.kill(pid, 0)
@@ -1475,6 +1548,12 @@ def _finalize_stopped(
     Centralized so every stop-path emits the same shape into ``job.doc``
     regardless of whether the kill needed SIGKILL escalation or the
     process was already dead.
+
+    All doc writes go through :func:`doc_op_with_retry` because this
+    function races against ``run_queued``'s own terminal-status writes
+    on Windows: both processes try to atomic-rename the same JSON at
+    the same instant and Windows raises ``PermissionError`` on whichever
+    one loses. Retrying with backoff resolves the race transparently.
     """
     queue_doc = dict(job.doc.get("queue") or {})
     queue_doc["last_error"] = {
@@ -1484,8 +1563,8 @@ def _finalize_stopped(
         "cause": "operator_stop",
     }
     queue_doc.pop("proc", None)
-    job.doc["queue"] = queue_doc
-    mark_status(job, "stopped")
+    doc_op_with_retry(lambda: job.doc.__setitem__("queue", queue_doc))
+    doc_op_with_retry(lambda: mark_status(job, "stopped"))
     return 0
 
 

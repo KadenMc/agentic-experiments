@@ -23,6 +23,7 @@ from typing import Any
 import signac
 
 from aexp.schema import RunLink, RunStatus, iso_utc_now
+from aexp.utils.atomic import doc_op_with_retry
 from aexp.utils.git import get_git_provenance
 from aexp.utils.paths import (
     find_repo_root,
@@ -433,6 +434,39 @@ def run_lifecycle(
     # a non-zero rc; without the guard, our ``except`` branch would
     # immediately overwrite the operator-stop record with status="failed".
     _PRESERVE_TERMINAL_STATUSES = ("stopped", "abandoned")
+
+    def _safe_doc_set(key: str, value: Any) -> None:
+        """Set ``job.doc[key]`` tolerating Windows doc-store rename races.
+
+        signac's atomic-write doc store renames a temp file over the
+        target. On Windows, ``os.replace`` is not atomic against an
+        overlapping rename from another writer (different from POSIX,
+        which permits concurrent rename-over without raising). When
+        ``stop_queued`` and this lifecycle's terminal-status writers
+        fire at the same instant, one of them sees ``PermissionError``.
+
+        The retry helper resolves most contention transparently; if all
+        retries exhaust we drop the write — the losing writer's intent
+        is already covered by the winning writer's record (both are
+        trying to mark the run finished).
+        """
+        try:
+            doc_op_with_retry(lambda: job.doc.__setitem__(key, value))
+        except PermissionError:
+            return
+
+    def _should_write_terminal_status() -> bool:
+        """Read job.doc['status'] tolerantly to decide whether to write our
+        terminal status. Retries the read on Windows file-rename races,
+        and if all retries exhaust assume the concurrent writer is
+        already setting a terminal status — skip our write.
+        """
+        try:
+            current = doc_op_with_retry(lambda: job.doc.get("status"))
+            return current not in _PRESERVE_TERMINAL_STATUSES
+        except PermissionError:
+            return False
+
     try:
         yield job
     except Exception:
@@ -441,17 +475,17 @@ def run_lifecycle(
         # atomic-write rename). Idempotent + safe under further
         # exceptions in the writes below.
         _stop_heartbeat()
-        if job.doc.get("status") not in _PRESERVE_TERMINAL_STATUSES:
-            job.doc["status"] = "failed"
-        job.doc["ended_at"] = iso_utc_now()
-        job.doc["wallclock_s"] = round(perf_counter() - t0, 3)
+        if _should_write_terminal_status():
+            _safe_doc_set("status", "failed")
+        _safe_doc_set("ended_at", iso_utc_now())
+        _safe_doc_set("wallclock_s", round(perf_counter() - t0, 3))
         raise
     else:
         _stop_heartbeat()
-        if job.doc.get("status") not in _PRESERVE_TERMINAL_STATUSES:
-            job.doc["status"] = "complete"
-        job.doc["ended_at"] = iso_utc_now()
-        job.doc["wallclock_s"] = round(perf_counter() - t0, 3)
+        if _should_write_terminal_status():
+            _safe_doc_set("status", "complete")
+        _safe_doc_set("ended_at", iso_utc_now())
+        _safe_doc_set("wallclock_s", round(perf_counter() - t0, 3))
     finally:
         # Belt-and-suspenders: if neither except nor else branch ran
         # (shouldn't happen with the contextmanager protocol, but
@@ -463,11 +497,15 @@ def run_lifecycle(
 def mark_status(job: signac.job.Job, status: RunStatus) -> None:
     """Set ``job.doc['status']`` and update ``ended_at`` / ``wallclock_s`` sensibly.
 
-    Useful for out-of-band transitions like ``abandoned``.
+    Useful for out-of-band transitions like ``abandoned``. Doc writes go
+    through :func:`doc_op_with_retry` so concurrent writers on Windows
+    don't trip on ``PermissionError`` from the signac atomic-rename race.
     """
-    job.doc["status"] = status
-    if status in ("complete", "failed", "abandoned"):
-        job.doc.setdefault("ended_at", iso_utc_now())
+    doc_op_with_retry(lambda: job.doc.__setitem__("status", status))
+    if status in ("complete", "failed", "abandoned", "stopped"):
+        doc_op_with_retry(
+            lambda: job.doc.setdefault("ended_at", iso_utc_now())
+        )
 
 
 __all__ = [

@@ -1718,6 +1718,11 @@ def test_stop_queued_force_skips_sigterm(
     to the unconditional kill — POSIX ``SIGKILL`` via ``os.killpg``,
     Windows ``taskkill /F /T``. Both terminate the process tree
     promptly.
+
+    On Windows this test stresses the doc-store rename-race retry path:
+    the runner thread's terminal-status writes and the main thread's
+    ``_finalize_stopped`` write race for the same JSON file. The
+    ``doc_op_with_retry`` helper resolves the contention transparently.
     """
     body = (
         "import signal, time, pathlib; "

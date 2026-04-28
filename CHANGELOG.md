@@ -150,9 +150,10 @@ fails because git is unavailable.
 
 ### Fixed — `aexp queue stop` actually kills the process tree on Windows
 
-The 0.2.1-rc Windows path for `stop_queued`'s SIGKILL escalation was
-broken in two layered ways, caught during manual smoke testing
-between two PowerShell windows:
+The 0.2.1-rc Windows path for `stop_queued` was broken in **four**
+layered ways, all caught during manual smoke testing between two
+PowerShell windows. Each fix below was needed; together they make
+cross-shell `aexp queue stop --force` work end-to-end.
 
 1. **`CTRL_BREAK_EVENT` doesn't deliver across consoles.** Per Win32
    docs the signal is only delivered to processes that share a console
@@ -163,6 +164,23 @@ between two PowerShell windows:
    `signal.SIGKILL` doesn't exist on Windows, so the escalation path
    resolved to `signal.SIGTERM`, which the dispatch handled by sending
    `CTRL_BREAK_EVENT` again — same broken signal, same silent no-op.
+3. **`_proc_alive(pid, 0)` reported alive processes as dead.** Python's
+   Windows `os.kill(pid, 0)` does not special-case `sig=0` as a
+   liveness probe (the way POSIX does); it tries to dispatch through
+   `TerminateProcess(handle, 0)`, which the kernel rejects with
+   `ERROR_INVALID_PARAMETER` (WinError 87). Catching the
+   `OSError` and returning `False` meant `stop_queued` thought every
+   pid was dead before it ever tried to signal it, short-circuiting
+   to "pid already exited; status only" without invoking taskkill.
+4. **signac doc-store rename races between processes.** Once `taskkill`
+   actually fired, the runner process and the stop process both raced
+   to write terminal-status fields to the same JSON file. signac's
+   atomic-rename on Windows isn't atomic against concurrent
+   rename/read from another process — whichever side lost the race
+   raised `PermissionError [WinError 5]` (rename-over a locked target)
+   or `[Errno 13]` (open-for-read while another writer holds the file).
+   The losing process surfaced a Python traceback to the user even
+   though the kill itself worked.
 
 Net effect: stop_queued returned "stopped" (status flipped on disk)
 but the actual subprocess and its child python.exe both kept running
@@ -181,23 +199,42 @@ The SIGTERM grace path still attempts `CTRL_BREAK_EVENT` (it works in
 the same-console case — unit tests, single-shell scripts) but the
 escalation no longer relies on it.
 
-Concurrent-write race fixes layered on top:
+Fixes:
 
-- `run_lifecycle`'s exception and clean-exit branches now respect any
-  terminal status already on disk (specifically `"stopped"` or
-  `"abandoned"`) and don't overwrite. Without this, `stop_queued`'s
-  status="stopped" would be clobbered with status="failed" by the
-  losing-runner's exception handler when its `subprocess.wait`
-  returned a non-zero rc from the kill.
-- `run_queued`'s failure-tail capture now skips the `last_error`
-  write when `cause="operator_stop"` is already on disk, preserving
-  the operator's record over the generic "subprocess failed" record.
+- `_send_stop_signal(pid, pgid, *, force: bool)` replaces the previous
+  `_send_signal_safely(pid, pgid, sig)` shape. Encoding *intent*
+  (force vs graceful) in the parameter rather than dispatching on a
+  signal value removes the `signal.SIGKILL`-doesn't-exist-on-Windows
+  ambiguity and guarantees the force path takes the `taskkill /F /T`
+  branch. POSIX behavior unchanged.
+- `_proc_alive` on Windows now uses `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)`
+  + `GetExitCodeProcess` (via ctypes), checking against `STILL_ACTIVE`
+  (259). This is the proper Win32 liveness pattern; it doesn't rely
+  on the ambiguous `os.kill(pid, 0)` semantics. POSIX path unchanged.
+- New `aexp.utils.atomic.doc_op_with_retry` helper retries any
+  signac-doc operation (read or write) on `PermissionError` with mild
+  exponential backoff (10 attempts, 50ms → 500ms cap). Applied
+  throughout the run/stop terminal-status writers in `run_lifecycle`,
+  `mark_status`, `_finalize_stopped`, `_clear_running_proc`, and
+  `run_queued`'s last_error capture. Resolves the cross-process rename
+  race transparently; on POSIX it's a no-op (no contention).
+- `run_lifecycle`'s exception/clean-exit branches respect terminal
+  statuses already on disk (`"stopped"`, `"abandoned"`) and don't
+  overwrite — preserves operator-stop records over the runner's
+  losing-the-race "failed" status.
+- `run_queued`'s failure-tail capture skips the `last_error` write
+  when `cause="operator_stop"` is already on disk.
 
 Tests:
 
 - The previously POSIX-only `test_stop_queued_kills_running_subprocess_via_sigterm`
-  and `test_stop_queued_force_skips_sigterm` are now run on Windows
-  too, validating the `taskkill` path.
+  and `test_stop_queued_force_skips_sigterm` now run on Windows too,
+  validating the `taskkill` path AND the doc-store retry path under
+  in-process thread contention.
+- New Windows-specific `test_stop_queued_force_invokes_taskkill_on_windows`
+  monkeypatches `subprocess.run` to record the argv and asserts
+  `taskkill /F /T` was actually invoked — a regression guard against
+  the dispatch dead-code class of bug.
 
 ### Added (defensive) — `aexp install` refuses the aexp source tree
 
