@@ -1100,9 +1100,19 @@ def run_queued(
                 # Still raise SubprocessFailed so run_lifecycle records
                 # an exception exit (it just won't overwrite a stopped
                 # status thanks to the preservation guard there).
+                #
+                # The message is intentionally concise. Earlier (0.2.0)
+                # versions inlined the last 512 bytes of stderr because
+                # subprocess output was buffered and the user had no
+                # other view; with 0.2.1's live streaming, those bytes
+                # were already printed to the parent stdout (or the
+                # slurm log) and re-printing them here just duplicates.
+                # The full ring-buffer tail still lands in
+                # ``last_error.stderr_tail`` for post-hoc inspection
+                # via ``aexp show-run``.
                 raise SubprocessFailed(
-                    f"runner exited with code {returncode}: "
-                    f"{tail_text[-512:]}"
+                    f"runner exited with code {returncode} "
+                    f"(see `aexp show-run {job.id[:8]}` for stderr tail)"
                 )
         finally:
             # Always drop the proc pointer so a downstream `queue stop` can't
