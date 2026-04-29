@@ -9,6 +9,292 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
+## [0.2.1] — 2026-04-27
+
+### Release summary
+
+0.2.1 is a queue-layer bugfix release driven by early-adopter findings
+from the electricrag F.1 inference session of 2026-04-26 → 2026-04-27.
+The 0.2.0 queue layer worked end-to-end but had three discrete design
+gaps that surfaced under real interactive cluster use; this release
+closes all three plus three smaller pieces of side friction the same
+session uncovered.
+
+### Fixed (gap 1) — `aexp run-queued` streams subprocess output live
+
+The 0.2.0 implementation invoked the runner via
+`subprocess.run(..., capture_output=True)`, which buffers stdout and
+stderr in memory until process exit then dumps them at once. For
+interactive consumers (notebook runners, terminal `aexp run-queued`
+calls) a 15-25 minute training run appeared totally silent until the
+end. During the electricrag F.1 session this caused multiple
+panic-kills of healthy jobs because the user couldn't tell whether
+the work was alive vs hung.
+
+`run_queued` now uses `subprocess.Popen` with line-by-line streaming
+(`bufsize=1`, stderr merged into stdout for interleave-correct
+ordering), and writes each line to the parent's stdout immediately
+with a flush. A bounded `deque(maxlen=200)` ring buffer captures the
+last ~16 KB of merged output for the failure-tail path; the rendered
+`last_error.stderr_tail` is still capped at ~2 KB of bytes for
+log-storage parity with 0.2.0.
+
+This fix obsoletes the in-place cluster patch that was applied during
+the 2026-04-26 session (`capture_output=True` line removed). The
+upstream version preserves both halves of the contract: live output
+to the caller AND a forensics-tail in `job.doc`.
+
+### Added (gap 2) — `aexp queue stop <jobid>` interrupts a running job
+
+0.2.0 had no verb to interrupt a running queued job. The only
+recourse was hand-rolled `ps aux | grep ... → kill -9 <pid>`,
+followed by `mark_status(job, 'failed')` via the Python API.
+Dangerous: SIGKILL on a recycled pid can nuke arbitrary cluster
+processes; multiple PIDs in the spawn tree (`aexp run-queued` parent
++ wrapper + inner training process) had to be killed individually.
+
+`run_queued` now spawns the subprocess in its own session/process
+group (POSIX `os.setsid` / Windows `CREATE_NEW_PROCESS_GROUP`) and
+records `pid`, `pgid`, hostname, and a process-start-time fingerprint
+in `job.doc["queue"]["proc"]` for the duration of the run. The
+record is cleared on every exit path so a downstream `queue stop`
+can't be tricked into killing a recycled pid.
+
+`stop_queued()` (CLI: `aexp queue stop <jobid>`) reads the proc
+record, refuses if the recorded host differs from this machine,
+checks the start-time fingerprint to detect pid recycling, sends
+SIGTERM to the process group, polls during a configurable grace
+window (default 5s, override with `--grace-s`), and escalates to
+SIGKILL if the runner ignores SIGTERM. `--force` skips SIGTERM
+entirely.
+
+A new `"stopped"` terminal status (added to `RunStatus`) distinguishes
+operator-stops from `"failed"` (runtime crash) and `"abandoned"`
+(never executed / pre-execution give-up). Validator's
+`VALID_STATUSES` constant updated to recognize the new status.
+
+### Added (gap 3) — `add_to_queue` dedupes recommit-only diffs
+
+0.2.0's `add_to_queue` silently created a new signac job whenever
+the sp differed, including when the only diff was the auto-injected
+`code_commit` from a working-tree commit between two queueings.
+Common footgun: queue, fix a docstring, queue again — now you have
+2N functionally identical pending jobs.
+
+`add_to_queue` (and `add_many_to_queue` via Cartesian product) now
+scans existing pending entries for the same `(experiment_id, tag)`
+and compares sps modulo `code_commit` and `code_dirty`. Matches
+return the existing job and emit a `DuplicatePendingJobWarning`
+(new) instead of creating a duplicate. Pass
+`allow_dup_on_recommit=True` (CLI: `--allow-dup-on-recommit`) when
+the recommit *is* the point of the new entries.
+
+Tag-scoped: different tags = different operational queues = no
+dedupe. Terminal-status entries (complete / failed / abandoned /
+stopped) are not deduped against — re-running a finished experiment
+is intentional, not a footgun.
+
+### Added (side-friction) — `{sp_json_shell}` placeholder
+
+The 0.2.0 `{sp_json}` placeholder emits raw JSON without shell
+escaping. Templates that wrap it in shell quotes
+(`runner_command: "python foo.py '{sp_json}'"`) break for any sp
+value containing the same quote character — apostrophes in
+sp.notes were the actual electricrag failure mode.
+
+New `{sp_json_shell}` placeholder applies `shlex.quote` to the
+JSON payload. Drop it in the template *unquoted* (the shell quoting
+is part of what `shlex.quote` produces). POSIX-safe; Windows cmd.exe
+caveat is documented (cluster is Linux, where it matters).
+
+The original `{sp_json}` is preserved unchanged for backward
+compatibility; the docstring now warns about the apostrophe trap and
+points consumers at `{sp_json_shell}` for any shell-quoted context.
+
+### Added (side-friction) — heartbeat in `run_lifecycle`
+
+0.2.0's signac job document had a `status='running'` flag set once
+at start of `run_lifecycle` and updated only on terminal transition.
+Consumers using doc mtime as a liveness signal got false-stale
+readings while jobs were working hard (no doc writes during inference
+loops). The electricrag F.1 session lost real time to this.
+
+`run_lifecycle` now starts a daemon heartbeat thread that touches
+`doc["heartbeat_at"]` (ISO-8601 UTC) every `heartbeat_s` seconds
+(default 30s; override per-call via the kwarg, globally via
+`AEXP_HEARTBEAT_S` env var, or set to 0 to disable). External
+liveness probes can compare `heartbeat_at` to wall-clock to
+distinguish "still working" (heartbeat advancing) from "wedged"
+(heartbeat stuck > N intervals ago).
+
+The heartbeat is daemon-threaded so SIGKILL of the parent doesn't
+leave it dangling; write exceptions inside the thread are swallowed
+silently so a heartbeat-thread crash can't mask the real failure on
+the main path.
+
+### Added (side-friction) — `code_diff_summary` capture for dirty trees
+
+When `code_dirty=True`, the bare `code_commit` SHA isn't a precise
+reproducer — there are uncommitted changes layered on top. 0.2.1
+captures a structured `queue.code_diff_summary` blob on dirty queue
+adds:
+
+- `diff_stat`: `git diff --stat HEAD` output (one line per changed
+  file plus totals row).
+- `modified_count`: number of modified/staged files.
+- `untracked_count`: number of untracked files (forensics for the
+  "did I forget to `git add`?" case).
+
+Best-effort: capture is wrapped in try/except so a queue add never
+fails because git is unavailable.
+
+### Fixed — `aexp queue stop` actually kills the process tree on Windows
+
+The 0.2.1-rc Windows path for `stop_queued` was broken in **four**
+layered ways, all caught during manual smoke testing between two
+PowerShell windows. Each fix below was needed; together they make
+cross-shell `aexp queue stop --force` work end-to-end.
+
+1. **`CTRL_BREAK_EVENT` doesn't deliver across consoles.** Per Win32
+   docs the signal is only delivered to processes that share a console
+   with the sender; `aexp queue stop` invoked from a different shell
+   than the one running `run-queued` runs in a different console, so
+   the call succeeded but the signal was silently dropped.
+2. **The SIGKILL escalation also fell back to `CTRL_BREAK_EVENT`.**
+   `signal.SIGKILL` doesn't exist on Windows, so the escalation path
+   resolved to `signal.SIGTERM`, which the dispatch handled by sending
+   `CTRL_BREAK_EVENT` again — same broken signal, same silent no-op.
+3. **`_proc_alive(pid, 0)` reported alive processes as dead.** Python's
+   Windows `os.kill(pid, 0)` does not special-case `sig=0` as a
+   liveness probe (the way POSIX does); it tries to dispatch through
+   `TerminateProcess(handle, 0)`, which the kernel rejects with
+   `ERROR_INVALID_PARAMETER` (WinError 87). Catching the
+   `OSError` and returning `False` meant `stop_queued` thought every
+   pid was dead before it ever tried to signal it, short-circuiting
+   to "pid already exited; status only" without invoking taskkill.
+4. **signac doc-store rename races between processes.** Once `taskkill`
+   actually fired, the runner process and the stop process both raced
+   to write terminal-status fields to the same JSON file. signac's
+   atomic-rename on Windows isn't atomic against concurrent
+   rename/read from another process — whichever side lost the race
+   raised `PermissionError [WinError 5]` (rename-over a locked target)
+   or `[Errno 13]` (open-for-read while another writer holds the file).
+   The losing process surfaced a Python traceback to the user even
+   though the kill itself worked.
+
+Net effect: stop_queued returned "stopped" (status flipped on disk)
+but the actual subprocess and its child python.exe both kept running
+to completion.
+
+The Windows escalation path now invokes
+`taskkill /PID <pid> /F /T`:
+
+- `/F` invokes `TerminateProcess` — works cross-console.
+- `/T` walks the process tree, killing the inner `python.exe` along
+  with the `cmd.exe` shell wrapper that `subprocess.Popen(shell=True)`
+  spawns. Without `/T`, killing only `cmd.exe` orphans the inner
+  process and the user sees no behavior change.
+
+The SIGTERM grace path still attempts `CTRL_BREAK_EVENT` (it works in
+the same-console case — unit tests, single-shell scripts) but the
+escalation no longer relies on it.
+
+Fixes:
+
+- `_send_stop_signal(pid, pgid, *, force: bool)` replaces the previous
+  `_send_signal_safely(pid, pgid, sig)` shape. Encoding *intent*
+  (force vs graceful) in the parameter rather than dispatching on a
+  signal value removes the `signal.SIGKILL`-doesn't-exist-on-Windows
+  ambiguity and guarantees the force path takes the `taskkill /F /T`
+  branch. POSIX behavior unchanged.
+- `_proc_alive` on Windows now uses `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)`
+  + `GetExitCodeProcess` (via ctypes), checking against `STILL_ACTIVE`
+  (259). This is the proper Win32 liveness pattern; it doesn't rely
+  on the ambiguous `os.kill(pid, 0)` semantics. POSIX path unchanged.
+- New `aexp.utils.atomic.doc_op_with_retry` helper retries any
+  signac-doc operation (read or write) on `PermissionError` with mild
+  exponential backoff (10 attempts, 50ms → 500ms cap). Applied
+  throughout the run/stop terminal-status writers in `run_lifecycle`,
+  `mark_status`, `_finalize_stopped`, `_clear_running_proc`, and
+  `run_queued`'s last_error capture. Resolves the cross-process rename
+  race transparently; on POSIX it's a no-op (no contention).
+- `run_lifecycle`'s exception/clean-exit branches respect terminal
+  statuses already on disk (`"stopped"`, `"abandoned"`) and don't
+  overwrite — preserves operator-stop records over the runner's
+  losing-the-race "failed" status.
+- `run_queued`'s failure-tail capture skips the `last_error` write
+  when `cause="operator_stop"` is already on disk.
+
+Tests:
+
+- The previously POSIX-only `test_stop_queued_kills_running_subprocess_via_sigterm`
+  and `test_stop_queued_force_skips_sigterm` now run on Windows too,
+  validating the `taskkill` path AND the doc-store retry path under
+  in-process thread contention.
+- New Windows-specific `test_stop_queued_force_invokes_taskkill_on_windows`
+  monkeypatches `subprocess.run` to record the argv and asserts
+  `taskkill /F /T` was actually invoked — a regression guard against
+  the dispatch dead-code class of bug.
+
+### Added (defensive) — `aexp install` refuses the aexp source tree
+
+`aexp install` (and the underlying `install_limina`) now detects when
+`repo_root` is — or is a descendant of — the agentic-experiments source
+tree itself, and refuses with a clear error before any filesystem
+writes. Detection: walk up from the target directory looking for a
+`pyproject.toml` whose `[project].name` is `"agentic-experiments"`.
+
+The mechanism that motivated this defense: invoking `aexp install`
+through `poetry -C <aexp-repo> run aexp install` from a separate
+scratch directory. Poetry's `-C` flag swaps the subprocess cwd to the
+project, so the install ended up materializing a consumer-side scaffold
+(`kb/`, `templates/`, `.claude/`, `.runs/`, etc.) inside the package's
+own source tree instead of the user's intended target. The guard
+catches this class of mistake at install time so the dev repo stays
+clean.
+
+Pass `--allow-self-install` (CLI) / `allow_self_install=True` (Python
+API) to override when dogfooding the consumer scaffold against the dev
+repo is genuinely intended. New `InstallRefused(RuntimeError)` exception
+re-exported from `aexp` so programmatic callers can branch on it.
+
+### Behavior changes worth noting
+
+- `RunStatus` literal extended with `"stopped"`. Consumers that
+  enumerate `RunStatus` values exhaustively in match statements will
+  see a new lint warning until they handle it; semantically
+  `"stopped"` is a terminal state alongside `"complete"`,
+  `"failed"`, `"abandoned"`.
+- The new `proc` field under `job.doc["queue"]` is *transient* — it
+  exists only between Popen-spawn and process-wait-return. Don't
+  depend on it for post-hoc analysis.
+- `run_lifecycle` writes `doc["heartbeat_at"]` continually during
+  runs. This is small per-write (~80 bytes ISO timestamp) but does
+  bump signac doc-store I/O. Set `heartbeat_s=0` for short-lived
+  in-process runs that don't need it.
+
+### Test coverage
+
+Queue tests grow from 58 → 79 (Linux: 80, Windows: 76). New
+coverage:
+
+- Live-stream proof: parent stdout sees runner output before
+  subprocess exit (regression guard for capture_output buffer-then-
+  dump).
+- Stderr tail capture preserved through streaming refactor.
+- Proc info recorded during run / cleared after.
+- `stop_queued` no-live-proc / wrong-host / pid-recycle / SIGTERM /
+  `--force` paths.
+- Recommit dedupe: returns existing job + emits warning; respects
+  `--allow-dup-on-recommit`; doesn't fire against terminal entries;
+  scoped per tag; per-combo in sweeps.
+- `{sp_json_shell}` apostrophe-safety.
+- `code_diff_summary` written on dirty queue / skipped on clean.
+- `run_lifecycle` heartbeat write / disable / env-var override.
+
+`tests/test_validate.py::test_valid_statuses_constant_matches_run_status_literal`
+updated for the new `"stopped"` literal.
+
 ## [0.2.0] — 2026-04-25
 
 ### Release summary

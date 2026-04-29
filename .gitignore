@@ -209,3 +209,10 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Overnight 0.2.1 build — uncommitted decision log per user directive
+/DECISIONS.md
+
+# Cygwin/MSYS bash crash artifacts (Git-for-Windows occasionally drops these)
+bash.exe.stackdump
+*.stackdump

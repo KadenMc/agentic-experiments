@@ -66,10 +66,12 @@ aexp install-slash-commands [--target .claude/commands]
 # Queue subcommand group — pending-run registration + in-script execution + materialization
 aexp queue add         --experiment E### [--sp K=V,...] [--sweep "K=V|V,K=a..b"]
                         [--tag T] [--hypothesis H###] [--no-resolve] [--no-commit]
+                        [--allow-dup-on-recommit]
 aexp queue list        [--experiment E###] [--tag T] [--include-terminal]
 aexp queue run         [--experiment E###] [--tag T] [--index N]
                         [--continue-on-failure] [--force] [--dry-run]
 aexp queue remove      <job_id>
+aexp queue stop        <job_id> [--grace-s 5] [--force]
 aexp queue clear       [--experiment E###] [--tag T] [--yes]
 aexp queue materialize [--runner shell|slurm|manual] [--output PATH]
                         [--tag T] [--experiment E###]

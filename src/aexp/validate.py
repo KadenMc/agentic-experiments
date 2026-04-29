@@ -34,7 +34,17 @@ from aexp.runs import get_run_store
 from aexp.schema import Issue, RunStatus
 from aexp.utils.paths import find_repo_root
 
-VALID_STATUSES: set[RunStatus] = {"created", "running", "complete", "failed", "abandoned"}
+VALID_STATUSES: set[RunStatus] = {
+    "created",
+    "running",
+    "complete",
+    "failed",
+    "abandoned",
+    "stopped",
+}
+# Note: "queued" is intentionally *not* validated as a "valid" terminal
+# status here — queued jobs are pending, not steady-state. Validator
+# scope is post-hoc analysis of finished runs.
 
 ValidateMode = Literal["full", "kb-only", "runs-only"]
 

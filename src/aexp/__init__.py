@@ -31,6 +31,7 @@ from aexp.artifacts import (
 from aexp.backlinks import add_backlink
 from aexp.install import (
     InstallAction,
+    InstallRefused,
     compute_vendor_sha,
     install_limina,
     is_limina_installed,
@@ -59,7 +60,9 @@ from aexp.linking import (
 
 # Queue / materialization / sp-resolution ----------------------------------
 from aexp.queue import (
+    DuplicatePendingJobWarning,
     RunnerCommandMissing,
+    StopJobError,
     SubprocessFailed,
     SweepParseError,
     add_many_to_queue,
@@ -73,6 +76,7 @@ from aexp.queue import (
     resolve_sp,
     run_queue,
     run_queued,
+    stop_queued,
 )
 
 # signac-backed run store ---------------------------------------------------
@@ -139,6 +143,7 @@ __all__ = [
     "__version__",
     # install
     "InstallAction",
+    "InstallRefused",
     "compute_vendor_sha",
     "install_limina",
     "is_limina_installed",
@@ -169,7 +174,9 @@ __all__ = [
     "show_batch",
     "summarize_run",
     # queue / materialization / sp-resolution
+    "DuplicatePendingJobWarning",
     "RunnerCommandMissing",
+    "StopJobError",
     "SubprocessFailed",
     "SweepParseError",
     "add_many_to_queue",
@@ -183,6 +190,7 @@ __all__ = [
     "resolve_sp",
     "run_queue",
     "run_queued",
+    "stop_queued",
     # limina_io
     "ArtifactNotFoundError",
     "ArtifactReadError",

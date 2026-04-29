@@ -12,6 +12,8 @@ directly — we do *not* hide them — while owning two conventions:
 """
 from __future__ import annotations
 
+import os
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -21,11 +23,20 @@ from typing import Any
 import signac
 
 from aexp.schema import RunLink, RunStatus, iso_utc_now
+from aexp.utils.atomic import doc_op_with_retry
 from aexp.utils.git import get_git_provenance
 from aexp.utils.paths import (
     find_repo_root,
     resolve_run_store_path,
 )
+
+# Default heartbeat interval (seconds). 30 is a good middle ground:
+# - signac's atomic-write doc store handles 30s writes without contention.
+# - liveness probes can detect a stalled run within a minute.
+# - mid-job processes (real ML training) won't notice the I/O.
+# Override per-run via ``run_lifecycle(..., heartbeat_s=)``; set to 0
+# to disable. Override globally via ``AEXP_HEARTBEAT_S`` env var.
+DEFAULT_HEARTBEAT_S: float = 30.0
 
 # ---------------------------------------------------------------------------
 # Errors
@@ -294,52 +305,207 @@ def find_runs(
 # ---------------------------------------------------------------------------
 
 
+def _resolve_heartbeat_interval(explicit: float | None) -> float:
+    """Pick the heartbeat interval: explicit > env var > module default.
+
+    A value of ``0`` (or negative) disables the heartbeat. The env-var
+    path lets cluster ops tune the cadence globally without touching
+    consumer code (e.g. lower it on jobs whose runtime is bounded by
+    a few minutes).
+    """
+    if explicit is not None:
+        return max(0.0, float(explicit))
+    raw = os.environ.get("AEXP_HEARTBEAT_S")
+    if raw is not None:
+        try:
+            return max(0.0, float(raw))
+        except ValueError:
+            return DEFAULT_HEARTBEAT_S
+    return DEFAULT_HEARTBEAT_S
+
+
 @contextmanager
 def run_lifecycle(
     job: signac.job.Job,
     *,
     mark_started: bool = True,
+    heartbeat_s: float | None = None,
 ) -> Iterator[signac.job.Job]:
     """Context manager that tracks a run's status transitions.
 
-    On enter: writes ``doc["status"]='running'`` and ``doc["started_at']``.
-    On clean exit: writes ``status='complete'``, ``ended_at``, ``wallclock_s``.
+    On enter: writes ``doc["status"]='running'`` and ``doc["started_at"]``,
+    and starts a daemon heartbeat thread that touches
+    ``doc["heartbeat_at"]`` (ISO-8601 UTC) every ``heartbeat_s`` seconds.
+    On clean exit: writes ``status='complete'``, ``ended_at``,
+    ``wallclock_s``, and stops the heartbeat thread.
     On exception: writes ``status='failed'``, ``ended_at``, ``wallclock_s``,
-    and re-raises.
+    stops the heartbeat thread, and re-raises.
+
+    Heartbeat
+    ---------
+    The heartbeat is the answer to "how does a separate process tell
+    whether this run is alive vs. wedged?" Without it, ``status='running'``
+    is set once and never updated; consumers using the doc's mtime as a
+    liveness signal get false-stale readings during jobs that are
+    working hard (no doc writes during inference loops). The electricrag
+    F.1 session lost real time to this misunderstanding.
 
     Parameters
     ----------
     job : signac.job.Job
     mark_started : bool
         If ``False``, leave status untouched on enter. Useful when the
-        caller wants to control the "created -> running" transition itself.
+        caller wants to control the "created -> running" transition
+        itself.
+    heartbeat_s : float | None
+        Heartbeat interval in seconds. ``None`` (default) defers to
+        ``AEXP_HEARTBEAT_S`` env var, then ``DEFAULT_HEARTBEAT_S`` (30 s).
+        Set to ``0`` to disable.
+
+    Notes
+    -----
+    The heartbeat thread is a daemon, so an unexpected interpreter exit
+    (SIGKILL, ``os._exit``) won't leave it dangling. The thread also
+    swallows write exceptions silently — if the signac doc-store lock
+    contends or the workspace disappears, we'd rather fail noisily on
+    the main path than mask it with a heartbeat-thread crash.
     """
     if mark_started:
         job.doc["status"] = "running"
         job.doc.setdefault("started_at", iso_utc_now())
 
+    interval = _resolve_heartbeat_interval(heartbeat_s)
+    stop_event = threading.Event() if interval > 0 else None
+    hb_thread: threading.Thread | None = None
+    hb_stopped = False
+
+    def _heartbeat_loop() -> None:
+        # Run a tight-but-bounded loop. We sleep on the stop_event so
+        # exit happens within ~10ms of context-exit, not after a full
+        # interval — important for tests and for fast-failing runs.
+        while stop_event is not None and not stop_event.wait(interval):
+            try:
+                job.doc["heartbeat_at"] = iso_utc_now()
+            except Exception:
+                # Doc-store contention (Windows file-lock against the
+                # main thread's reads), workspace deletion, or other
+                # transient I/O errors. Continue to the next interval
+                # rather than returning — a single blip shouldn't kill
+                # the heartbeat for the lifetime of the run. The main
+                # path will surface the real failure if any.
+                continue
+
+    def _stop_heartbeat() -> None:
+        """Signal + join the heartbeat thread. Idempotent.
+
+        MUST be called before the main thread writes terminal-status
+        fields (``ended_at``, ``wallclock_s``, terminal ``status``).
+        On Windows, the signac doc store uses atomic-write file rename;
+        two threads writing simultaneously trip ``PermissionError`` on
+        the JSON file. Stopping the heartbeat first eliminates the race.
+        """
+        nonlocal hb_stopped
+        if hb_stopped:
+            return
+        hb_stopped = True
+        if stop_event is not None:
+            stop_event.set()
+        if hb_thread is not None:
+            hb_thread.join(timeout=1.0)
+
+    if stop_event is not None:
+        # Touch once on enter so consumers don't have to wait an interval
+        # for the first liveness signal.
+        try:
+            job.doc["heartbeat_at"] = iso_utc_now()
+        except Exception:
+            pass
+        hb_thread = threading.Thread(
+            target=_heartbeat_loop, daemon=True, name=f"aexp-hb-{job.id[:8]}"
+        )
+        hb_thread.start()
+
     t0 = perf_counter()
+    # Statuses set out-of-band by a concurrent process (e.g. ``stop_queued``
+    # racing against ``run_queued``'s exit) that this lifecycle's exit
+    # branches must NOT overwrite. ``"stopped"`` is the canonical case:
+    # an operator's ``aexp queue stop`` writes status="stopped" + last_error
+    # at roughly the same instant ``run_queued``'s subprocess.wait returns
+    # a non-zero rc; without the guard, our ``except`` branch would
+    # immediately overwrite the operator-stop record with status="failed".
+    _PRESERVE_TERMINAL_STATUSES = ("stopped", "abandoned")
+
+    def _safe_doc_set(key: str, value: Any) -> None:
+        """Set ``job.doc[key]`` tolerating Windows doc-store rename races.
+
+        signac's atomic-write doc store renames a temp file over the
+        target. On Windows, ``os.replace`` is not atomic against an
+        overlapping rename from another writer (different from POSIX,
+        which permits concurrent rename-over without raising). When
+        ``stop_queued`` and this lifecycle's terminal-status writers
+        fire at the same instant, one of them sees ``PermissionError``.
+
+        The retry helper resolves most contention transparently; if all
+        retries exhaust we drop the write — the losing writer's intent
+        is already covered by the winning writer's record (both are
+        trying to mark the run finished).
+        """
+        try:
+            doc_op_with_retry(lambda: job.doc.__setitem__(key, value))
+        except PermissionError:
+            return
+
+    def _should_write_terminal_status() -> bool:
+        """Read job.doc['status'] tolerantly to decide whether to write our
+        terminal status. Retries the read on Windows file-rename races,
+        and if all retries exhaust assume the concurrent writer is
+        already setting a terminal status — skip our write.
+        """
+        try:
+            current = doc_op_with_retry(lambda: job.doc.get("status"))
+            return current not in _PRESERVE_TERMINAL_STATUSES
+        except PermissionError:
+            return False
+
     try:
         yield job
     except Exception:
-        job.doc["status"] = "failed"
-        job.doc["ended_at"] = iso_utc_now()
-        job.doc["wallclock_s"] = round(perf_counter() - t0, 3)
+        # Stop heartbeat BEFORE writing terminal status to avoid a
+        # Windows doc-store file-lock race (Python 3.13 + signac's
+        # atomic-write rename). Idempotent + safe under further
+        # exceptions in the writes below.
+        _stop_heartbeat()
+        if _should_write_terminal_status():
+            _safe_doc_set("status", "failed")
+        _safe_doc_set("ended_at", iso_utc_now())
+        _safe_doc_set("wallclock_s", round(perf_counter() - t0, 3))
         raise
     else:
-        job.doc["status"] = "complete"
-        job.doc["ended_at"] = iso_utc_now()
-        job.doc["wallclock_s"] = round(perf_counter() - t0, 3)
+        _stop_heartbeat()
+        if _should_write_terminal_status():
+            _safe_doc_set("status", "complete")
+        _safe_doc_set("ended_at", iso_utc_now())
+        _safe_doc_set("wallclock_s", round(perf_counter() - t0, 3))
+    finally:
+        # Belt-and-suspenders: if neither except nor else branch ran
+        # (shouldn't happen with the contextmanager protocol, but
+        # defensive), guarantee the heartbeat thread is dead before
+        # we leave the context.
+        _stop_heartbeat()
 
 
 def mark_status(job: signac.job.Job, status: RunStatus) -> None:
     """Set ``job.doc['status']`` and update ``ended_at`` / ``wallclock_s`` sensibly.
 
-    Useful for out-of-band transitions like ``abandoned``.
+    Useful for out-of-band transitions like ``abandoned``. Doc writes go
+    through :func:`doc_op_with_retry` so concurrent writers on Windows
+    don't trip on ``PermissionError`` from the signac atomic-rename race.
     """
-    job.doc["status"] = status
-    if status in ("complete", "failed", "abandoned"):
-        job.doc.setdefault("ended_at", iso_utc_now())
+    doc_op_with_retry(lambda: job.doc.__setitem__("status", status))
+    if status in ("complete", "failed", "abandoned", "stopped"):
+        doc_op_with_retry(
+            lambda: job.doc.setdefault("ended_at", iso_utc_now())
+        )
 
 
 __all__ = [

@@ -35,7 +35,13 @@ hypothesis; spawns one or more H### over its lifetime).
 """
 
 RunStatus = Literal[
-    "created", "queued", "running", "complete", "failed", "abandoned"
+    "created",
+    "queued",
+    "running",
+    "complete",
+    "failed",
+    "abandoned",
+    "stopped",
 ]
 """Lifecycle values written to ``job.doc["status"]`` (plan §6).
 
@@ -50,7 +56,14 @@ Transitions:
 - ``complete`` / ``failed`` — set by ``run_lifecycle`` on clean / exception
   exit respectively.
 - ``abandoned`` — set by :func:`aexp.remove_from_queue` or by
-  :func:`aexp.mark_status` when the user gives up on a run.
+  :func:`aexp.mark_status` when the user gives up on a run *without*
+  having executed it (or wants to interrupt the queue scheduler rather
+  than the live process).
+- ``stopped`` — set by :func:`aexp.stop_queued` (``aexp queue stop
+  <jobid>``) when an operator interrupts a *running* job's subprocess.
+  Distinct from ``failed`` (runtime crash) and ``abandoned`` (never
+  executed or pre-execution give-up) so post-hoc forensics can tell
+  operator-stops from real failures.
 """
 
 IssueSeverity = Literal["error", "warning"]
