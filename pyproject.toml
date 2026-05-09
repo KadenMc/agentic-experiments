@@ -54,6 +54,17 @@ dependencies = [
 [project.optional-dependencies]
 wandb = ["wandb (>=0.16,<1.0)"]
 mcp = ["mcp (>=1.2,<2.0)"]
+# Jupyter MCP integration — opt in via `aexp install --with-jupyter` and
+# `pip install agentic-experiments[jupyter]`. Versions track the verified
+# combo from the electricrag deployment (see docs/setup/jupyter-mcp.md
+# "Environment reference"). `jupyterlab` is intentionally NOT pinned here:
+# consumers may want their own JupyterLab version; the tested 4.4.1 value
+# is documented in the vendored setup doc but not forced via resolution.
+jupyter = [
+    "jupyter-collaboration (>=4.0.0,<5.0.0)",
+    "jupyter-mcp-tools (>=0.1.6,<0.2.0)",
+    "jupyter-mcp-server (>=1.0.2,<2.0.0)",
+]
 
 [project.scripts]
 aexp = "aexp.cli:app"
