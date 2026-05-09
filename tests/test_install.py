@@ -888,3 +888,27 @@ def test_install_with_jupyter_slash_command_always_present(fresh_git_repo: Path)
     install_limina(fresh_git_repo, dev=True)  # NOTE: no --with-jupyter
     slash_cmd = fresh_git_repo / ".claude" / "commands" / "aexp-jupyter-iterate.md"
     assert slash_cmd.is_file()
+
+
+def test_install_writes_promote_nb_slash_command(fresh_git_repo: Path) -> None:
+    """The /aexp-promote-nb slash command is installed during default install,
+    and its body contains the load-bearing guardrails (refuses without an
+    experiment ID, references the jupyter-compute MCP family, refuses to
+    invent a tracked_notebook_run API)."""
+    install_limina(fresh_git_repo, dev=True)
+    slash_cmd = fresh_git_repo / ".claude" / "commands" / "aexp-promote-nb.md"
+    assert slash_cmd.is_file()
+    body = slash_cmd.read_text(encoding="utf-8")
+    # Frontmatter present and well-formed.
+    assert body.startswith("---\n")
+    assert "description:" in body.split("---", 2)[1]
+    # Self-check guidance for tool availability — degrades gracefully without MCP.
+    assert "mcp__jupyter-compute__" in body
+    # The experiment-required guardrail (without it, promotion lands code in
+    # experiments/ that has no H/E chain — the failure mode this command
+    # exists to prevent).
+    assert "Refuse to proceed without a real experiment" in body
+    # Don't fabricate a tracked_notebook_run API — this is the explicit
+    # design rejection from the plan discussion.
+    assert "tracked_notebook_run" in body  # mentioned only in the "do not invent" warning
+    assert "isn't" in body or "is not" in body  # ... in the "there isn't one" disclaimer

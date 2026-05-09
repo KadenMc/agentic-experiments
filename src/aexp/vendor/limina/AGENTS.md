@@ -180,4 +180,30 @@ tools over git-based round-trips for notebook work:
 The `/aexp-jupyter-iterate` slash command provides a guided
 iteration flow using these tools.
 
+## Research lifecycle (where the slash commands fit)
+
+Research moves through five broad stages. Each has slash commands that
+are the right starting point — the lifecycle isn't strictly linear, but
+naming the stages keeps work scoped and makes the discipline easy to
+narrate.
+
+1. **Develop** — engineering on shared code (model definitions, data
+   loaders, infrastructure). Just code; no aexp-specific surface.
+   Upstream framing lives in artifacts created via
+   `/aexp-new-hypothesis`, `/aexp-new-experiment`, `/aexp-new-thread`.
+2. **Test** — exploratory smoke-test loop in a notebook. Use
+   `/aexp-jupyter-iterate` to read → propose → execute cells with the
+   user. Outputs land in the notebook; nothing is tracked yet.
+3. **Promote** — extract the working cell-cluster into a tracked-run
+   script. Use `/aexp-promote-nb`. Output is a script under
+   `experiments/E<id>-<slug>.py` wrapped with `aexp.tracked_run`,
+   parameterized for sweeps. The notebook stays as the smoke-test
+   record; the script becomes the audit trail.
+4. **Run** — register tracked runs with `/aexp-queue-add`, materialize
+   with `/aexp-queue-materialize`, execute. Each run is a real signac
+   job with captured commit + wandb binding.
+5. **Cite** — write findings via `/aexp-finding-from-run`,
+   `/aexp-finding-from-batch`, or `/aexp-finding-placeholder`. The
+   H/E/F chain closes when the finding cites real tracked runs.
+
 Implementation work can happen, but it is not a parallel core artifact graph in Limina. Research drives the contract; delivery details belong to the local project, not the shared template.
