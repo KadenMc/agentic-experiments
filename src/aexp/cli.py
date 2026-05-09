@@ -238,6 +238,24 @@ def install(
             "<aexp-repo> run aexp install` from a scratch directory)."
         ),
     ),
+    with_jupyter: bool = typer.Option(
+        False,
+        "--with-jupyter",
+        help=(
+            "Opt into the Jupyter MCP integration: writes `jupyter` and "
+            "`jupyter-compute` server entries to `.mcp.json`, sets "
+            "`jupyter_enabled: true` (sticky) in the install marker, and "
+            "ensures `docs/setup/jupyter-mcp.md` is vendored. Requires "
+            "`pip install agentic-experiments[jupyter]` for the Python "
+            "deps (jupyter-collaboration, jupyter-mcp-server, "
+            "jupyter-mcp-tools). After install, follow the cluster-side "
+            "recipe in docs/setup/jupyter-mcp.md (extension disables/"
+            "enables via `aexp jupyter-setup`, stable token, sbatch "
+            "script). The /aexp-jupyter-iterate slash command is "
+            "installed regardless of this flag and self-checks for "
+            "tool availability when invoked."
+        ),
+    ),
 ) -> None:
     """Install the aexp harness into the current repo.
 
@@ -268,6 +286,7 @@ def install(
                 dry_run=True,
                 dev=dev,
                 allow_self_install=allow_self_install,
+                with_jupyter=with_jupyter,
             )
         except InstallRefused as exc:
             console.print(f"[red]{exc}[/red]")
@@ -294,6 +313,7 @@ def install(
             assert_git=assert_git,
             dev=dev,
             allow_self_install=allow_self_install,
+            with_jupyter=with_jupyter,
         )
     except InstallRefused as exc:
         console.print(f"[red]{exc}[/red]")
@@ -808,6 +828,74 @@ def sync_offline_cmd(
     if failures:
         console.print(f"[red]{failures} sync(s) failed[/red]")
         _exit(1)
+
+
+@app.command("jupyter-setup")
+def jupyter_setup(
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        "-n",
+        help="Print the commands that would be run without executing them.",
+    ),
+) -> None:
+    """Configure Jupyter Server extensions for the Jupyter MCP integration.
+
+    Run this on the cluster (login node, inside the conda env / venv that
+    hosts your `jupyter lab`). Idempotent — safe to re-run after a fresh
+    install pulls in conflicting Datalayer extensions.
+
+    The four operations applied:
+
+    \b
+      - DISABLE jupyter_server_documents          (server extension; replaces
+                                                   kernel manager and breaks
+                                                   the MCP kernel-WS path)
+      - DISABLE @jupyter-ai-contrib/server-documents
+                                                  (lab frontend extension that
+                                                   keeps calling Datalayer
+                                                   private routes after the
+                                                   server half is disabled →
+                                                   "File ID error" on every
+                                                   notebook open)
+      - ENABLE  jupyter_server_ydoc               (provides /api/collaboration
+                                                   routes; some envs ship it
+                                                   disabled)
+      - ENABLE  jupyter_server_nbmodel            (required for `execute_cell`
+                                                   in JUPYTER_SERVER mode)
+
+    See `docs/setup/jupyter-mcp.md` "Investigation log" §1-3 for the full
+    rationale. Restart your JupyterLab process to pick up the changes.
+    """
+    import subprocess
+    import sys as _sys
+
+    cmds: list[list[str]] = [
+        [_sys.executable, "-m", "jupyter", "server", "extension", "disable", "jupyter_server_documents"],
+        [_sys.executable, "-m", "jupyter", "server", "extension", "enable", "jupyter_server_ydoc"],
+        [_sys.executable, "-m", "jupyter", "server", "extension", "enable", "jupyter_server_nbmodel"],
+        [_sys.executable, "-m", "jupyter", "labextension", "disable", "@jupyter-ai-contrib/server-documents"],
+    ]
+
+    for cmd in cmds:
+        printable = " ".join(cmd)
+        if dry_run:
+            console.print(f"[cyan][dry-run][/cyan] {printable}")
+            continue
+        console.print(f"[dim]$[/dim] {printable}")
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.stdout:
+            console.print(result.stdout.rstrip())
+        if result.returncode != 0:
+            console.print(f"[red]FAILED ({result.returncode})[/red] {result.stderr.rstrip()}")
+            _exit(1)
+            return
+
+    if dry_run:
+        console.print("\n[cyan]dry-run complete[/cyan] — no changes applied.")
+        return
+    console.print("\n[green]✓[/green] Jupyter extension state configured.")
+    console.print("  Restart your JupyterLab process to pick up the changes.")
 
 
 @app.command("install-slash-commands")
