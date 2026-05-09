@@ -143,7 +143,7 @@ _INSTALL_HEADS_UP = """\
   - [cyan]templates/[/cyan]              artifact templates (you can edit these)
   - [cyan].claude/settings.json[/cyan]   JSON-merge: our hooks added, your hooks + permissions preserved
   - [cyan].claude/skills/[/cyan]         4 research-methodology skills
-  - [cyan].claude/commands/[/cyan]       20 slash commands (H/E/F/T artifacts, runs, queue, status, validate, jupyter-iterate)
+  - [cyan].claude/commands/[/cyan]       21 slash commands (H/E/F/T artifacts, runs, queue, status, validate, jupyter-iterate, promote-nb)
   - [cyan].mcp.json[/cyan]               JSON-merge: our `aexp` MCP server added, your other servers preserved
   - [cyan]AGENTS.md[/cyan], [cyan]CLAUDE.md[/cyan]       block-merge: your content outside our `<!-- agentic-experiments:begin/end -->` markers is preserved
   - [cyan].runs/[/cyan]                  signac project (idempotent; initialised if missing)
