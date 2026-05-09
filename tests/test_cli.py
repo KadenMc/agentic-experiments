@@ -742,3 +742,79 @@ def test_cli_run_queued_dry_run_prints_rendered_command(
     r = runner.invoke(app, ["run-queued", job_id, "--dry-run"])
     assert r.exit_code == 0, r.output
     assert "cmd-to-print condition=full seed=7" in r.output
+
+
+# ---------------------------------------------------------------------------
+# jupyter-setup
+# ---------------------------------------------------------------------------
+
+
+def test_jupyter_setup_dry_run_lists_commands_without_executing(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`aexp jupyter-setup --dry-run` prints the four commands without running them."""
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, *args, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append(list(cmd))
+
+        class _R:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        return _R()
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    r = runner.invoke(app, ["jupyter-setup", "--dry-run"])
+    assert r.exit_code == 0, r.output
+    # Nothing actually executed.
+    assert calls == []
+    # All four operations are mentioned in the dry-run output.
+    assert "disable jupyter_server_documents" in r.output
+    assert "enable jupyter_server_ydoc" in r.output
+    assert "enable jupyter_server_nbmodel" in r.output
+    assert "disable @jupyter-ai-contrib/server-documents" in r.output
+
+
+def test_jupyter_setup_executes_expected_commands(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without --dry-run, runs the four expected jupyter commands via subprocess.run."""
+    calls: list[list[str]] = []
+
+    class _OK:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(cmd, *args, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append(list(cmd))
+        return _OK()
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    r = runner.invoke(app, ["jupyter-setup"])
+    assert r.exit_code == 0, r.output
+    assert len(calls) == 4
+    joined = [" ".join(c) for c in calls]
+    assert any("disable jupyter_server_documents" in c for c in joined)
+    assert any("enable jupyter_server_ydoc" in c for c in joined)
+    assert any("enable jupyter_server_nbmodel" in c for c in joined)
+    assert any("disable @jupyter-ai-contrib/server-documents" in c for c in joined)
+
+
+def test_jupyter_setup_propagates_failure(
+    runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If a subprocess call fails, jupyter-setup exits nonzero and reports stderr."""
+
+    class _Fail:
+        returncode = 1
+        stdout = ""
+        stderr = "extension not installed"
+
+    monkeypatch.setattr("subprocess.run", lambda *a, **k: _Fail())
+    r = runner.invoke(app, ["jupyter-setup"])
+    assert r.exit_code != 0, r.output
+    assert "FAILED" in r.output
+    assert "extension not installed" in r.output

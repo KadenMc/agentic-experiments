@@ -28,6 +28,7 @@ class InstalledMarker(TypedDict, total=False):
     limina_vendor_sha: str
     python_exe: str           # absolute path to the Python that ran install_limina
     conda_env_name: str       # CONDA_DEFAULT_ENV at install time, or "" for venv/system Python
+    jupyter_enabled: bool     # True if any prior install used --with-jupyter; sticky once set
 
 
 class RepoRootNotFound(RuntimeError):
@@ -95,6 +96,7 @@ def write_installed_marker(
     installed_at: str | None = None,
     python_exe: str | None = None,
     conda_env_name: str | None = None,
+    jupyter_enabled: bool | None = None,
 ) -> Path:
     """Write a new install marker atomically.
 
@@ -120,6 +122,12 @@ def write_installed_marker(
         Name of the conda env active at install time, or ``""`` if
         Python is a venv / system install. Defaults to reading
         ``CONDA_DEFAULT_ENV`` from the process environment.
+    jupyter_enabled : bool or None
+        Sticky-true marker recording whether this consumer has ever opted
+        into the Jupyter MCP integration via ``aexp install --with-jupyter``.
+        Pass ``True`` to set; ``False``/``None`` preserves whatever the
+        previous marker had. The field is never auto-cleared — backing out
+        of the integration is a manual edit by the user.
 
     Returns
     -------
@@ -143,6 +151,16 @@ def write_installed_marker(
         "python_exe": python_exe,
         "conda_env_name": conda_env_name,
     }
+
+    # jupyter_enabled is sticky-true: once set, it persists across re-installs
+    # even if the caller doesn't pass --with-jupyter. We carry forward the
+    # previous marker's value, then OR in whatever this call requested.
+    prev = read_installed_marker(repo_root) or {}
+    prev_enabled = bool(prev.get("jupyter_enabled", False))
+    new_enabled = prev_enabled or bool(jupyter_enabled)
+    if new_enabled:
+        payload["jupyter_enabled"] = True
+
     target = Path(repo_root) / INSTALLED_MARKER_REL
     atomic_write(target, json.dumps(payload, indent=2) + "\n")
     return target

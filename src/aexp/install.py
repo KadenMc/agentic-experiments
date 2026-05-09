@@ -389,19 +389,32 @@ def _merge_or_write_claude_settings(
 
 
 def _merge_or_write_mcp_json(
-    dst: Path, repo_root: Path, *, dry_run: bool = False, dev: bool = False
+    dst: Path,
+    repo_root: Path,
+    *,
+    dry_run: bool = False,
+    dev: bool = False,
+    with_jupyter: bool = False,
 ) -> InstallAction:
-    """Write (or merge) our MCP server entry into ``<repo>/.mcp.json``.
+    """Write (or merge) our MCP server entries into ``<repo>/.mcp.json``.
 
     Claude Code reads project-scope MCP servers from ``.mcp.json`` at the
     repo root — *not* from ``.claude/settings.json``. Default form is
     portable across machines (``uvx`` / PyPI). Pass ``dev=True`` to use the
     current interpreter instead — lets editable installs take effect on
     the MCP side (at the cost of a machine-specific ``.mcp.json``).
+
+    When ``with_jupyter=True``, also writes the ``jupyter`` and
+    ``jupyter-compute`` entries used by the Jupyter MCP integration. The
+    entries are *additive*: once written, subsequent installs without the
+    flag leave them in place (matching the "never delete user-defined
+    servers" pattern). To back out, the user edits ``.mcp.json`` by hand.
     """
     rel = _display_relpath(dst)
-    our_entry = {"aexp": _build_mcp_server_entry(repo_root, dev=dev)}
-    payload = {"mcpServers": our_entry}
+    our_entries: dict[str, Any] = {"aexp": _build_mcp_server_entry(repo_root, dev=dev)}
+    if with_jupyter:
+        our_entries.update(_jupyter_mcp_entries())
+    payload = {"mcpServers": our_entries}
 
     if not dst.exists():
         if not dry_run:
@@ -425,8 +438,16 @@ def _merge_or_write_mcp_json(
 
     merged = copy.deepcopy(existing)
     merged.setdefault("mcpServers", {})
-    # Always refresh our own entry; preserve any user-defined servers.
-    merged["mcpServers"]["aexp"] = our_entry["aexp"]
+    # Always refresh our own ``aexp`` entry; preserve any user-defined servers.
+    merged["mcpServers"]["aexp"] = our_entries["aexp"]
+    # Jupyter entries: only ever ADD. If the user already has a `jupyter` /
+    # `jupyter-compute` block (either from a prior --with-jupyter install or
+    # from a manual setup) leave it alone — they may have hardcoded the
+    # Windows-stable token there, which we must not clobber.
+    if with_jupyter:
+        for key in ("jupyter", "jupyter-compute"):
+            if key not in merged["mcpServers"]:
+                merged["mcpServers"][key] = our_entries[key]
 
     if merged == existing:
         return InstallAction("skipped_identical", rel)
@@ -486,6 +507,53 @@ def _build_mcp_server_entry(repo_root: Path, *, dev: bool = False) -> dict[str, 
             "aexp-mcp-server",
         ],
         "env": {"PYTHONUNBUFFERED": "1"},
+    }
+
+
+def _jupyter_mcp_entries() -> dict[str, Any]:
+    """MCP server entries for the Jupyter MCP integration.
+
+    Two side-by-side servers, both reaching the same JupyterLab through the
+    user's existing SSH tunnel:
+
+    - ``jupyter`` — laptop-side ``uvx jupyter-mcp-server`` running in
+      MCP_SERVER mode (stdio to Claude, HTTP+WS to remote Jupyter). The
+      token is provided per-session at runtime via the ``connect_to_jupyter``
+      tool, so no token lives in this entry.
+    - ``jupyter-compute`` — laptop-side ``npx mcp-remote`` proxy bridging
+      Claude's stdio to the cluster's ``/mcp`` SSE endpoint, where
+      ``jupyter-mcp-server`` runs as a Jupyter Server extension
+      (JUPYTER_SERVER mode). Token is interpolated from the
+      ``JUPYTER_TOKEN`` env var by default.
+
+    Default port is ``3618`` (matches the verified electricrag deployment).
+    Consumers using a different port edit ``.mcp.json`` post-install.
+
+    On Windows, ``${JUPYTER_TOKEN}`` interpolation is fragile because
+    ``setx`` does not propagate to already-running processes (notably
+    Explorer, which spawns Start-Menu apps including Claude Desktop). The
+    documented fix is to hardcode the literal token in ``.mcp.json`` and
+    set the matching value in ``~/.jupyter/jupyter_server_config.py`` on
+    the cluster — see ``docs/setup/jupyter-mcp.md`` "Investigation log §4".
+    The install never auto-rewrites the literal token: token management
+    stays the consumer's responsibility.
+    """
+    return {
+        "jupyter": {
+            "command": "uvx",
+            "args": ["jupyter-mcp-server"],
+        },
+        "jupyter-compute": {
+            "command": "npx",
+            "args": [
+                "-y",
+                "mcp-remote",
+                "http://127.0.0.1:3618/mcp",
+                "--allow-http",
+                "--header",
+                "Authorization:token ${JUPYTER_TOKEN}",
+            ],
+        },
     }
 
 
@@ -655,6 +723,7 @@ def install_limina(
     dry_run: bool = False,
     dev: bool = False,
     allow_self_install: bool = False,
+    with_jupyter: bool = False,
 ) -> list[InstallAction]:
     """Install the vendored Limina harness into ``repo_root``.
 
@@ -694,6 +763,16 @@ def install_limina(
         instead of the user's intended target. Pass ``True`` to
         override (e.g. dogfooding the consumer scaffold against the
         dev repo on purpose).
+    with_jupyter : bool, optional
+        If ``True``, also write the ``jupyter`` and ``jupyter-compute``
+        MCP server entries into ``.mcp.json``, vendor
+        ``docs/setup/jupyter-mcp.md`` into the consumer repo, and set
+        ``jupyter_enabled: true`` in the install marker. The marker bit
+        is sticky — once set, subsequent installs preserve it even if
+        ``with_jupyter=False``. The ``.mcp.json`` entries are additive:
+        existing user-defined ``jupyter`` / ``jupyter-compute`` blocks
+        are preserved (so a hardcoded Windows-stable token survives).
+        See ``docs/setup/jupyter-mcp.md`` for the full setup recipe.
 
     Returns
     -------
@@ -793,6 +872,28 @@ def install_limina(
             continue
         actions.append(_merge_or_copy_markdown(src, root / name, dry_run=dry_run))
 
+    # 2a. Vendor the Jupyter MCP setup doc to docs/setup/jupyter-mcp.md.
+    #     Unlike kb/ + templates/ (editable scaffold), this is a canonical
+    #     reference doc that ships fixes via `pip install -U`. We use the
+    #     standard tooling-file rules (overwrite under --force, skip
+    #     conflict otherwise) — NOT preserve_user_modifications. Project-
+    #     specific overlay info belongs in a sibling file like
+    #     docs/setup/jupyter-mcp-local.md.
+    #
+    #     Copied unconditionally (not gated on --with-jupyter): the doc is
+    #     small, harmless, and lets a consumer read about the integration
+    #     before deciding to opt in.
+    jupyter_doc_src = VENDOR_LIMINA / "docs" / "setup" / "jupyter-mcp.md"
+    if jupyter_doc_src.is_file():
+        actions.append(
+            _copy_file(
+                jupyter_doc_src,
+                root / "docs" / "setup" / "jupyter-mcp.md",
+                force=force,
+                dry_run=dry_run,
+            )
+        )
+
     # 3a. Write (or JSON-merge) our hook block into .claude/settings.json.
     #     Hooks run the installed aexp package via the current interpreter
     #     (`{python_exe} -m aexp.hooks.<name>`), so we need the interpreter
@@ -810,7 +911,13 @@ def install_limina(
     #     servers (shared with the team via version control, unless
     #     ``dev=True`` — see docstring).
     actions.append(
-        _merge_or_write_mcp_json(root / ".mcp.json", root, dry_run=dry_run, dev=dev)
+        _merge_or_write_mcp_json(
+            root / ".mcp.json",
+            root,
+            dry_run=dry_run,
+            dev=dev,
+            with_jupyter=with_jupyter,
+        )
     )
 
     # 3b. Install Limina's Claude Code skills into <repo>/.claude/skills/.
@@ -842,6 +949,7 @@ def install_limina(
         version=__version__,
         run_store_path=run_store,
         limina_vendor_sha=vendor_sha,
+        jupyter_enabled=with_jupyter,
     )
     actions.append(InstallAction("wrote_marker", _display_relpath(marker_path)))
 

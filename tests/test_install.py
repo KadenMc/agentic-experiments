@@ -754,3 +754,137 @@ def test_install_dry_run_also_refuses_source_tree(fresh_git_repo: Path) -> None:
     # Confirm dry_run path didn't leak anything before the raise.
     assert not (fresh_git_repo / "kb").exists()
     assert not (fresh_git_repo / ".aexp").exists()
+
+
+# ---------------------------------------------------------------------------
+# --with-jupyter install branch
+# ---------------------------------------------------------------------------
+
+
+def test_install_with_jupyter_writes_mcp_entries(fresh_git_repo: Path) -> None:
+    """--with-jupyter writes both jupyter and jupyter-compute entries to .mcp.json
+    alongside the existing aexp entry."""
+    install_limina(fresh_git_repo, with_jupyter=True, dev=True)
+    mcp_json = json.loads((fresh_git_repo / ".mcp.json").read_text(encoding="utf-8"))
+    servers = mcp_json["mcpServers"]
+    assert "aexp" in servers
+    assert "jupyter" in servers
+    assert "jupyter-compute" in servers
+    assert servers["jupyter"]["command"] == "uvx"
+    assert "jupyter-mcp-server" in servers["jupyter"]["args"]
+    assert servers["jupyter-compute"]["command"] == "npx"
+    assert "mcp-remote" in servers["jupyter-compute"]["args"]
+
+
+def test_install_without_jupyter_omits_mcp_entries(fresh_git_repo: Path) -> None:
+    """Default install (no --with-jupyter) does NOT write jupyter entries."""
+    install_limina(fresh_git_repo, dev=True)
+    mcp_json = json.loads((fresh_git_repo / ".mcp.json").read_text(encoding="utf-8"))
+    servers = mcp_json["mcpServers"]
+    assert "aexp" in servers
+    assert "jupyter" not in servers
+    assert "jupyter-compute" not in servers
+
+
+def test_install_with_jupyter_records_marker(fresh_git_repo: Path) -> None:
+    """Marker records jupyter_enabled=True after --with-jupyter install."""
+    install_limina(fresh_git_repo, with_jupyter=True, dev=True)
+    marker = read_installed_marker(fresh_git_repo)
+    assert marker is not None
+    assert marker.get("jupyter_enabled") is True
+
+
+def test_install_without_jupyter_marker_omits_field(fresh_git_repo: Path) -> None:
+    """Default install does not add jupyter_enabled to the marker (sticky-true semantics)."""
+    install_limina(fresh_git_repo, dev=True)
+    marker = read_installed_marker(fresh_git_repo)
+    assert marker is not None
+    assert "jupyter_enabled" not in marker
+
+
+def test_install_jupyter_marker_is_sticky_true(fresh_git_repo: Path) -> None:
+    """Once --with-jupyter is set, a later install without the flag preserves jupyter_enabled=True."""
+    install_limina(fresh_git_repo, with_jupyter=True, dev=True)
+    # Re-install with force to bypass the already-installed short-circuit.
+    install_limina(fresh_git_repo, dev=True, force=True)
+    marker = read_installed_marker(fresh_git_repo)
+    assert marker is not None
+    assert marker.get("jupyter_enabled") is True
+
+
+def test_install_with_jupyter_vendors_setup_doc(fresh_git_repo: Path) -> None:
+    """docs/setup/jupyter-mcp.md is copied verbatim from vendor when --with-jupyter."""
+    install_limina(fresh_git_repo, with_jupyter=True, dev=True)
+    setup_doc = fresh_git_repo / "docs" / "setup" / "jupyter-mcp.md"
+    assert setup_doc.is_file()
+    body = setup_doc.read_text(encoding="utf-8")
+    # A few load-bearing strings from the vendored doc.
+    assert "Adapting this guide to your cluster" in body
+    assert "Investigation log" in body
+
+
+def test_install_with_jupyter_idempotent(fresh_git_repo: Path) -> None:
+    """Running install twice with the same flags doesn't change .mcp.json."""
+    install_limina(fresh_git_repo, with_jupyter=True, dev=True)
+    first = (fresh_git_repo / ".mcp.json").read_text(encoding="utf-8")
+    install_limina(fresh_git_repo, with_jupyter=True, dev=True, force=True)
+    second = (fresh_git_repo / ".mcp.json").read_text(encoding="utf-8")
+    assert json.loads(first) == json.loads(second)
+
+
+def test_install_with_jupyter_preserves_user_entries(fresh_git_repo: Path) -> None:
+    """User-defined .mcp.json entries survive a --with-jupyter install."""
+    custom = {
+        "mcpServers": {
+            "my_custom": {"command": "echo", "args": ["hello"]},
+        }
+    }
+    (fresh_git_repo / ".mcp.json").write_text(json.dumps(custom), encoding="utf-8")
+    install_limina(fresh_git_repo, with_jupyter=True, dev=True)
+    mcp_json = json.loads((fresh_git_repo / ".mcp.json").read_text(encoding="utf-8"))
+    servers = mcp_json["mcpServers"]
+    assert "my_custom" in servers
+    assert servers["my_custom"]["command"] == "echo"
+    assert "aexp" in servers
+    assert "jupyter" in servers
+    assert "jupyter-compute" in servers
+
+
+def test_install_with_jupyter_preserves_existing_jupyter_entry(fresh_git_repo: Path) -> None:
+    """If the user has hardcoded a Windows-stable token in jupyter-compute,
+    re-running --with-jupyter must not clobber it.
+    """
+    custom = {
+        "mcpServers": {
+            "jupyter-compute": {
+                "command": "npx",
+                "args": [
+                    "-y",
+                    "mcp-remote",
+                    "http://127.0.0.1:3618/mcp",
+                    "--allow-http",
+                    "--header",
+                    "Authorization:token MY_HARDCODED_LITERAL_TOKEN",
+                ],
+            }
+        }
+    }
+    (fresh_git_repo / ".mcp.json").write_text(json.dumps(custom), encoding="utf-8")
+    install_limina(fresh_git_repo, with_jupyter=True, dev=True)
+    servers = json.loads(
+        (fresh_git_repo / ".mcp.json").read_text(encoding="utf-8")
+    )["mcpServers"]
+    # The user's hardcoded token survives — install only ADDS, never overwrites
+    # an existing jupyter-compute entry.
+    args = servers["jupyter-compute"]["args"]
+    assert any("MY_HARDCODED_LITERAL_TOKEN" in a for a in args)
+    # And the missing jupyter entry was added.
+    assert "jupyter" in servers
+
+
+def test_install_with_jupyter_slash_command_always_present(fresh_git_repo: Path) -> None:
+    """The /aexp-jupyter-iterate slash command is installed regardless of --with-jupyter
+    (it self-checks tool availability at runtime)."""
+    install_limina(fresh_git_repo, dev=True)  # NOTE: no --with-jupyter
+    slash_cmd = fresh_git_repo / ".claude" / "commands" / "aexp-jupyter-iterate.md"
+    assert slash_cmd.is_file()

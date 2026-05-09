@@ -30,7 +30,7 @@
 
 **agentic-experiments** (import name `aexp`) is an opinionated research harness for ML experimentation done *with* an AI agent — typically [Claude Code](https://docs.anthropic.com/en/docs/claude-code). It forces a **Hypothesis → Experiment → Finding** chain on every run, ties that chain to git commits, and validates citation integrity at every turn.
 
-> **18 CLI verbs** &bull; **21 MCP tools** &bull; **18 slash commands** &bull; **4 research skills** &bull; **300+ tests**
+> **21 CLI verbs** &bull; **22 MCP tools** &bull; **20 slash commands** &bull; **4 research skills** &bull; **300+ tests**
 
 ### What this looks like in practice
 
@@ -123,9 +123,10 @@ The design bet: agents already know how to run experiments. What they need is a 
 | | |
 |---|---|
 | **MCP server** | FastMCP with 22 tools covering artifact creation (H/E/F/T), run lifecycle, batch queries, queue management (incl. `queue_stop` for live-job interruption), tracker binding, and validation. Runs via `uvx --from agentic-experiments[mcp] aexp-mcp-server` — no absolute paths, no per-machine config, `.mcp.json` committable to git. |
-| **Slash commands** | Artifact creation: `/aexp-new-hypothesis`, `/aexp-new-experiment`, `/aexp-new-run`. Threads (forward-looking research concerns broader than a hypothesis): `/aexp-new-thread`, `/aexp-list-threads`, `/aexp-show-thread`, `/aexp-close-thread`. Finding creation (pick by what the finding cites): `/aexp-finding-from-run`, `/aexp-finding-from-batch`, `/aexp-finding-placeholder`. Read / inspect: `/aexp-show-run`, `/aexp-show-batch`, `/aexp-list-runs`, `/aexp-status`, `/aexp-validate`. Queue: `/aexp-queue-add`, `/aexp-queue-list`, `/aexp-queue-materialize`, `/aexp-queue-stop`. 19 total. |
-| **CLI** | 18 verbs covering install, artifact creation (H/E/F/T + thread lifecycle), run lifecycle, batch queries, tracker binding, validation, offline sync, and the `queue` subcommand group (add/list/remove/stop/clear/materialize/run) + `run-queued`. See `aexp --help` for the full list. Python API is a one-line `from aexp import ...`. |
+| **Slash commands** | Artifact creation: `/aexp-new-hypothesis`, `/aexp-new-experiment`, `/aexp-new-run`. Threads (forward-looking research concerns broader than a hypothesis): `/aexp-new-thread`, `/aexp-list-threads`, `/aexp-show-thread`, `/aexp-close-thread`. Finding creation (pick by what the finding cites): `/aexp-finding-from-run`, `/aexp-finding-from-batch`, `/aexp-finding-placeholder`. Read / inspect: `/aexp-show-run`, `/aexp-show-batch`, `/aexp-list-runs`, `/aexp-status`, `/aexp-validate`. Queue: `/aexp-queue-add`, `/aexp-queue-list`, `/aexp-queue-materialize`, `/aexp-queue-stop`. Jupyter (when `--with-jupyter` is configured): `/aexp-jupyter-iterate`. 20 total. |
+| **CLI** | 21 verbs covering install, artifact creation (H/E/F/T + thread lifecycle), run lifecycle, batch queries, tracker binding, validation, offline sync, optional `jupyter-setup`, and the `queue` subcommand group (add/list/remove/stop/clear/materialize/run) + `run-queued`. See `aexp --help` for the full list. Python API is a one-line `from aexp import ...`. |
 | **Typed JSON contracts** | Pydantic models (`RunLink`, `BatchSelector`, `Issue`, …) back the schema; MCP tools and CLI return the same shapes. |
+| **Jupyter MCP integration** (optional, `[jupyter]` extra) | `aexp install --with-jupyter` adds `jupyter` and `jupyter-compute` MCP servers to `.mcp.json` so Claude can read/edit/execute cells in a remote JupyterLab through an existing SSH tunnel — no agent SSH required. `aexp jupyter-setup` applies the verified Jupyter Server extension state on the cluster (disable Datalayer experiments that conflict with the mainstream stack). After install, see `docs/setup/jupyter-mcp.md` for cluster-side recipe + investigation log. The `/aexp-jupyter-iterate` slash command guides the read → propose → execute loop. |
 
 ---
 
@@ -140,8 +141,8 @@ graph TB
     end
 
     subgraph "aexp (Python package)"
-        MCP[MCP Server<br/>FastMCP, 21 tools]
-        CLI[CLI — typer<br/>18 verbs]
+        MCP[MCP Server<br/>FastMCP, 22 tools]
+        CLI[CLI — typer<br/>21 verbs]
         API[Python API<br/>aexp.*]
     end
 

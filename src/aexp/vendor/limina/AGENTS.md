@@ -153,4 +153,31 @@ The active session is the default transport for updates.
 - Ask direct questions when blocked.
 - Persist anything that must survive context loss.
 
+## Working with Jupyter MCP (when configured)
+
+If `mcp__jupyter-compute__*` tools are available, the user has set up
+the Claude ↔ JupyterLab integration via `aexp install --with-jupyter`
+plus a running JupyterLab on a remote node (SSH-tunneled). Prefer these
+tools over git-based round-trips for notebook work:
+
+- **"What am I looking at?"** → `notebook_get-selected-cell` returns the
+  user's live UI selection (cell index + type + source). Use this when
+  the user says "this cell" or "what I have open."
+- **Reading context** → `read_cell` / `read_notebook` (brief or detailed
+  mode) before proposing edits.
+- **Editing** → `edit_cell_source` for surgical find-and-replace within
+  one cell; `overwrite_cell_source` for full replacement; `insert_cell`
+  for additions.
+- **Executing** → `execute_cell` to run a cell and persist outputs to
+  the notebook; `execute_code` to run kernel-direct Python without
+  saving (good for sanity checks).
+- **DO NOT** use `notebook_run-all-cells` — exposed but currently
+  returns 404 (asymmetric upstream bug). Loop `execute_cell` over
+  indices for multi-cell runs.
+- For full setup details, troubleshooting, and the investigation log,
+  see `docs/setup/jupyter-mcp.md`.
+
+The `/aexp-jupyter-iterate` slash command provides a guided
+iteration flow using these tools.
+
 Implementation work can happen, but it is not a parallel core artifact graph in Limina. Research drives the contract; delivery details belong to the local project, not the shared template.
