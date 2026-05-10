@@ -174,6 +174,11 @@ tools over git-based round-trips for notebook work:
 - **DO NOT** use `notebook_run-all-cells` — exposed but currently
   returns 404 (asymmetric upstream bug). Loop `execute_cell` over
   indices for multi-cell runs.
+- **`read_cell` / `read_notebook` outputs lag live state.** After an
+  `execute_cell`, the cached output (and execution count) returned by
+  `read_cell` may still reflect the *prior* run. Trust `execute_cell`'s
+  return value to verify the most-recent execution; don't round-trip
+  through `read_cell` to check.
 - For full setup details, troubleshooting, and the investigation log,
   see `docs/setup/jupyter-mcp.md`.
 
