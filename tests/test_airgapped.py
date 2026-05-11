@@ -27,22 +27,18 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 from aexp.airgapped import (
     ALLOWED,
     DEFAULT_QUEUE,
-    OpSpec,
     RelayClient,
-    RelayError,
     RelayResult,
     RelayValidationError,
-    request,
     validate_request,
 )
-
 
 # ---------------------------------------------------------------------------
 # CLI entry point — `python -m aexp.airgapped` must work
@@ -207,6 +203,7 @@ def test_cwd_allowlist_empty_by_default(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.delenv("AEXP_RELAY_CWD_NAMES", raising=False)
     # Need to reload module to re-read the env var
     import importlib
+
     import aexp.airgapped._relay as relay_mod
     importlib.reload(relay_mod)
     assert relay_mod._ALLOWED_CWD_NAMES == ()
@@ -215,6 +212,7 @@ def test_cwd_allowlist_empty_by_default(monkeypatch: pytest.MonkeyPatch) -> None
 def test_cwd_allowlist_respects_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AEXP_RELAY_CWD_NAMES", "myrepo,other-repo")
     import importlib
+
     import aexp.airgapped._relay as relay_mod
     importlib.reload(relay_mod)
     assert relay_mod._ALLOWED_CWD_NAMES == ("myrepo", "other-repo")

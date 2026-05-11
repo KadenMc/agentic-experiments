@@ -28,10 +28,11 @@ README but enforced socially, not by aexp tooling.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
-from datetime import UTC, date as date_cls, datetime
-from pathlib import Path
 import sys
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from datetime import date as date_cls
+from pathlib import Path
 
 from aexp.utils.atomic import atomic_write
 from aexp.utils.paths import find_repo_root

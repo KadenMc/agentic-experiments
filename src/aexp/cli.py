@@ -24,10 +24,6 @@ from aexp.artifacts import (
     new_hypothesis,
     new_thread,
 )
-from aexp.sandbox import (
-    SandboxScaffoldError,
-    scaffold as scaffold_sandbox,
-)
 from aexp.install import InstallRefused, install_limina
 from aexp.limina_io import (
     ArtifactNotFoundError,
@@ -58,6 +54,12 @@ from aexp.queue import (
     stop_queued,
 )
 from aexp.runs import create_run, find_runs, open_run
+from aexp.sandbox import (
+    SandboxScaffoldError,
+)
+from aexp.sandbox import (
+    scaffold as scaffold_sandbox,
+)
 from aexp.trackers import NoopAdapter, TrackerInitError, bind_tracker
 from aexp.validate import ValidateResult, validate_repo
 

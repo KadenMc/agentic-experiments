@@ -35,7 +35,8 @@ Auto-approved (no consent prompt):
 - ``git_push``    -> ``git push [<refspec>]``
 - ``git_fetch``   -> ``git fetch --all --prune``
 - ``git_status``  -> ``git status --porcelain=v2``
-- ``git_rebase``  -> ``git pull --rebase``  (recovers from no-conflict divergence; bails on conflict)
+- ``git_rebase``  -> ``git pull --rebase``
+  (recovers from no-conflict divergence; bails on conflict)
 
 Consent-required (requires explicit ``relay-approve <uuid>`` from the user):
 
@@ -63,17 +64,15 @@ import json
 import logging
 import os
 import re
-import shutil
 import subprocess
 import sys
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Optional
 
-from aexp.utils.atomic import atomic_write, doc_op_with_retry
+from aexp.utils.atomic import atomic_write
 
 log = logging.getLogger(__name__)
 
@@ -127,7 +126,7 @@ class OpSpec:
 
     argv: list[str]
     consent: bool
-    args_regex: Optional[str] = None
+    args_regex: str | None = None
 
 
 ALLOWED: dict[str, OpSpec] = {
@@ -246,10 +245,10 @@ def _resolve_cwd(cwd_str: str) -> Path:
     home = Path.home().resolve()
     try:
         rel = cwd.relative_to(home)
-    except ValueError:
+    except ValueError as err:
         raise RelayValidationError(
             f"cwd not under home: {cwd} (home={home})"
-        )
+        ) from err
     # If a name allowlist is set, the cwd's first segment must match.
     # Empty allowlist = no name restriction beyond the under-$HOME check.
     if _ALLOWED_CWD_NAMES and (not rel.parts or rel.parts[0] not in _ALLOWED_CWD_NAMES):
@@ -564,7 +563,7 @@ class Daemon:
     def _log_consent_request(self, request_id: str, op: str, args: list[str], cwd: Path) -> None:
         """Append one line to ``consent.log`` so a side tmux pane can ``tail -f``."""
         line = "{ts} [{rid}] op={op} args={args} cwd={cwd}\n".format(
-            ts=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            ts=datetime.now(UTC).isoformat(timespec="seconds"),
             rid=request_id, op=op, args=args, cwd=cwd,
         )
         with (self.queue / "consent.log").open("a", encoding="utf-8") as f:
@@ -657,14 +656,14 @@ class Daemon:
     def _touch_heartbeat(self) -> None:
         _write_json(self.queue / "heartbeat", {
             "ts_monotonic": time.monotonic(),
-            "wall": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "wall": datetime.now(UTC).isoformat(timespec="seconds"),
             "pid": os.getpid(),
         })
 
     def _write_pid(self) -> None:
         _write_json(self.queue / "pid", {
             "pid": os.getpid(),
-            "started_wall": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "started_wall": datetime.now(UTC).isoformat(timespec="seconds"),
         })
 
     def _gc_old_files(self) -> None:
@@ -733,12 +732,12 @@ def _check_heartbeat(queue: Path) -> None:
     hb_path = queue / "heartbeat"
     try:
         mtime = hb_path.stat().st_mtime
-    except FileNotFoundError:
+    except FileNotFoundError as err:
         raise RelayDownError(
             f"heartbeat file not found at {hb_path}. "
             "Daemon not running? Bootstrap on the login node:\n"
             "  tmux new -d -s relay 'python -m aexp airgapped daemon'"
-        )
+        ) from err
     age = time.time() - mtime
     if age > HEARTBEAT_MAX_AGE_S:
         raise RelayDownError(
@@ -751,11 +750,11 @@ def _check_heartbeat(queue: Path) -> None:
 
 def request(
     op: str,
-    args: Optional[list[str]] = None,
+    args: list[str] | None = None,
     *,
-    queue: Optional[Path] = None,
-    cwd: Optional[str] = None,
-    timeout: Optional[float] = None,
+    queue: Path | None = None,
+    cwd: str | None = None,
+    timeout: float | None = None,
     poll_interval: float = CLIENT_POLL_INTERVAL_S,
 ) -> RelayResult:
     """Submit a request to the daemon and block until completion.
@@ -806,7 +805,7 @@ def request(
         "op": op,
         "args": list(args or []),
         "cwd": cwd or str(Path.cwd()),
-        "submitted_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "submitted_at": datetime.now(UTC).isoformat(timespec="seconds"),
     }
     paths = _request_paths(queue, request_id)
     _write_json(paths["inbox"], payload)
@@ -896,8 +895,14 @@ def _cli_install_helpers(args: argparse.Namespace) -> int:
     bin_dir = queue / "_bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
     helpers = {
-        "relay-approve": '#!/usr/bin/env bash\nset -eu\ntouch "$HOME/.relay/approved/$1"\necho "approved: $1"\n',
-        "relay-reject":  '#!/usr/bin/env bash\nset -eu\ntouch "$HOME/.relay/rejected/$1"\necho "rejected: $1"\n',
+        "relay-approve": (
+            '#!/usr/bin/env bash\nset -eu\n'
+            'touch "$HOME/.relay/approved/$1"\necho "approved: $1"\n'
+        ),
+        "relay-reject": (
+            '#!/usr/bin/env bash\nset -eu\n'
+            'touch "$HOME/.relay/rejected/$1"\necho "rejected: $1"\n'
+        ),
         "relay-list-pending": (
             '#!/usr/bin/env bash\nset -eu\nls -t "$HOME/.relay/pending/" 2>/dev/null '
             "| sed 's/\\.json$//'\n"
@@ -924,14 +929,23 @@ def _cli_status(args: argparse.Namespace) -> int:
     state = "fresh" if age <= HEARTBEAT_MAX_AGE_S else "STALE"
     payload = _read_json(hb)
     print(f"heartbeat: {state} ({age:.1f}s old, pid={payload.get('pid')})")
-    pending_count = len(list((queue / "pending").glob("*.json"))) if (queue / "pending").exists() else 0
-    inbox_count = len(list((queue / "inbox").glob("*.json"))) if (queue / "inbox").exists() else 0
-    processing_count = len(list((queue / "processing").glob("*.json"))) if (queue / "processing").exists() else 0
+    pending_count = (
+        len(list((queue / "pending").glob("*.json")))
+        if (queue / "pending").exists() else 0
+    )
+    inbox_count = (
+        len(list((queue / "inbox").glob("*.json")))
+        if (queue / "inbox").exists() else 0
+    )
+    processing_count = (
+        len(list((queue / "processing").glob("*.json")))
+        if (queue / "processing").exists() else 0
+    )
     print(f"inbox: {inbox_count}  processing: {processing_count}  pending: {pending_count}")
     return 0 if state == "fresh" else 1
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="electricrag.dev.relay")
     # Shared --queue arg: defined on a parent parser so each subcommand
     # accepts it AFTER the subcommand name (the natural CLI shape).

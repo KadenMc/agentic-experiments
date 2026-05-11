@@ -29,7 +29,6 @@ Or import :func:`aexp.airgapped.request` directly for fully-manual control.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 from aexp.airgapped._relay import (
     DEFAULT_CLIENT_TIMEOUT_S,
@@ -66,8 +65,8 @@ class RelayClient:
     def __init__(
         self,
         *,
-        queue: Optional[Path | str] = None,
-        cwd: Optional[Path | str] = None,
+        queue: Path | str | None = None,
+        cwd: Path | str | None = None,
         default_timeout: float = DEFAULT_CLIENT_TIMEOUT_S,
     ) -> None:
         self.queue: Path = Path(queue).expanduser() if queue else DEFAULT_QUEUE
@@ -78,7 +77,7 @@ class RelayClient:
     # Git ops (designed out F7/F8)
     # ------------------------------------------------------------------
 
-    def pull(self, *, timeout: Optional[float] = None) -> RelayResult:
+    def pull(self, *, timeout: float | None = None) -> RelayResult:
         """Run ``git pull --ff-only`` on the daemon side.
 
         Returns the :class:`RelayResult`. Non-zero ``returncode`` is not
@@ -92,7 +91,7 @@ class RelayClient:
         *,
         branch: str = "HEAD",
         remote: str = "origin",
-        timeout: Optional[float] = None,
+        timeout: float | None = None,
     ) -> RelayResult:
         """Run ``git push <remote> <branch>`` on the daemon side.
 
@@ -102,15 +101,15 @@ class RelayClient:
         """
         return self._call("git_push", args=[remote, branch], timeout=timeout)
 
-    def fetch(self, *, timeout: Optional[float] = None) -> RelayResult:
+    def fetch(self, *, timeout: float | None = None) -> RelayResult:
         """Run ``git fetch --all --prune`` on the daemon side."""
         return self._call("git_fetch", timeout=timeout)
 
-    def status(self, *, timeout: Optional[float] = None) -> RelayResult:
+    def status(self, *, timeout: float | None = None) -> RelayResult:
         """Run ``git status --porcelain=v2`` on the daemon side."""
         return self._call("git_status", timeout=timeout)
 
-    def rebase(self, *, timeout: Optional[float] = None) -> RelayResult:
+    def rebase(self, *, timeout: float | None = None) -> RelayResult:
         """Run ``git pull --rebase`` on the daemon side.
 
         Useful when the local branch has diverged from the remote without
@@ -128,8 +127,8 @@ class RelayClient:
         self,
         op: str,
         *,
-        args: Optional[list[str]] = None,
-        timeout: Optional[float] = None,
+        args: list[str] | None = None,
+        timeout: float | None = None,
     ) -> RelayResult:
         """Send an arbitrary whitelisted op (escape hatch for non-git ops).
 
@@ -148,8 +147,8 @@ class RelayClient:
         self,
         op: str,
         *,
-        args: Optional[list[str]] = None,
-        timeout: Optional[float] = None,
+        args: list[str] | None = None,
+        timeout: float | None = None,
     ) -> RelayResult:
         effective_timeout = timeout if timeout is not None else self.default_timeout
         return request(

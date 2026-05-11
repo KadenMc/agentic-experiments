@@ -31,6 +31,11 @@ the 56-test suite in ``electricrag/tests/dev/test_relay.py``.
 from __future__ import annotations
 
 from aexp.airgapped._relay import (
+    # Whitelist + spec
+    ALLOWED,
+    # Low-level client + queue helpers
+    DEFAULT_QUEUE,
+    OpSpec,
     # Result + errors
     RelayCrashedError,
     RelayDownError,
@@ -39,11 +44,6 @@ from aexp.airgapped._relay import (
     RelayResult,
     RelayTimeoutError,
     RelayValidationError,
-    # Whitelist + spec
-    ALLOWED,
-    OpSpec,
-    # Low-level client + queue helpers
-    DEFAULT_QUEUE,
     ensure_queue,
     request,
     # Validation (exposed for the daemon side + tests)
