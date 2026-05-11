@@ -34,6 +34,17 @@ After 10 seconds:
 
 Open Claude Code in the repo. The `SessionStart` hook fires and injects your `kb/ACTIVE.md` + `kb/mission/CHALLENGE.md` so the agent knows the state of your research.
 
+> **Not ready to commit to a hypothesis yet?** If you're still in
+> directional-exploration mode — iterating on a hunch that hasn't earned
+> a tracked H yet — start with `/aexp-new-sandbox` (or
+> `aexp new-sandbox --slug ...`). Sandbox subdirs live under
+> `notebooks/_sandbox/<date>_<slug>/`, are explicitly outside the H→E→F
+> enforcement chain, and are reversible (`git checkout` undoes
+> everything). When the result matures into a directional prediction
+> worth citing, walk it into the tracked chain via `/aexp-new-thread →
+> /aexp-new-hypothesis → /aexp-promote-nb`. See
+> [docs/sandbox.md](sandbox.md).
+
 ## 2. Frame a hypothesis
 
 Artifact files live under `kb/research/hypotheses/<ID>-<slug>.md`. Templates sit in `templates/` — copy the hypothesis template, fill it in, and save with an allocated ID.
