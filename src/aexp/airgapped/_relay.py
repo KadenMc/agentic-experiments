@@ -876,7 +876,13 @@ def _cli_daemon(args: argparse.Namespace) -> int:
     )
     if args.log:
         # Add a file handler in addition to the stderr stream handler.
-        fh = logging.FileHandler(args.log)
+        # Ensure the log file's parent exists — the daemon's startup() creates
+        # the queue dir, but the log handler opens its file first. Without
+        # this, ``--log ~/.relay/daemon.log`` fails on a fresh machine where
+        # ~/.relay/ doesn't exist yet (caught by the laptop daemon smoke).
+        log_path = Path(args.log).expanduser()
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        fh = logging.FileHandler(log_path)
         fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
         logging.getLogger().addHandler(fh)
     daemon = Daemon(queue=Path(args.queue).expanduser())

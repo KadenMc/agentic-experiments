@@ -45,6 +45,38 @@ from aexp.airgapped import (
 
 
 # ---------------------------------------------------------------------------
+# CLI entry point — `python -m aexp.airgapped` must work
+# ---------------------------------------------------------------------------
+
+
+def test_python_m_aexp_airgapped_has_entry_point() -> None:
+    """``python -m aexp.airgapped`` must reach the CLI parser.
+
+    Regression guard: lifting the original single-file
+    ``electricrag.dev.relay`` into a package directory broke the
+    ``python -m`` invocation because packages need an explicit
+    ``__main__.py``. The laptop daemon smoke surfaced this on first
+    invocation. The fix is the ``aexp/airgapped/__main__.py`` file;
+    this test pins that it stays in place.
+
+    Asserts at the import-shape level (no subprocess) so the test
+    runs identically across platforms and doesn't depend on a
+    specific argparse error format.
+    """
+    import importlib
+
+    # Importing the __main__ module shouldn't raise. This is what
+    # `python -m aexp.airgapped` does internally before parsing argv.
+    mod = importlib.import_module("aexp.airgapped.__main__")
+    # The module must expose `main` (delegated from _relay.main) so
+    # the standard `python -m ...` -> `__main__.main()` shape works.
+    assert callable(getattr(mod, "main", None)), (
+        "aexp.airgapped.__main__ must expose a callable `main` "
+        "imported from aexp.airgapped._relay"
+    )
+
+
+# ---------------------------------------------------------------------------
 # ALLOWED whitelist sanity
 # ---------------------------------------------------------------------------
 
