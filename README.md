@@ -30,8 +30,6 @@
 
 **agentic-experiments** (import name `aexp`) is an opinionated research harness for ML experimentation done *with* an AI agent — typically [Claude Code](https://docs.anthropic.com/en/docs/claude-code). It forces a **Hypothesis → Experiment → Finding** chain on every run, ties that chain to git commits, and validates citation integrity at every turn.
 
-> **21 CLI verbs** &bull; **22 MCP tools** &bull; **21 slash commands** &bull; **4 research skills** &bull; **300+ tests**
-
 ### What this looks like in practice
 
 - Your agent optionally captures forward-looking research directions as **threads** (`T###`) — concerns broader than a single hypothesis, with their own lifecycle (`PROPOSED → EXPLORING → PROMOTED | CLOSED`) — and **promotes them into hypotheses** when concrete claims emerge (`aexp new-hypothesis --thread T###`)
@@ -123,10 +121,17 @@ The design bet: agents already know how to run experiments. What they need is a 
 | | |
 |---|---|
 | **MCP server** | FastMCP with 22 tools covering artifact creation (H/E/F/T), run lifecycle, batch queries, queue management (incl. `queue_stop` for live-job interruption), tracker binding, and validation. Runs via `uvx --from agentic-experiments[mcp] aexp-mcp-server` — no absolute paths, no per-machine config, `.mcp.json` committable to git. |
-| **Slash commands** | Artifact creation: `/aexp-new-hypothesis`, `/aexp-new-experiment`, `/aexp-new-run`. Threads (forward-looking research concerns broader than a hypothesis): `/aexp-new-thread`, `/aexp-list-threads`, `/aexp-show-thread`, `/aexp-close-thread`. Finding creation (pick by what the finding cites): `/aexp-finding-from-run`, `/aexp-finding-from-batch`, `/aexp-finding-placeholder`. Read / inspect: `/aexp-show-run`, `/aexp-show-batch`, `/aexp-list-runs`, `/aexp-status`, `/aexp-validate`. Queue: `/aexp-queue-add`, `/aexp-queue-list`, `/aexp-queue-materialize`, `/aexp-queue-stop`. Notebook lifecycle (when `--with-jupyter` is configured): `/aexp-jupyter-iterate` (test loop), `/aexp-promote-nb` (promote working cells into a tracked-run script). 21 total. |
-| **CLI** | 21 verbs covering install, artifact creation (H/E/F/T + thread lifecycle), run lifecycle, batch queries, tracker binding, validation, offline sync, optional `jupyter-setup`, and the `queue` subcommand group (add/list/remove/stop/clear/materialize/run) + `run-queued`. See `aexp --help` for the full list. Python API is a one-line `from aexp import ...`. |
+| **Slash commands** | Artifact creation: `/aexp-new-hypothesis`, `/aexp-new-experiment`, `/aexp-new-run`. Threads (forward-looking research concerns broader than a hypothesis): `/aexp-new-thread`, `/aexp-list-threads`, `/aexp-show-thread`, `/aexp-close-thread`. Finding creation (pick by what the finding cites): `/aexp-finding-from-run`, `/aexp-finding-from-batch`, `/aexp-finding-placeholder`. Read / inspect: `/aexp-show-run`, `/aexp-show-batch`, `/aexp-list-runs`, `/aexp-status`, `/aexp-validate`. Queue: `/aexp-queue-add`, `/aexp-queue-list`, `/aexp-queue-materialize`, `/aexp-queue-stop`. Notebook lifecycle (when `--with-jupyter` is configured): `/aexp-jupyter-iterate` (test loop), `/aexp-promote-nb` (promote working cells into a tracked-run script). Sandbox scaffolding: `/aexp-new-sandbox` (create an exploratory notebook subdir under `notebooks/_sandbox/`). 22 total. |
+| **CLI** | 22 verbs covering install, artifact creation (H/E/F/T + thread lifecycle), run lifecycle, batch queries, tracker binding, validation, offline sync, optional `jupyter-setup`, the `queue` subcommand group (add/list/remove/stop/clear/materialize/run) + `run-queued`, and sandbox scaffolding (`new-sandbox`). See `aexp --help` for the full list. Python API is a one-line `from aexp import ...`. |
 | **Typed JSON contracts** | Pydantic models (`RunLink`, `BatchSelector`, `Issue`, …) back the schema; MCP tools and CLI return the same shapes. |
 | **Jupyter MCP integration** (optional, `[jupyter]` extra) | `aexp install --with-jupyter` adds `jupyter` and `jupyter-compute` MCP servers to `.mcp.json` so Claude can read/edit/execute cells in a remote JupyterLab through an existing SSH tunnel — no agent SSH required. `aexp jupyter-setup` applies the verified Jupyter Server extension state on the cluster (disable Datalayer experiments that conflict with the mainstream stack). After install, see `docs/setup/jupyter-mcp.md` for cluster-side recipe + investigation log. The `/aexp-jupyter-iterate` slash command guides the read → propose → execute loop. |
+
+### Exploratory surfaces
+
+| | |
+|---|---|
+| **Sandbox scaffolding** | `/aexp-new-sandbox` (or `aexp new-sandbox --slug ...`) creates `notebooks/_sandbox/<YYYY-MM-DD>_<slug>/` with a directional-experiment README template, a `helpers.py` skeleton, and (on first use) a sandbox-root README + `.gitignore` for large outputs. Sandbox subdirs are deliberately **outside** the H→E→F enforcement chain — agent-autonomous-write territory for free-form exploration that hasn't yet earned a tracked artifact. The `aexp.sandbox.setup_sandbox_notebook` first-cell helper closes the kernel-cwd-vs-repo-root trap on remote Jupyter setups. See [docs/sandbox.md](docs/sandbox.md). |
+| **Airgapped relay** (opt-in import) | `from aexp.airgapped import RelayClient` exposes a file-queue bridge between a no-internet compute node and an internet-having login node sharing `$HOME`. Designed for secure HPC sites where SSH from the agent's runtime is forbidden. The daemon (under `tmux` on the login node) services a closed whitelist — `git_pull / push / fetch / status / rebase` auto-approved, `wandb_sync` consent-gated — via atomic-rename JSON requests. `RelayClient` exposes the git verbs as semantic methods (`.pull()`, `.push(branch=...)`, etc.) so consumers don't hand-construct args. See [docs/airgapped.md](docs/airgapped.md). |
 
 ---
 
@@ -240,6 +245,8 @@ So a session can end cleanly with a broken `supporting_runs` citation still pres
 | [docs/tracker-adapters.md](docs/tracker-adapters.md) | Writing a new tracker adapter; why Weave isn't in v1 |
 | [docs/queue.md](docs/queue.md) | Queue, runner-script materialization, sp resolution, drift-proof provenance, cross-machine sync |
 | [docs/threads.md](docs/threads.md) | Threads (`T###`) — forward-looking research concerns broader than a hypothesis: lifecycle, linkage to H/E/F, required template sections |
+| [docs/sandbox.md](docs/sandbox.md) | Sandbox scaffolding — `notebooks/_sandbox/` layout, the `/aexp-new-sandbox` slash command, the notebook first-cell convention, promotion path to tracked artifacts |
+| [docs/airgapped.md](docs/airgapped.md) | Airgapped relay — file-queue bridge between a no-internet compute node and an internet-having login node sharing `$HOME`; daemon bootstrap, client API, whitelist, hardening |
 
 ---
 
@@ -258,13 +265,15 @@ src/aexp/
   kb_validate.py        # KB structural validator (frontmatter, aliases, chain)
   schema.py             # pydantic + dataclass types
   mcp_server.py         # FastMCP server — optional [mcp] extra
+  sandbox.py            # scaffold notebooks/_sandbox/<date>_<slug>/ + setup_sandbox_notebook
+  airgapped/            # opt-in: no-internet compute ↔ login-node relay (RelayClient, daemon)
   hooks/                # Claude Code hooks (session_start, enforce_hef_chain, kb_write_guard, stop_validate)
   slash_commands/       # /aexp-* templates
   trackers/             # TrackerAdapter ABC + noop + wandb adapters
   utils/                # paths, git, atomic writes
   vendor/               # forked research-graph templates, skills, and kb/ scaffold
 tests/                  # pytest suite; CI on Ubuntu + Windows × Py 3.11/3.12/3.13
-docs/                   # concepts, quickstart, cli, mcp, mapping, tracker-adapters, queue, threads
+docs/                   # concepts, quickstart, cli, mcp, mapping, tracker-adapters, queue, threads, sandbox, airgapped
 ```
 
 ---

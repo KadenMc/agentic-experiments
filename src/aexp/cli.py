@@ -24,6 +24,10 @@ from aexp.artifacts import (
     new_hypothesis,
     new_thread,
 )
+from aexp.sandbox import (
+    SandboxScaffoldError,
+    scaffold as scaffold_sandbox,
+)
 from aexp.install import InstallRefused, install_limina
 from aexp.limina_io import (
     ArtifactNotFoundError,
@@ -461,6 +465,73 @@ def new_thread_cmd(
         console.print(f"[red]{exc}[/red]")
         _exit(2)
     _print_artifact_result("thread", result)
+
+
+# ---------------------------------------------------------------------------
+# sandbox scaffolding (notebooks/_sandbox/<date>_<slug>/ — exploratory work)
+# ---------------------------------------------------------------------------
+
+
+@app.command("new-sandbox")
+def new_sandbox_cmd(
+    slug: str = typer.Option(
+        ...,
+        "--slug",
+        help=(
+            "Filesystem-safe slug for the experiment "
+            "(lowercase, hyphen-separated, alnum-only)."
+        ),
+    ),
+    title: str | None = typer.Option(
+        None,
+        "--title",
+        help=(
+            "Human-readable title for the per-experiment README H1. "
+            "Defaults to a Title-Cased version of the slug."
+        ),
+    ),
+    parent_dir: str | None = typer.Option(
+        None,
+        "--parent-dir",
+        help=(
+            "Override the sandbox-root location. Defaults to "
+            "<repo>/notebooks/_sandbox/. Relative paths resolve "
+            "under the repo root."
+        ),
+    ),
+) -> None:
+    """Scaffold a new sandbox experiment subdirectory under `notebooks/_sandbox/`.
+
+    A sandbox is exploratory free-form work. It's NOT a tracked Limina
+    artifact (no H###/E### allocation, no kb_write_guard validation).
+    Promote to the tracked-artifact graph with `/aexp-promote-nb` once
+    a directional hypothesis lands.
+
+    Creates `<parent_dir>/<YYYY-MM-DD>_<slug>/` populated with:
+      - `README.md` — experiment-design template
+      - `helpers.py` — sandbox-local utilities stub with repo-root
+        boilerplate
+
+    On first sandbox creation, also initializes the sandbox root
+    (`notebooks/_sandbox/README.md` + `.gitignore` for large outputs).
+    """
+    try:
+        result = scaffold_sandbox(
+            slug=slug, title=title, parent_dir=parent_dir
+        )
+    except SandboxScaffoldError as exc:
+        console.print(f"[red]{exc}[/red]")
+        _exit(2)
+    console.print(
+        f"[green]scaffolded[/green] sandbox [bold]{result.dir_name}[/bold]"
+    )
+    console.print(f"  dir: {result.dir_path}")
+    for f in result.files_created:
+        console.print(f"    + {f}")
+    if result.root_initialized:
+        console.print(
+            "  [dim](also initialized sandbox root README + .gitignore)[/dim]"
+        )
 
 
 @app.command("list-threads")

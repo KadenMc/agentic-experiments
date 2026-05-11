@@ -48,6 +48,8 @@ aexp list-threads  [--status STATE] [--tag TAG]
 aexp show-thread   <T###>
 aexp close-thread  <T###> [--conclusion "<markdown>"] [--promoted]
 
+aexp new-sandbox   --slug "..." [--title "..."] [--parent-dir PATH]
+
 aexp new-run --experiment E### [--hypothesis H###] [--sub-hypothesis H###]
             [--sp K=V,...] [--no-commit]
 aexp list-runs [--experiment E###] [--hypothesis H###] [--status STATUS]
@@ -137,6 +139,35 @@ if bound.
 
 Print the full state point + doc + linked Limina frame for one run.
 
+### `aexp new-sandbox`
+
+Scaffold an exploratory notebook subdir under `notebooks/_sandbox/`.
+Creates `<parent-dir>/<YYYY-MM-DD>_<slug>/` populated with a
+directional-experiment README template and a `helpers.py` skeleton.
+On the *first* sandbox creation in a repo, also initializes the
+sandbox root (`notebooks/_sandbox/README.md` describing the autonomy
+boundary + `.gitignore` for large outputs). A hand-edited root README is
+preserved on subsequent invocations.
+
+Sandbox subdirs are deliberately **outside** the H→E→F enforcement
+chain — no `kb_write_guard` validation, no `H###` / `E###` allocated.
+Promote a sandbox experiment to the tracked-artifact graph via
+`/aexp-new-thread → /aexp-new-hypothesis → /aexp-new-experiment →
+/aexp-promote-nb` once its result will be cited as a paper finding.
+
+Flags:
+
+- `--slug "<slug>"` — filesystem-safe (lowercase, hyphen-separated,
+  alnum-only). Becomes part of the directory name as
+  `<YYYY-MM-DD>_<slug>/`. Required.
+- `--title "<human title>"` — optional H1 for the per-experiment README
+  (defaults to a Title-Cased version of the slug).
+- `--parent-dir <path>` — override the default `notebooks/_sandbox/`.
+  Relative paths resolve under repo root; absolute paths are used as-is.
+
+See [docs/sandbox.md](sandbox.md) for the full layout, templates,
+notebook first-cell convention, and promotion path.
+
 ### `aexp list-batches` / `aexp show-batch`
 
 `list-batches` groups runs by `(experiment_id, condition)` (default slice)
@@ -188,8 +219,12 @@ Copies the shipped slash commands (artifact creation: `aexp-new-hypothesis`,
 `aexp-new-experiment`, `aexp-new-run`; finding creation:
 `aexp-finding-from-run`, `aexp-finding-from-batch`,
 `aexp-finding-placeholder`; read / inspect: `aexp-show-run`,
-`aexp-show-batch`, `aexp-list-runs`, `aexp-status`, `aexp-validate`) into
-`<target>/`, default `.claude/commands/`. Safe to re-run.
+`aexp-show-batch`, `aexp-list-runs`, `aexp-status`, `aexp-validate`;
+threads: `aexp-new-thread`, `aexp-list-threads`, `aexp-show-thread`,
+`aexp-close-thread`; queue: `aexp-queue-add`, `aexp-queue-list`,
+`aexp-queue-materialize`, `aexp-queue-stop`; notebook lifecycle:
+`aexp-jupyter-iterate`, `aexp-promote-nb`; sandbox: `aexp-new-sandbox`)
+into `<target>/`, default `.claude/commands/`. Safe to re-run.
 
 ## Exit codes
 

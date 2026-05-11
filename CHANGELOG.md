@@ -7,7 +7,187 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Release summary
+
+Two new surfaces lifted out of the 2026-05-10 electricrag prompt-
+brittleness session:
+
+- **`aexp.sandbox`** — scaffolding for exploratory notebook work that
+  isn't yet ready for the tracked H → E → F chain. `/aexp-new-sandbox`
+  creates `notebooks/_sandbox/<YYYY-MM-DD>_<slug>/` with a directional-
+  experiment README, a `helpers.py` skeleton, and (on first invocation)
+  a sandbox-root README + `.gitignore`. The
+  `setup_sandbox_notebook(name)` first-cell helper closes the
+  kernel-cwd-vs-repo-root trap that bites remote-Jupyter setups (a
+  notebook one sandbox dir deep doubles the path under naive
+  `Path("notebooks/...").resolve()`).
+- **`aexp.airgapped`** — a file-queue bridge between a no-internet
+  compute node and an internet-having login node sharing `$HOME`,
+  designed for secure HPC where SSH from the agent's runtime is
+  forbidden. A daemon under `tmux` on the login node services a closed
+  whitelist (`git_pull / push / fetch / status / rebase` auto-approved,
+  `wandb_sync` consent-gated) via atomic-rename JSON requests on a
+  shared filesystem. `RelayClient` exposes the git verbs as semantic
+  methods so consumers don't hand-construct args.
+
+Both surfaces are **opt-in**: neither is imported at package init, and
+neither requires any change to existing install / hooks / validator
+behavior. The 0.2.1 surfaces and discipline are unchanged.
+
+51 new tests; full suite at 399 collected.
+
+### Added — `aexp.sandbox` (sandbox scaffolding for exploratory notebooks)
+
+- **`aexp.sandbox.scaffold(slug, *, title=..., parent_dir=...,
+  repo_root=..., today=...) -> SandboxScaffoldResult`** — creates a
+  per-experiment subdir at
+  `<repo>/notebooks/_sandbox/<YYYY-MM-DD>_<slug>/`. Seeds the subdir
+  with `README.md` (directional-experiment-design template) and
+  `helpers.py` (skeleton with `SANDBOX_DIR` + `REPO_ROOT` pre-resolved).
+  On the first invocation in a repo, also creates the sandbox-root
+  `README.md` (autonomy boundary, conventions, promotion path) and
+  `.gitignore` (excludes `*.npy`, `*.parquet`, `*.h5`, `outputs/large/`,
+  etc.). A hand-edited root README is preserved across subsequent
+  invocations.
+- **`aexp.sandbox.setup_sandbox_notebook(name, *, start=None) -> dict`**
+  — first-cell helper that walks up from `Path.cwd()` to find the git
+  repo root, locates `<repo>/notebooks/_sandbox/<name>/`, and inserts
+  it at the front of `sys.path` so `import helpers` resolves to *this*
+  experiment's `helpers.py`. Returns `{"repo_root": Path,
+  "sandbox_dir": Path}`. Designed to close the kernel-cwd-vs-repo-root
+  trap on remote-Jupyter setups where naive `Path("notebooks/...")`
+  doubles the path.
+- **`aexp.sandbox.slugify(title, *, max_len=60) -> str`** — mirror of
+  `aexp.artifacts.slugify` so the same input produces identical slugs
+  across sandbox and tracked-artifact creation. Empty / all-punctuation
+  titles fall back to `"untitled"`.
+- **`SandboxScaffoldResult`** — frozen dataclass returned by `scaffold`:
+  `slug`, `dir_name`, `dir_path` (repo-relative POSIX), `files_created`
+  (list), `root_initialized` (bool, true only on the first call).
+- **`SandboxScaffoldError`** — raised on invalid slug, pre-existing
+  directory, or other pre-condition failures.
+- **CLI verb** `aexp new-sandbox --slug "<slug>" [--title "..."]
+  [--parent-dir "..."]` — thin Typer wrapper over `scaffold()`. Prints
+  the created directory + per-file action list. Idempotent at the
+  directory-name level: re-running with the same slug on the same date
+  raises rather than clobbering.
+- **Slash command** `/aexp-new-sandbox` — interactive wrapper that
+  prompts for slug / optional title / optional parent dir override and
+  shells out to the CLI. The skill file documents the autonomy boundary,
+  the multi-notebook-per-subdir convention, and the promotion path back
+  into the tracked chain (`/aexp-new-thread → /aexp-new-hypothesis →
+  /aexp-new-experiment → /aexp-promote-nb`).
+- **Slash command count**: 21 → **22**. CLI verb count: 21 → **22**.
+- **`docs/sandbox.md`** — canonical reference for the layout,
+  templates, first-cell convention, and promotion path.
+- **Tests** (`tests/test_sandbox.py`, 21 tests): slugify edge cases,
+  scaffold creates the tree, root init on first call, idempotent
+  rejection on rerun, slug validation, default title, today-override
+  for deterministic dates, relative + absolute parent_dir handling,
+  `setup_sandbox_notebook` happy + missing-dir paths.
+
+### Added — `aexp.airgapped` (airgapped-compute relay)
+
+- **New subpackage** `aexp.airgapped`, **not** imported at `aexp`
+  package init. Opt-in via `from aexp.airgapped import RelayClient`
+  (or `from aexp.airgapped import request` for the low-level surface).
+  The relay is genuinely infrastructure-specific — most users don't
+  have airgapped compute constraints — so default-installing it would
+  be bloat.
+- **`RelayClient`** — high-level client wrapping the file-queue
+  protocol with semantic methods. Constructor takes `queue` (default
+  `~/.relay`), `cwd` (default `Path.cwd()` at construction), and
+  `default_timeout` (default 60s for auto-approved ops). Methods:
+  `pull()`, `fetch()`, `status()`, `rebase()`, `push(branch="HEAD",
+  remote="origin")` for the auto-approved git ops; `request(op, *,
+  args, timeout)` as the escape hatch for non-git ops (e.g.
+  `wandb_sync`, consent-required, default 10-min timeout).
+- **Designed-out frictions F7 / F8.** Raw `request("git_push")` raises
+  because the whitelist regex is set so per-call args are required.
+  `request("git_push", args=["main"])` runs `git push main` where
+  `main` is treated as a *remote* name, not a branch. `RelayClient.push()`
+  builds the argv correctly: default is `["origin", "HEAD"]`; pass
+  `branch=...` and `remote=...` to override.
+- **`request(op, *, queue=..., cwd=..., args=..., timeout=...) ->
+  RelayResult`** — the low-level entry point, exposed for callers who
+  want manual control over per-call queue / cwd / args without
+  constructing a `RelayClient`. The `cwd` parameter is required (the
+  underlying `validate_request` rejects missing cwd) — there is no
+  project-specific default baked into the surface.
+- **Closed whitelist** (`ALLOWED: dict[str, OpSpec]`). Auto-approved
+  (no consent prompt):
+  - `git_pull` → `git pull --ff-only`
+  - `git_push` → `git push <args>` (args regex `^[a-zA-Z0-9._/\-]+$`)
+  - `git_fetch` → `git fetch --all --prune`
+  - `git_status` → `git status --porcelain=v2`
+  - `git_rebase` → `git pull --rebase`
+
+  Consent-required (user touches `approved/<uuid>` via `relay-approve`
+  shell helper):
+  - `wandb_sync` → `wandb sync --sync-all`
+- **`validate_request(payload) -> (op, args, cwd)`** — pure validator
+  exposed for tests + the daemon side. Enforces op-in-whitelist, args
+  list-of-str with per-op regex `fullmatch`, max 32 args at 256 chars
+  each, and `cwd` resolved under `$HOME`. Cwd-allowlist hook reads the
+  optional env var `AEXP_RELAY_CWD_NAMES` (comma-separated top-level
+  dir names under `$HOME`) for projects that want to lock the daemon
+  down further.
+- **`RelayResult`** — dataclass: `request_id` (uuid), `op` (str),
+  `returncode` (int; non-zero is *not* an exception), `stdout` (merged
+  stdout+stderr from daemon-side), `duration_s` (float, wall-clock on
+  daemon).
+- **Protocol-level errors** — all subclass `RelayError`:
+  `RelayDownError` (heartbeat missing or >30s stale),
+  `RelayValidationError` (daemon rejected for whitelist / regex / args /
+  cwd), `RelayRejectedError` (user touched `rejected/<uuid>` for a
+  consent op), `RelayTimeoutError` (client timeout elapsed),
+  `RelayCrashedError` (daemon died mid-execution; outbox synthesized on
+  next start).
+- **Daemon CLI** — `python -m aexp.airgapped daemon|status|install-
+  helpers` with shared `--queue PATH` (default `~/.relay`). The
+  `daemon` subcommand accepts an optional `--log PATH`; `install-
+  helpers` drops the `relay-approve` / `relay-reject` /
+  `relay-list-pending` shell scripts into `<queue>/_bin/`. Recommended
+  launch under `tmux` on the login node.
+- **Protocol guarantees** (preserved verbatim from the upstream
+  electricrag reference implementation):
+  - Atomic rename via `.tmp` sibling for all queue writes (POSIX-atomic,
+    NTFS-atomic for non-shared opens).
+  - 5-second heartbeat (`~/.relay/heartbeat`); client raises
+    `RelayDownError` if missing or >30s stale.
+  - 250ms client poll / 500ms daemon poll cadence (cross-node `inotify`
+    is unreliable so the design is poll-only).
+  - 7-day GC of `outbox/` / `log/` / `approved/` / `rejected/`; 24-hour
+    pending-TTL for un-decided consent.
+  - Stale-processing recovery on daemon startup (jobs marked processing
+    when the previous daemon was killed get routed to `stale/`).
+- **`docs/airgapped.md`** — full daemon bootstrap recipe, client API
+  reference, whitelist table, error semantics, end-to-end workflow
+  (compute-node pull → run → push), and hardening notes (cwd allowlist
+  via env var).
+- **Tests** (`tests/test_airgapped.py`, 30 tests): ALLOWED whitelist
+  sanity, `validate_request` happy paths + error paths (missing cwd,
+  unknown op, missing args when regex set, args when no regex, shell-
+  injection chars rejected, cwd outside `$HOME` rejected), env-var
+  cwd-allowlist hook, `RelayClient` constructor defaults + overrides,
+  method dispatch via mocked `request`, F7/F8 designed-out behavior
+  verification. The full daemon-lifecycle + consent-state-machine + GC
+  + stale-recovery spec is the 56-test suite at
+  `electricrag/tests/dev/test_relay.py` upstream — the aexp port's
+  test file is a port-level smoke over the public surface.
+
+### Provenance
+
+Both surfaces were designed in the 2026-05-10 electricrag session that
+kicked off a prompt-brittleness characterization experiment. The
+session note (`electricrag/sessions/2026-05-10_first-jupyter-experiment-
+kickoff.md`) captures the friction catalogue (F1–F12) that motivated
+the design choices — especially F4 (kernel-cwd path doubling on remote
+Jupyter), F7 (raw `git_push` rejected without args), and F8
+(`git_push` arg interpreted as remote not branch). The reference
+implementation lives at `electricrag/dev/relay.py` upstream and is
+preserved alongside this port for the exhaustive daemon-lifecycle
+test suite.
 
 ## [0.2.1] — 2026-04-27
 
