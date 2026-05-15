@@ -169,11 +169,58 @@ def compute_vendor_sha(vendor_root: Path = VENDOR_LIMINA) -> str:
 # ---------------------------------------------------------------------------
 
 
+# Text file extensions whose line endings we normalize on read/write.
+# Binary files (images, archives, the signac state dir, etc.) are NOT in this
+# set — they're compared bytewise and copied verbatim.
+_TEXT_SUFFIXES: frozenset[str] = frozenset(
+    {".md", ".json", ".py", ".toml", ".yaml", ".yml", ".txt", ".rst",
+     ".csv", ".cfg", ".ini", ".sh", ".gitignore", ".gitattributes"}
+)
+
+
+def _is_text_file(path: Path) -> bool:
+    """True if ``path`` should be treated as text for EOL normalization.
+
+    We key on file extension rather than content sniffing because the source
+    side of every install copy is a known set of vendored package files —
+    we already know which are text.
+    """
+    return path.suffix.lower() in _TEXT_SUFFIXES or path.name in {".gitignore", ".gitattributes"}
+
+
+def _eol_normalize(data: bytes) -> bytes:
+    """Collapse CRLF (and lone CR) into LF so cross-platform copies compare equal.
+
+    The wheel format preserves source-tree byte sequences verbatim, so a wheel
+    built on Windows with ``core.autocrlf=true`` ships CRLF inside the package
+    and a consumer checkout with LF on disk will byte-differ from it forever.
+    Normalizing on both sides of the equality check makes the comparison
+    semantic rather than literal. See ``docs/setup/jupyter-mcp.md`` and the
+    .gitattributes file at repo root for the broader strategy.
+    """
+    return data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+
+
 def _files_identical(a: Path, b: Path) -> bool:
-    """Bytewise comparison; returns ``False`` if either side is missing."""
+    """EOL-normalized comparison for text files; bytewise for everything else.
+
+    Returns ``False`` if either side is missing.
+
+    For text files (``_is_text_file``), CRLF and LF are treated as equivalent —
+    this is what stops a CRLF-on-Windows source vs. LF-on-Linux target from
+    looking like a "user customization" to the installer.
+    """
     if not a.is_file() or not b.is_file():
         return False
-    return a.read_bytes() == b.read_bytes()
+    raw_a = a.read_bytes()
+    raw_b = b.read_bytes()
+    if raw_a == raw_b:
+        return True
+    # Fast-path fell through. Only EOL-normalize for known text files; on
+    # binary mismatch we never want to claim equality.
+    if _is_text_file(a) and _is_text_file(b):
+        return _eol_normalize(raw_a) == _eol_normalize(raw_b)
+    return False
 
 
 def _copy_file(
@@ -222,7 +269,14 @@ def _copy_file(
             "target exists with different content; rerun with force=True to overwrite",
         )
     if not dry_run:
-        atomic_write(dst, src.read_bytes())
+        # Text files: write with LF line endings regardless of what the
+        # wheel actually ships. This is the belt-and-suspenders layer that
+        # paves over a CRLF-laden wheel built from a Windows dev tree before
+        # the .gitattributes normalization took effect.
+        raw = src.read_bytes()
+        if _is_text_file(src):
+            raw = _eol_normalize(raw)
+        atomic_write(dst, raw)
     return InstallAction("copied", rel)
 
 
@@ -298,7 +352,9 @@ def merge_claude_settings(
     return merged
 
 
-def _build_claude_settings(python_exe: str) -> dict[str, Any]:
+def _build_claude_settings(
+    python_exe: str, *, jupyter_enabled: bool = False
+) -> dict[str, Any]:
     """Build the ``.claude/settings.json`` hook block that ``aexp`` manages.
 
     Each hook invokes a Python module inside the installed ``aexp`` package
@@ -310,9 +366,37 @@ def _build_claude_settings(python_exe: str) -> dict[str, Any]:
     ``python_exe`` is quoted with double quotes so paths containing spaces
     (e.g. ``C:\\Program Files\\...``) work under every shell Claude Code
     might spawn.
+
+    When ``jupyter_enabled=True``, also registers a PostToolUse matcher on
+    ``mcp__jupyter.*__connect_to_jupyter`` that nudges the agent to re-run
+    :func:`aexp.jupyter.init` immediately after any port switch. Without
+    this, an agent that calls ``connect_to_jupyter`` mid-conversation may
+    keep reasoning under stale identity beliefs.
     """
     def cmd(mod: str) -> str:
         return f'"{python_exe}" -m aexp.hooks.{mod}'
+
+    posttooluse: list[dict[str, Any]] = [
+        {
+            "matcher": "Write|Edit|MultiEdit",
+            "hooks": [
+                {"type": "command", "command": cmd("kb_write_guard"), "timeout": 15}
+            ],
+        }
+    ]
+    if jupyter_enabled:
+        posttooluse.append(
+            {
+                "matcher": "mcp__jupyter.*__connect_to_jupyter",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": cmd("jupyter_connect_postuse"),
+                        "timeout": 5,
+                    }
+                ],
+            }
+        )
 
     return {
         "hooks": {
@@ -332,14 +416,7 @@ def _build_claude_settings(python_exe: str) -> dict[str, Any]:
                     ],
                 }
             ],
-            "PostToolUse": [
-                {
-                    "matcher": "Write|Edit|MultiEdit",
-                    "hooks": [
-                        {"type": "command", "command": cmd("kb_write_guard"), "timeout": 15}
-                    ],
-                }
-            ],
+            "PostToolUse": posttooluse,
             "Stop": [
                 {
                     "matcher": "",
@@ -353,7 +430,7 @@ def _build_claude_settings(python_exe: str) -> dict[str, Any]:
 
 
 def _merge_or_write_claude_settings(
-    dst: Path, python_exe: str, *, dry_run: bool = False
+    dst: Path, python_exe: str, *, dry_run: bool = False, jupyter_enabled: bool = False
 ) -> InstallAction:
     """Write (or merge) our hook block into ``<repo>/.claude/settings.json``.
 
@@ -361,7 +438,7 @@ def _merge_or_write_claude_settings(
     only appends our hook matchers (deduplicating on ``(matcher, command)``).
     """
     rel = _display_relpath(dst)
-    vendor = _build_claude_settings(python_exe)
+    vendor = _build_claude_settings(python_exe, jupyter_enabled=jupyter_enabled)
 
     if not dst.exists():
         if not dry_run:
@@ -835,6 +912,13 @@ def install_limina(
     # Short-circuit if already installed at the same vendor sha.
     vendor_sha = compute_vendor_sha()
     existing_marker = read_installed_marker(root)
+    # The `jupyter_enabled` marker bit is sticky: a user who once opted in
+    # should keep getting the Jupyter PostToolUse hook on subsequent installs
+    # even if they omit --with-jupyter. OR the request with the existing
+    # value before deciding what to register.
+    effective_jupyter = with_jupyter or bool(
+        (existing_marker or {}).get("jupyter_enabled", False)
+    )
     if existing_marker and not force:
         if existing_marker.get("limina_vendor_sha") == vendor_sha:
             actions.append(
@@ -903,7 +987,12 @@ def install_limina(
     import sys as _sys
     claude_dst = root / ".claude" / "settings.json"
     actions.append(
-        _merge_or_write_claude_settings(claude_dst, _sys.executable, dry_run=dry_run)
+        _merge_or_write_claude_settings(
+            claude_dst,
+            _sys.executable,
+            dry_run=dry_run,
+            jupyter_enabled=effective_jupyter,
+        )
     )
 
     # 3c. Write project-scope MCP servers to .mcp.json at repo root.

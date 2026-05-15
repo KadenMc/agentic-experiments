@@ -7,6 +7,92 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0]
+
+### Release summary
+
+`aexp.jupyter` — live introspection for the Jupyter MCP integration. An
+agent that has connected to *any* Jupyter the user is running can now
+answer "what am I sitting on, what else does the user have running, and
+what's happening inside each session?" without consulting any
+persistent registry — every fact is recovered from live state on
+demand.
+
+The most acute use case is multi-job HPC: a researcher has two SLURM
+Jupyters on different ports reached via separate SSH tunnels, and the
+agent must never accidentally execute code on the wrong kernel. Today,
+no MCP tool exposes "which URL am I currently connected to" — the
+context evaporates across resumed sessions. A new PostToolUse hook
+nudges the agent to re-introspect after every `connect_to_jupyter`
+call so identity beliefs cannot go stale silently.
+
+### Added — `aexp.jupyter` (live session introspection)
+
+- `aexp.jupyter.init() -> SessionInfo` — composes every introspection
+  probe (technical identity, SLURM context, attached notebooks, GPU
+  residents, sibling Jupyters) into one Pydantic model. Side-effect
+  free. Designed to be called from inside any kernel.
+- `aexp.jupyter.whoami()` — alias for `init()`.
+- `aexp.jupyter.discover_other_servers()` — enumerates every Jupyter
+  visible from `list_running_servers`, excluding the current one. On
+  shared-home HPC this enumerates cluster-wide.
+- `aexp.jupyter.describe_server(url, token)` — HTTP-only summary of a
+  remote Jupyter's `/api/sessions` and `/api/kernels` (attached
+  notebooks, kernel state). Never executes code on the remote kernel.
+- `aexp.jupyter.probe_slurm()` / `probe_gpu()` — extracted helpers,
+  independently testable.
+
+### Added — CLI
+
+- `aexp jupyter` subcommand group: `init`, `whoami`, `discover`,
+  `setup` (the existing extension-disable recipe). All support
+  `--json` for scripting.
+- `aexp jupyter-setup` retained as a deprecated alias for one release
+  (delegates to `aexp jupyter setup` with a warning).
+
+### Added — MCP tools
+
+- `jupyter_introspect_current` — returns the Python snippet the agent
+  should dispatch via the Jupyter MCP's `execute_code` to introspect
+  the connected kernel. Recipe-based (not direct cross-MCP coupling)
+  so responsibility boundaries stay clean.
+- `jupyter_parse_introspection(raw_output)` — validates and parses the
+  stdout into a structured `SessionInfo`.
+
+### Added — Hooks
+
+- `aexp.hooks.jupyter_connect_postuse` — PostToolUse matcher on
+  `mcp__jupyter.*__connect_to_jupyter`. After every connection switch,
+  emits a high-salience directive telling the agent to re-run
+  `init()` immediately and verify SessionInfo before any further
+  `execute_code` / `execute_cell` call. Registered automatically when
+  `aexp install --with-jupyter` was used (sticky bit honored).
+
+### Added — Slash commands
+
+- `/aexp-jupyter-discover` — list every Jupyter the user is running
+  with port, attached notebook, SLURM job, and GPU residents.
+- `/aexp-jupyter-connect <port-or-hint>` — switch the active Jupyter
+  using a port number or SLURM-job hint; the PostToolUse hook handles
+  re-init.
+- `/aexp-jupyter-iterate` updated — prepends a "Step 0: confirm
+  identity" that runs the introspection recipe before touching cells.
+
+### Decisions documented
+
+- **No persistent registry.** Everything is recomputed from live
+  introspection. Specifically: no `~/.aexp/sessions/`, no marker
+  files, no policy files.
+- **No PreToolUse enforcement hook.** Without persistent policy state
+  there's nothing to enforce against. Re-init is informed
+  deterministically via the PostToolUse directive; compliance is by
+  discipline (and the conversation-level statement of intent).
+- **Recipe-based MCP dispatch.** The `aexp` MCP returns code for the
+  agent to dispatch via the Jupyter MCP, rather than the two servers
+  talking to each other.
+
+## [0.2.1]
+
 ### Release summary
 
 Two new surfaces lifted out of the 2026-05-10 electricrag prompt-
