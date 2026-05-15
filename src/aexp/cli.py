@@ -903,8 +903,61 @@ def sync_offline_cmd(
         _exit(1)
 
 
-@app.command("jupyter-setup")
-def jupyter_setup(
+# ---------------------------------------------------------------------------
+# jupyter subcommand group — live session introspection + extension setup
+# ---------------------------------------------------------------------------
+
+
+jupyter_app = typer.Typer(
+    help=(
+        "Live Jupyter session introspection (whoami, discover) plus the "
+        "extension-disable/enable recipe needed before the Jupyter MCP can "
+        "talk to a cluster JupyterLab."
+    ),
+    no_args_is_help=True,
+)
+app.add_typer(jupyter_app, name="jupyter")
+
+
+def _do_jupyter_setup(dry_run: bool) -> None:
+    """Idempotent Jupyter extension reconfiguration.
+
+    Body shared between ``aexp jupyter setup`` (the canonical verb) and the
+    deprecated flat ``aexp jupyter-setup`` alias.
+    """
+    import subprocess
+    import sys as _sys
+
+    cmds: list[list[str]] = [
+        [_sys.executable, "-m", "jupyter", "server", "extension", "disable", "jupyter_server_documents"],
+        [_sys.executable, "-m", "jupyter", "server", "extension", "enable", "jupyter_server_ydoc"],
+        [_sys.executable, "-m", "jupyter", "server", "extension", "enable", "jupyter_server_nbmodel"],
+        [_sys.executable, "-m", "jupyter", "labextension", "disable", "@jupyter-ai-contrib/server-documents"],
+    ]
+
+    for cmd in cmds:
+        printable = " ".join(cmd)
+        if dry_run:
+            console.print(f"[cyan][dry-run][/cyan] {printable}")
+            continue
+        console.print(f"[dim]$[/dim] {printable}")
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.stdout:
+            console.print(result.stdout.rstrip())
+        if result.returncode != 0:
+            console.print(f"[red]FAILED ({result.returncode})[/red] {result.stderr.rstrip()}")
+            _exit(1)
+            return
+
+    if dry_run:
+        console.print("\n[cyan]dry-run complete[/cyan] — no changes applied.")
+        return
+    console.print("\n[green]✓[/green] Jupyter extension state configured.")
+    console.print("  Restart your JupyterLab process to pick up the changes.")
+
+
+@jupyter_app.command("setup")
+def jupyter_setup_cmd(
     dry_run: bool = typer.Option(
         False,
         "--dry-run",
@@ -940,35 +993,129 @@ def jupyter_setup(
     See `docs/setup/jupyter-mcp.md` "Investigation log" §1-3 for the full
     rationale. Restart your JupyterLab process to pick up the changes.
     """
-    import subprocess
-    import sys as _sys
+    _do_jupyter_setup(dry_run)
 
-    cmds: list[list[str]] = [
-        [_sys.executable, "-m", "jupyter", "server", "extension", "disable", "jupyter_server_documents"],
-        [_sys.executable, "-m", "jupyter", "server", "extension", "enable", "jupyter_server_ydoc"],
-        [_sys.executable, "-m", "jupyter", "server", "extension", "enable", "jupyter_server_nbmodel"],
-        [_sys.executable, "-m", "jupyter", "labextension", "disable", "@jupyter-ai-contrib/server-documents"],
-    ]
 
-    for cmd in cmds:
-        printable = " ".join(cmd)
-        if dry_run:
-            console.print(f"[cyan][dry-run][/cyan] {printable}")
-            continue
-        console.print(f"[dim]$[/dim] {printable}")
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.stdout:
-            console.print(result.stdout.rstrip())
-        if result.returncode != 0:
-            console.print(f"[red]FAILED ({result.returncode})[/red] {result.stderr.rstrip()}")
-            _exit(1)
-            return
+@app.command("jupyter-setup", hidden=True)
+def jupyter_setup_deprecated_alias(
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        "-n",
+        help="Print the commands that would be run without executing them.",
+    ),
+) -> None:
+    """Deprecated alias for ``aexp jupyter setup``. Kept for one release."""
+    console.print(
+        "[yellow]warning[/yellow] `aexp jupyter-setup` is deprecated; use "
+        "`aexp jupyter setup` (subcommand) instead."
+    )
+    _do_jupyter_setup(dry_run)
 
-    if dry_run:
-        console.print("\n[cyan]dry-run complete[/cyan] — no changes applied.")
+
+def _print_session_info(json_out: bool) -> None:
+    """Shared body for ``aexp jupyter init`` / ``aexp jupyter whoami``."""
+    try:
+        from aexp.jupyter import _print_info_human, init
+    except ImportError as exc:
+        console.print(f"[red]{exc}[/red]")
+        _exit(1)
         return
-    console.print("\n[green]✓[/green] Jupyter extension state configured.")
-    console.print("  Restart your JupyterLab process to pick up the changes.")
+    info = init()
+    if json_out:
+        # model_dump_json is the wire format the MCP recipe also produces.
+        print(info.model_dump_json(indent=2))
+        return
+    _print_info_human(info)
+
+
+@jupyter_app.command("init")
+def jupyter_init_cmd(
+    json_out: bool = typer.Option(
+        False, "--json", help="Emit SessionInfo as JSON instead of human-readable text."
+    ),
+) -> None:
+    """Introspect the current Jupyter session and print the result.
+
+    Most useful when run from inside a Jupyter terminal or a notebook cell
+    (``!aexp jupyter init``) — populates SLURM context, attached
+    notebooks, GPU residents, and sibling Jupyters from live state.
+    """
+    _print_session_info(json_out)
+
+
+@jupyter_app.command("whoami")
+def jupyter_whoami_cmd(
+    json_out: bool = typer.Option(
+        False, "--json", help="Emit SessionInfo as JSON instead of human-readable text."
+    ),
+) -> None:
+    """Alias for ``aexp jupyter init`` — identical output, friendlier verb."""
+    _print_session_info(json_out)
+
+
+@jupyter_app.command("discover")
+def jupyter_discover_cmd(
+    json_out: bool = typer.Option(
+        False, "--json", help="Emit the sibling list as JSON instead of a table."
+    ),
+    describe: bool = typer.Option(
+        False,
+        "--describe",
+        help=(
+            "Probe each sibling's /api/sessions and /api/kernels for attached "
+            "notebook paths + kernel state (one HTTP roundtrip per server)."
+        ),
+    ),
+) -> None:
+    """List every Jupyter the user has running, excluding the current one."""
+    try:
+        from aexp.jupyter import describe_server, discover_other_servers
+    except ImportError as exc:
+        console.print(f"[red]{exc}[/red]")
+        _exit(1)
+        return
+    siblings = discover_other_servers()
+    if describe:
+        rendered = []
+        for s in siblings:
+            entry = s.model_dump()
+            entry["describe"] = describe_server(s.url, s.token)
+            rendered.append(entry)
+        if json_out:
+            import json as _json
+            print(_json.dumps(rendered, indent=2, default=str))
+            return
+        for entry in rendered:
+            console.print(
+                f"[cyan]{entry['url']}[/cyan]  port={entry['port']}  "
+                f"pid={entry['pid']}  host={entry['hostname']}"
+            )
+            d = entry["describe"]
+            if d.get("attached_notebooks"):
+                console.print("  notebooks:")
+                for nb in d["attached_notebooks"]:
+                    console.print(f"    - {nb}")
+            for k in d.get("kernels", []):
+                console.print(
+                    f"  kernel: id={k.get('id')} state={k.get('execution_state')} "
+                    f"last={k.get('last_activity')}"
+                )
+        if not rendered:
+            console.print("[dim]no other Jupyter servers visible[/dim]")
+        return
+
+    if json_out:
+        import json as _json
+        print(_json.dumps([s.model_dump() for s in siblings], indent=2, default=str))
+        return
+    if not siblings:
+        console.print("[dim]no other Jupyter servers visible[/dim]")
+        return
+    for s in siblings:
+        console.print(
+            f"[cyan]{s.url}[/cyan]  port={s.port}  pid={s.pid}  host={s.hostname}"
+        )
 
 
 @app.command("install-slash-commands")

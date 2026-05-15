@@ -13,6 +13,22 @@ through the Jupyter MCP bridge.
 
 Run through these steps:
 
+0. **Confirm session identity.** Before touching any cells, dispatch:
+   ```
+   execute_code(code="from aexp.jupyter import init; import json; print(json.dumps(init().model_dump(), default=str))")
+   ```
+   on the connected Jupyter. Pass the stdout to
+   `mcp__aexp__jupyter_parse_introspection` and review the parsed
+   `SessionInfo`. Confirm with the user:
+   - the SLURM job (if any) and host are what you expect;
+   - the `attached_notebooks` list contains the notebook the user is
+     actually working in;
+   - no other busy kernel on the same host is holding GPU memory you
+     shouldn't disturb.
+
+   If anything mismatches — wrong SLURM job, wrong host, unexpected GPU
+   resident — STOP and ask. Do not proceed to step 1.
+
 1. **Check tool availability.** Verify that
    `mcp__jupyter-compute__notebook_get-selected-cell` and
    `mcp__jupyter-compute__execute_cell` are present in your tool list. If

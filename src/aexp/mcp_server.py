@@ -904,6 +904,104 @@ def queue_materialize(
 
 
 # ---------------------------------------------------------------------------
+# Tools: jupyter_introspect_current / jupyter_parse_introspection
+# ---------------------------------------------------------------------------
+#
+# The aexp MCP server runs on the laptop; the kernel whose identity we need
+# is on the cluster, reachable only via the Jupyter MCP server (which has
+# its own ``execute_code`` tool). Rather than cross-MCP-couple, this tool
+# hands the agent a small Python snippet to dispatch via the live Jupyter
+# MCP, then a companion tool to validate/parse the returned stdout.
+
+
+_JUPYTER_INTROSPECT_RECIPE = (
+    "from aexp.jupyter import init; import json; "
+    "print(json.dumps(init().model_dump(), default=str))"
+)
+
+
+@mcp.tool()
+def jupyter_introspect_current() -> dict[str, Any]:
+    """Return the recipe for live-introspecting the currently connected Jupyter.
+
+    The agent is expected to dispatch the ``recipe`` Python snippet via the
+    Jupyter MCP's ``execute_code`` tool, then pass the resulting stdout to
+    :func:`jupyter_parse_introspection`. The recipe runs entirely inside
+    the connected kernel — it does NOT touch any cells or notebook state.
+
+    Output dict:
+        recipe: Python one-liner to dispatch.
+        execute_with: name of the Jupyter MCP tool to use.
+        then_call: name of the aexp MCP tool to parse the result.
+        notes: short rationale for why this two-step dance exists.
+    """
+    return {
+        "recipe": _JUPYTER_INTROSPECT_RECIPE,
+        "execute_with": "mcp__jupyter*__execute_code",
+        "then_call": "mcp__aexp__jupyter_parse_introspection",
+        "notes": (
+            "aexp.jupyter.init() introspects the kernel's own process: "
+            "SLURM context (cgroup-derived), Jupyter URL/port/token "
+            "(from JPY_PARENT_PID + list_running_servers), attached "
+            "notebooks (/api/sessions), GPU residents (nvidia-smi), and "
+            "sibling Jupyters. Side-effect free."
+        ),
+    }
+
+
+@mcp.tool()
+def jupyter_parse_introspection(raw_output: str) -> dict[str, Any]:
+    """Parse the stdout of an ``aexp.jupyter.init()`` dispatch.
+
+    Accepts the raw text from ``execute_code`` (which may include kernel
+    banners or trailing whitespace), extracts the JSON payload, validates
+    it against the :class:`SessionInfo` schema, and returns the structured
+    dict on success.
+
+    Output dict:
+        ok: bool
+        session: parsed SessionInfo dict (only when ok=True)
+        error: human-readable failure reason (only when ok=False)
+        raw_output: echoes the input for debugging (only when ok=False)
+    """
+    import json as _json
+
+    text = (raw_output or "").strip()
+    if not text:
+        return {"ok": False, "error": "empty output", "raw_output": raw_output}
+    # Find the first '{' / last '}' to tolerate kernel banners before/after.
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return {
+            "ok": False,
+            "error": "no JSON object found in output",
+            "raw_output": raw_output,
+        }
+    try:
+        payload = _json.loads(text[start : end + 1])
+    except _json.JSONDecodeError as exc:
+        return {
+            "ok": False,
+            "error": f"JSON decode failed: {exc}",
+            "raw_output": raw_output,
+        }
+
+    try:
+        from aexp.jupyter import SessionInfo
+        info = SessionInfo.model_validate(payload)
+    except ImportError as exc:
+        return {"ok": False, "error": str(exc), "raw_output": raw_output}
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": f"SessionInfo validation failed: {exc}",
+            "raw_output": raw_output,
+        }
+    return {"ok": True, "session": info.model_dump(mode="json")}
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 

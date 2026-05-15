@@ -99,6 +99,8 @@ teammates get the MCP server on clone.
 | `validate` | Compose KB + run-link + finding-citation checks | — |
 | `sync_offline` | `wandb sync` every offline run in the store | — |
 | `queue_stop` | Interrupt a running queued job; transitions to `"stopped"` | `job_id` |
+| `jupyter_introspect_current` | Returns the recipe for live-introspecting the connected kernel via the Jupyter MCP's `execute_code`. Pair with `jupyter_parse_introspection`. | — |
+| `jupyter_parse_introspection` | Parses the stdout of an `aexp.jupyter.init()` dispatch into a structured `SessionInfo`. | `raw_output` |
 
 All return JSON-serializable dicts. Errors surface either as
 `{"error": ..., "code": ...}` in the return value or as MCP error

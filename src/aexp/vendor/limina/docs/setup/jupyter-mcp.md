@@ -312,6 +312,75 @@ Connect to my Jupyter at http://127.0.0.1:<port> with token <your-token>.
 
 If all five pass, the integration is verified end-to-end.
 
+## Live session introspection
+
+Once the agent has connected to *any* Jupyter the user is running,
+`aexp.jupyter.init()` recovers everything about that session from live
+state — no registry, no marker files.
+
+### What gets recovered
+
+| Field | Source |
+|---|---|
+| `jupyter_url` / `jupyter_port` / `jupyter_token` / `jupyter_root_dir` / `jupyter_pid` | `jupyter_server.serverapp.list_running_servers()` filtered by `JPY_PARENT_PID` |
+| `kernel_id` | `IPKernelApp.connection_file` |
+| `cgroup` | `/proc/self/cgroup` (Linux only) |
+| `slurm.job_id` | `job_<id>` segment in `/proc/self/cgroup`, falling back to `$SLURM_JOB_ID` |
+| `slurm.job_name` / `state` / `runtime` / `time_limit` / `nodelist` / `partition` / `user` | `squeue -h -j <id> -o ...` |
+| `slurm.submit_time` / `start_time` | `scontrol show job <id>` |
+| `attached_notebooks` | Jupyter HTTP `/api/sessions` against the current server |
+| `gpu_processes` | `nvidia-smi --query-compute-apps=...` |
+| `cluster_siblings` | `list_running_servers()` minus the current PID; on shared-home HPC this enumerates cluster-wide |
+
+Every probe degrades gracefully when its prerequisite is missing:
+laptop with no SLURM → `slurm = None`; no GPU →
+`gpu_processes = []`; non-Linux → `cgroup = None`.
+
+### Calling it
+
+From inside any kernel (the agent dispatches this via the Jupyter MCP's
+`execute_code`):
+
+```python
+from aexp.jupyter import init
+import json
+print(json.dumps(init().model_dump(), default=str))
+```
+
+Or from a Jupyter terminal / shell:
+
+```bash
+aexp jupyter init --json     # canonical SessionInfo dump
+aexp jupyter whoami          # human-readable summary
+aexp jupyter discover        # list other Jupyters the user is running
+aexp jupyter discover --describe   # ...with attached notebooks + kernel state
+```
+
+### Multi-Jupyter workflow
+
+If you're running multiple Jupyters (e.g. two SLURM jobs on the same
+cluster), one is enough to bootstrap the agent. From there:
+
+1. `/aexp-jupyter-discover` lists every other Jupyter visible from the
+   current kernel.
+2. `/aexp-jupyter-connect <port-or-hint>` switches the active
+   connection. A PostToolUse hook (`jupyter_connect_postuse`) fires
+   automatically after every `connect_to_jupyter` call, surfacing a
+   directive that the agent must immediately re-run `init()` and
+   verify the SessionInfo before executing any code.
+
+### Stating policy intent
+
+There is no persistent "do-not-touch" registry in v1. If you want the
+agent to leave a specific kernel alone for the rest of a conversation
+(e.g. you have something fragile running that introspection won't
+catch), simply tell it so in chat: *"don't touch the kernel attached to
+notebook X for the rest of this session."* The agent honors that for
+the conversation; nothing is written to disk.
+
+If you find yourself needing cross-session enforcement, that's an
+additive follow-up — open an issue.
+
 ## Troubleshooting
 
 | Symptom | Likely cause | Fix |

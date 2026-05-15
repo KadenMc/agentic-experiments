@@ -912,3 +912,114 @@ def test_install_writes_promote_nb_slash_command(fresh_git_repo: Path) -> None:
     # design rejection from the plan discussion.
     assert "tracked_notebook_run" in body  # mentioned only in the "do not invent" warning
     assert "isn't" in body or "is not" in body  # ... in the "there isn't one" disclaimer
+
+
+# ---------------------------------------------------------------------------
+# Line-endings normalization (CRLF / LF cross-platform)
+# ---------------------------------------------------------------------------
+
+
+def test_files_identical_treats_crlf_and_lf_as_equal_for_text(tmp_path: Path) -> None:
+    """A CRLF source vs LF target (or vice versa) compares equal for text files.
+
+    This is the load-bearing fix for the cross-platform install bug: a wheel
+    built on Windows with CRLF, copied to a consumer with LF on disk, was
+    forever reporting `skipped_conflict` on re-install.
+    """
+    from aexp.install import _files_identical
+
+    crlf = tmp_path / "crlf.md"
+    lf = tmp_path / "lf.md"
+    crlf.write_bytes(b"---\r\ndescription: x\r\n---\r\nbody\r\n")
+    lf.write_bytes(b"---\ndescription: x\n---\nbody\n")
+    assert _files_identical(crlf, lf)
+    assert _files_identical(lf, crlf)
+
+
+def test_files_identical_still_distinguishes_real_content_differences(tmp_path: Path) -> None:
+    """EOL-normalized comparison must not collapse genuine content differences."""
+    from aexp.install import _files_identical
+
+    a = tmp_path / "a.md"
+    b = tmp_path / "b.md"
+    a.write_bytes(b"hello\n")
+    b.write_bytes(b"hello world\n")
+    assert not _files_identical(a, b)
+
+
+def test_files_identical_does_not_normalize_binary_extensions(tmp_path: Path) -> None:
+    """A spurious 0x0d byte in a binary file MUST keep it distinguishable."""
+    from aexp.install import _files_identical
+
+    a = tmp_path / "icon.png"
+    b = tmp_path / "icon2.png"
+    a.write_bytes(b"\x89PNG\r\nfoo")
+    b.write_bytes(b"\x89PNG\nfoo")
+    # These two byte sequences differ; for a binary file we must not claim
+    # equality just because EOL-normalization happens to make them match.
+    assert not _files_identical(a, b)
+
+
+def test_copy_file_writes_lf_for_text_even_when_source_is_crlf(tmp_path: Path) -> None:
+    """When the wheel ships CRLF (Windows-built), the installed file should
+    still land on disk as LF — Layer 3 of the EOL strategy."""
+    from aexp.install import _copy_file
+
+    src = tmp_path / "src.md"
+    dst = tmp_path / "dst.md"
+    src.write_bytes(b"line1\r\nline2\r\n")
+    action = _copy_file(src, dst, force=False)
+    assert action.kind == "copied"
+    # The written file is LF only, regardless of source EOL convention.
+    assert dst.read_bytes() == b"line1\nline2\n"
+
+
+def test_copy_file_preserves_binary_bytes_unchanged(tmp_path: Path) -> None:
+    """Binary files survive the install copy bit-for-bit."""
+    from aexp.install import _copy_file
+
+    src = tmp_path / "icon.png"
+    dst = tmp_path / "out.png"
+    payload = b"\x89PNG\r\n\x1a\n\x00\xff\r\nMORE"
+    src.write_bytes(payload)
+    action = _copy_file(src, dst, force=False)
+    assert action.kind == "copied"
+    assert dst.read_bytes() == payload  # CRLF bytes untouched
+
+
+def test_reinstall_after_crlf_target_reports_identical(tmp_path: Path) -> None:
+    """End-to-end: a re-install where the existing target is CRLF and the
+    source is LF (or vice versa) reports skipped_identical, not
+    skipped_conflict. This is the symptom that motivated the whole fix."""
+    from aexp.install import _copy_file
+
+    src = tmp_path / "shipped.md"
+    dst = tmp_path / "installed.md"
+    # Source ships LF (post-.gitattributes-fix wheel).
+    src.write_bytes(b"hello\nworld\n")
+    # Target on disk is CRLF (leftover from a pre-fix install, or because the
+    # consumer's editor saved it that way).
+    dst.write_bytes(b"hello\r\nworld\r\n")
+    action = _copy_file(src, dst, force=False)
+    assert action.kind == "skipped_identical"
+
+
+def test_repo_root_gitattributes_forces_lf_for_text() -> None:
+    """The repo's .gitattributes must declare LF for the text types we ship.
+
+    Regression guard against silently dropping the file — without it, future
+    wheels could re-introduce CRLF into the package data and the symptom
+    would only surface on a fresh consumer install."""
+    repo_root = Path(__file__).resolve().parents[1]
+    ga = repo_root / ".gitattributes"
+    assert ga.is_file(), f"missing .gitattributes at {ga}"
+    body = ga.read_text(encoding="utf-8")
+    # Each of these extensions ships in the package data (slash commands,
+    # vendored docs, scaffold JSON). If any drift off, the install symptom
+    # comes back.
+    for ext in (".md", ".json", ".py", ".toml"):
+        # Match either `*<ext> text eol=lf` or equivalent.
+        pat_a = f"*{ext}"
+        assert pat_a in body and "eol=lf" in body, (
+            f"expected `*{ext}` line with `eol=lf` in .gitattributes"
+        )
