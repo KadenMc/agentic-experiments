@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-20
+
+### Added
+
+- **`aexp airgapped init` CLI command.** One-shot setup that writes the
+  `AEXP_RELAY_SSH_HOST` / `AEXP_RELAY_REMOTE_REPO` env keys into the
+  `aexp` MCP server's `env` block in `.mcp.json` (idempotent; `--force`
+  to overwrite a conflict), then prints the `~/.ssh/config` snippet to
+  paste in plus the remaining manual steps. Collapses the airgapped
+  setup to one command + paste a block + `ssh` once + `/mcp` reconnect.
+
+### Changed
+
+- **`aexp.airgapped` reworked from a login-node daemon to direct SSH
+  (BREAKING).** The relay now runs each whitelisted op as a per-call
+  `ssh <host> "cd <repo> && <git ...>"` from the user's local machine —
+  no daemon, no file queue, no heartbeat.
+  - `RelayClient` now takes `ssh_host` / `remote_repo` (or
+    `$AEXP_RELAY_SSH_HOST` / `$AEXP_RELAY_REMOTE_REPO`) instead of
+    `queue` / `cwd`.
+  - `request()` signature changed: `cwd` removed; `ssh_host`,
+    `remote_repo`, `approve` added. `validate_request()` now takes
+    `(op, args)` and no longer validates a `cwd`.
+  - Removed: the `Daemon` class, `ensure_queue`, `DEFAULT_QUEUE`,
+    `RelayCrashedError`, the `daemon` / `install-helpers` CLI verbs, and
+    the `AEXP_RELAY_CWD_NAMES` env var.
+  - `RelayDownError` now means "SSH could not reach the login node".
+  - Consent-required ops (`wandb_sync`) now require an explicit
+    `approve=True` / `--approve` instead of the file-based approve/reject.
+  - `ssh` is invoked with `-n` and `stdin=subprocess.DEVNULL` so it never
+    inherits the caller's stdin. Without this, the relay hangs when
+    called from a long-lived process whose stdin is a never-closing pipe
+    (an MCP server's stdio transport is exactly this): ssh stays alive
+    after the remote command finishes, waiting on a stdin EOF that never
+    comes.
+  - Timeout errors now surface ssh's captured partial stderr; the
+    `AEXP_RELAY_SSH_VERBOSE=1` env var adds `ssh -vv` for diagnosing
+    connection / auth hangs.
+  - New: an `aexp airgapped` CLI subcommand group, `mcp__aexp__airgapped_*`
+    MCP tools, a `check_connection()` helper, and a local-side audit log
+    at `~/.aexp/airgapped-relay.log`.
+
 ## [0.3.0]
 
 ### Release summary
@@ -109,8 +151,8 @@ brittleness session:
   `Path("notebooks/...").resolve()`).
 - **`aexp.airgapped`** — a file-queue bridge between a no-internet
   compute node and an internet-having login node sharing `$HOME`,
-  designed for secure HPC where SSH from the agent's runtime is
-  forbidden. A daemon under `tmux` on the login node services a closed
+  designed for secure HPC where the agent's runtime is network-isolated.
+  A daemon under `tmux` on the login node services a closed
   whitelist (`git_pull / push / fetch / status / rebase` auto-approved,
   `wandb_sync` consent-gated) via atomic-rename JSON requests on a
   shared filesystem. `RelayClient` exposes the git verbs as semantic
