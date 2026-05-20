@@ -131,7 +131,7 @@ The design bet: agents already know how to run experiments. What they need is a 
 | | |
 |---|---|
 | **Sandbox scaffolding** | `/aexp-new-sandbox` (or `aexp new-sandbox --slug ...`) creates `notebooks/_sandbox/<YYYY-MM-DD>_<slug>/` with a directional-experiment README template, a `helpers.py` skeleton, and (on first use) a sandbox-root README + `.gitignore` for large outputs. Sandbox subdirs are deliberately **outside** the H→E→F enforcement chain — agent-autonomous-write territory for free-form exploration that hasn't yet earned a tracked artifact. The `aexp.sandbox.setup_sandbox_notebook` first-cell helper closes the kernel-cwd-vs-repo-root trap on remote Jupyter setups. See [docs/sandbox.md](docs/sandbox.md). |
-| **Airgapped relay** (opt-in import) | `from aexp.airgapped import RelayClient` exposes a file-queue bridge between a no-internet compute node and an internet-having login node sharing `$HOME`. Designed for secure HPC sites where SSH from the agent's runtime is forbidden. The daemon (under `tmux` on the login node) services a closed whitelist — `git_pull / push / fetch / status / rebase` auto-approved, `wandb_sync` consent-gated — via atomic-rename JSON requests. `RelayClient` exposes the git verbs as semantic methods (`.pull()`, `.push(branch=...)`, etc.) so consumers don't hand-construct args. See [docs/airgapped.md](docs/airgapped.md). |
+| **Airgapped relay** (opt-in; **skip unless your compute machine has no internet**) | If `git pull` works where you run Jupyter, you don't need this — it's not imported at package init and zero-cost to ignore. Otherwise (network-isolated compute with a sibling node that has internet and shares `$HOME` — common at HPC sites, also some clinical / government / research-lab setups): `from aexp.airgapped import RelayClient` runs whitelisted git/wandb commands on that sibling node over SSH from the laptop, against the shared-`$HOME` repo. Closed whitelist (`git_pull / push / fetch / status / rebase` auto-approved, `wandb_sync` consent-gated). One-shot setup via `aexp airgapped init`. Three surfaces: Python `RelayClient`, `aexp airgapped` CLI, and `mcp__aexp__airgapped_*` MCP tools. See [docs/airgapped.md](docs/airgapped.md). |
 
 ---
 
@@ -246,7 +246,7 @@ So a session can end cleanly with a broken `supporting_runs` citation still pres
 | [docs/queue.md](docs/queue.md) | Queue, runner-script materialization, sp resolution, drift-proof provenance, cross-machine sync |
 | [docs/threads.md](docs/threads.md) | Threads (`T###`) — forward-looking research concerns broader than a hypothesis: lifecycle, linkage to H/E/F, required template sections |
 | [docs/sandbox.md](docs/sandbox.md) | Sandbox scaffolding — `notebooks/_sandbox/` layout, the `/aexp-new-sandbox` slash command, the notebook first-cell convention, promotion path to tracked artifacts |
-| [docs/airgapped.md](docs/airgapped.md) | Airgapped relay — file-queue bridge between a no-internet compute node and an internet-having login node sharing `$HOME`; daemon bootstrap, client API, whitelist, hardening |
+| [docs/airgapped.md](docs/airgapped.md) | Airgapped relay — per-call SSH bridge that runs whitelisted git/wandb commands on an internet-having login node; SSH/ControlMaster setup, client API, CLI, MCP tools, whitelist, consent |
 
 ---
 
@@ -266,7 +266,7 @@ src/aexp/
   schema.py             # pydantic + dataclass types
   mcp_server.py         # FastMCP server — optional [mcp] extra
   sandbox.py            # scaffold notebooks/_sandbox/<date>_<slug>/ + setup_sandbox_notebook
-  airgapped/            # opt-in: no-internet compute ↔ login-node relay (RelayClient, daemon)
+  airgapped/            # opt-in: SSH relay to a login node for airgapped compute (RelayClient)
   hooks/                # Claude Code hooks (session_start, enforce_hef_chain, kb_write_guard, stop_validate)
   slash_commands/       # /aexp-* templates
   trackers/             # TrackerAdapter ABC + noop + wandb adapters

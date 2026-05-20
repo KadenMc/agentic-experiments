@@ -16,6 +16,7 @@ from rich.console import Console
 from rich.table import Table
 
 from aexp import __version__
+from aexp.airgapped._relay import airgapped_app
 from aexp.artifacts import (
     ArtifactCreateError,
     close_thread,
@@ -1160,6 +1161,11 @@ queue_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(queue_app, name="queue")
+
+# The airgapped-relay subcommand group is defined in aexp.airgapped._relay
+# (alongside the request() core it drives). Register it here so it is
+# reachable as `aexp airgapped ...`; it is also `python -m aexp.airgapped`.
+app.add_typer(airgapped_app, name="airgapped")
 
 
 def _parse_sweep_or_exit(raw: str | None) -> dict:

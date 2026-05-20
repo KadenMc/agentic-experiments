@@ -1,18 +1,13 @@
 """Module entry point for ``python -m aexp.airgapped``.
 
-Delegates to :func:`aexp.airgapped._relay.main`, which parses the
-``daemon`` / ``status`` / ``install-helpers`` subcommands. Lives in
-``__main__.py`` (not ``__init__.py``) because Python's ``-m`` only
-finds a package entry point when the package contains a literal
-``__main__.py`` file.
+Delegates to :func:`aexp.airgapped._relay.main`, which runs the Typer
+``airgapped_app`` (``status`` / ``pull`` / ``push`` / ``fetch`` /
+``repo-status`` / ``rebase`` / ``wandb-sync``).
 
-The original upstream implementation at ``electricrag/dev/relay.py``
-worked under ``python -m electricrag.dev.relay`` because it was a
-single-file module — Python executes the file directly. Lifting the
-code into a package directory (``aexp.airgapped._relay``) broke that
-implicit entry point, which the laptop daemon smoke surfaced on
-first invocation. This file is the minimal fix; the actual logic
-stays in ``_relay.main``.
+Lives in ``__main__.py`` (not ``__init__.py``) because Python's ``-m``
+only finds a package entry point when the package contains a literal
+``__main__.py`` file. The same CLI is also reachable as the
+``aexp airgapped`` subcommand of the top-level CLI.
 """
 from __future__ import annotations
 

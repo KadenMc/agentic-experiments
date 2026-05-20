@@ -1,301 +1,482 @@
 # Airgapped relay (`aexp.airgapped`)
 
-A file-based bridge between a no-internet compute node and an
-internet-having login node — designed for secure HPC sites where the
-agent's runtime is network-isolated but a sibling node sharing
-``$HOME`` has outbound network.
+> ## Do you need this?
+>
+> **Only if** the machine running your Jupyter kernel / agent has
+> **no outbound internet**, but a sibling machine sharing `$HOME` *does*.
+> This is tooling for the airgapped-compute case — most commonly seen on
+> secure HPC clusters, but the pattern also shows up at regulated/clinical
+> sites, government/research labs, and any setup where one machine is
+> network-isolated by policy and a sibling reaches the internet.
+>
+> If `git pull` works from where you run Jupyter — your local machine,
+> cloud VM, a cluster whose compute nodes have internet — **stop
+> reading. You don't need this**, and importing `aexp.airgapped` would
+> be dead weight. The
+> module is not imported by `aexp` at package init for exactly this
+> reason; nothing in your workflow changes if you ignore it.
+>
+> If you *are* airgapped on compute but have a sibling node with
+> internet, read on.
 
-This is opt-in infrastructure. Most agentic-experiments users don't need
-it; the module is **not** imported by `aexp` at package init. Import
-`aexp.airgapped` only when your target compute is genuinely airgapped.
+`aexp.airgapped` is a thin SSH bridge that runs whitelisted git / wandb
+commands on the internet-having sibling node on behalf of the airgapped
+compute. The agent (and this module) live on your **local machine** (the
+machine you run Claude Code from); each relay op is one `ssh` call to
+the sibling node.
 
-## The problem this solves
+## Two topologies — which one are you?
 
-A common HPC topology, especially at clinical / government / regulated
-sites:
+### Topology A — Fully networked (most users, no relay needed)
 
-- **Compute nodes** have GPUs but no outbound internet.
-- **Login nodes** have internet but no GPUs.
-- The two nodes share the user's ``$HOME`` filesystem.
-- SSH from the agent's runtime to the cluster is forbidden by policy.
+```
+   YOUR LOCAL MACHINE
+   ──────────────────
+   • Has internet
+   • Runs Claude Code + aexp
+   • Runs (or talks to) a Jupyter kernel that itself has internet
+   • `git pull` / `git push` / `wandb sync` work directly
 
-The agent can run code on the compute node (via a Jupyter kernel reached
-through a port-forward, an MCP server bound to the kernel, or similar),
-but it cannot ``git pull``, ``git push``, or ``wandb sync`` because those
-need network. The relay closes that gap without requiring the agent to
-SSH anywhere.
+   You do not need `aexp.airgapped`. Don't import it. Stop here.
+```
+
+### Topology B — Airgapped compute (the case this module handles)
+
+```
+   YOUR LOCAL MACHINE              SIBLING NODE                  AIRGAPPED COMPUTE
+   (where Claude Code runs)        (login node on an HPC,        (GPU node,
+                                    jumpbox elsewhere)            locked-down workstation)
+   ──────────────────              ─────────────────             ──────────────────
+   • Has internet                  • Has internet                • No internet
+   • Runs Claude Code + aexp       • Runs no service of yours    • Runs your Jupyter / GPU work
+   • SSHes to the sibling node     • Just an SSH gateway         • Shares $HOME with sibling
+                                   • Shares $HOME with compute     so the same git clone is
+                                                                   visible to both
+```
+
+The compute side is where your actual work happens — but it can't reach
+the internet, so `git pull` / `git push` / `wandb sync` won't work
+there. The fix is to do those commands on the **sibling node** (which
+has internet) against the **same `$HOME` clone** (which the airgapped
+compute also sees). Your local machine reaches the sibling node by SSH;
+the sibling node runs the git command; both sides see the result
+because they share the filesystem.
 
 ## How it works
 
-A small daemon under ``tmux`` on the login node watches a queue
-directory (``~/.relay/`` by default) for request files. The client on
-the compute node drops a JSON request into ``inbox/`` via atomic
-rename; the daemon picks it up, runs the whitelisted command, and
-writes a JSON response into ``outbox/``. The client polls and returns
-the result.
+Each relay op is one `subprocess` call on your local machine:
 
 ```
-compute node                   shared $HOME                  login node
-(no internet)                   filesystem                    (internet)
-─────────────                  ──────────────                ─────────────
-                              ~/.relay/
-RelayClient                    inbox/  ─────►  Daemon (tmux)
-  .pull()       writes JSON                      runs `git pull --ff-only`
-  .push()                                        writes response
-  .status()                    outbox/ ◄────
-                  reads JSON
-returns RelayResult
+ssh <host> "cd <remote_repo> && <whitelisted git/wandb command>"
 ```
 
-Three pieces guarantee correctness on shared, possibly-laggy filesystems
-(networked $HOME):
+```
+   local machine (agent + aexp)                  sibling node (internet)
+   ─────────────────────────────                 ────────────────────────
+   RelayClient.pull()  ──►  ssh <host> "cd <repo> && git pull --ff-only"
+                       ◄──  stdout + exit code
+   returns RelayResult
 
-- **Atomic rename via ``.tmp`` sibling.** Writes go to ``<path>.tmp``
-  first, then ``Path.replace(<path>)``. POSIX-atomic; NTFS-atomic for
-  non-shared opens.
-- **Poll, not ``inotify``.** Networked-FS event mechanisms are
-  unreliable cross-node; ``aexp.airgapped`` polls at 250ms (client) /
-  500ms (daemon).
-- **Heartbeat file.** Daemon writes ``~/.relay/heartbeat`` every 5s; the
-  client raises ``RelayDownError`` if the heartbeat is missing or older
-  than 30s.
+                                  the sibling node shares $HOME with the
+                                  airgapped compute, so the repo it
+                                  operates on is the same clone the
+                                  compute-side work sees.
+```
 
-The whole protocol — including consent gating for sensitive ops,
-GC of old outbox / log files, stale-processing recovery, and
-operator-stop fingerprinting — has 56 tests in the upstream electricrag
-reference implementation; see "Provenance" at the bottom of this page.
+There is no queue, no daemon, no heartbeat — each call is a short,
+self-contained `ssh` round-trip. `ssh` is invoked with `BatchMode=yes`
+so it never blocks on a prompt (a missing `known_hosts` entry or a
+needed password fails fast instead of hanging an unattended agent), and
+with `ConnectTimeout` so an unreachable host fails quickly.
 
 ## Whitelist
 
 Only a fixed set of operations is allowed. The whitelist lives in
-:data:`aexp.airgapped.ALLOWED`:
+`aexp.airgapped.ALLOWED`:
 
-| Op           | Command (daemon-side)             | Consent | Per-call args              |
-| ------------ | --------------------------------- | ------- | -------------------------- |
-| `git_pull`   | `git pull --ff-only`              | auto    | none                       |
-| `git_push`   | `git push <args>`                 | auto    | `^[a-zA-Z0-9._/\-]+$` ×N   |
-| `git_fetch`  | `git fetch --all --prune`         | auto    | none                       |
-| `git_status` | `git status --porcelain=v2`       | auto    | none                       |
-| `git_rebase` | `git pull --rebase`               | auto    | none                       |
-| `wandb_sync` | `wandb sync --sync-all`           | **user** | none                      |
+| Op           | Command (login-node side)         | Consent  | Per-call args              |
+| ------------ | --------------------------------- | -------- | -------------------------- |
+| `git_pull`   | `git pull --ff-only`              | auto     | none                       |
+| `git_push`   | `git push <args>`                 | auto     | `^[a-zA-Z0-9._/\-]+$` ×N   |
+| `git_fetch`  | `git fetch --all --prune`         | auto     | none                       |
+| `git_status` | `git status --porcelain=v2`       | auto     | none                       |
+| `git_rebase` | `git pull --rebase`               | auto     | none                       |
+| `wandb_sync` | `wandb sync --sync-all`           | **user** | none                       |
 
-Auto-approved ops run immediately on the daemon. Consent-required ops
-park in ``pending/`` until the user explicitly approves them by running
-``relay-approve <uuid>`` (a small shell helper) on the login node —
-``relay-reject <uuid>`` is the other side of that gate.
+Auto-approved ops run immediately. The consent-required `wandb_sync`
+requires the caller to pass `approve=True` (`--approve` on the CLI) — see
+[Consent](#consent) below.
 
-The whitelist is closed by design. There is no escape hatch for
-arbitrary commands; **all** request shapes pass through
-:func:`aexp.airgapped.validate_request`, which enforces:
+The whitelist is closed by design. There is no escape hatch for arbitrary
+commands; every request passes through `aexp.airgapped.validate_request`,
+which enforces:
 
-- Op name is in ``ALLOWED``.
-- ``args`` is a list of strings; each arg matches the per-op regex if
-  one is set; max 32 args, max 256 chars per arg.
-- ``cwd`` is required (explicit on every call) and resolves under
-  ``$HOME``. An optional ``AEXP_RELAY_CWD_NAMES`` env var further
-  restricts the allowed top-level dir names under ``$HOME``.
+- The op name is in `ALLOWED`.
+- `args` is a list of strings; each arg matches the per-op regex if one is
+  set; max 32 args, max 256 chars per arg.
 
-If you need a new op, extend ``ALLOWED`` and add the appropriate regex
-— don't try to smuggle arbitrary commands through the existing entries.
+Every token of the remote command is then `shlex.quote`-d for the remote
+POSIX shell. The push-args regex already excludes shell metacharacters
+(no spaces, `;`, `|`, `$`, backticks, quotes); quoting is defense-in-depth
+and is what makes a `remote_repo` path containing spaces safe.
+
+If you need a new op, extend `ALLOWED` and add the appropriate regex —
+don't try to smuggle arbitrary commands through the existing entries.
+
+## Configuration
+
+Two values must be set — the SSH host and the remote repo path:
+
+| Setting       | Constructor arg | Env var                  |
+| ------------- | --------------- | ------------------------ |
+| SSH host      | `ssh_host`      | `AEXP_RELAY_SSH_HOST`    |
+| Remote repo   | `remote_repo`   | `AEXP_RELAY_REMOTE_REPO` |
+| Audit log     | `audit_log`     | `AEXP_RELAY_AUDIT_LOG`   |
+
+`ssh_host` should name a **`~/.ssh/config` Host alias**, not a bare
+hostname — that way all of the auth detail (identity file, user, port,
+MFA, connection multiplexing) lives in your SSH config, and this module
+stays a thin wrapper. `remote_repo` is the absolute path of the git clone
+on the login node (e.g. `~/electricrag`).
+
+When both env vars are set, `RelayClient()` needs no arguments.
 
 ## Client API
 
-The recommended entry point is :class:`aexp.airgapped.RelayClient`:
+The recommended entry point is `aexp.airgapped.RelayClient`:
 
 ```python
 from aexp.airgapped import RelayClient
 
-relay = RelayClient()        # cwd=Path.cwd(), queue=~/.relay
+relay = RelayClient(ssh_host="cluster-login", remote_repo="~/electricrag")
 r = relay.pull()
 print(r.returncode, r.stdout)
 ```
-
-The client takes three optional constructor arguments:
-
-| Param            | Default          | Notes                                          |
-| ---------------- | ---------------- | ---------------------------------------------- |
-| `queue`          | `~/.relay`       | Override if the daemon was launched elsewhere. |
-| `cwd`            | `Path.cwd()`     | Daemon `cd`s here before running the command.  |
-| `default_timeout`| `60.0` s         | Per-call timeout for auto-approved ops.        |
 
 Five git verbs are exposed as dedicated methods, plus a generic escape
 hatch:
 
 ```python
-relay.pull()                            # git pull --ff-only
-relay.fetch()                           # git fetch --all --prune
-relay.status()                          # git status --porcelain=v2
-relay.rebase()                          # git pull --rebase
-relay.push()                            # git push origin HEAD  (designed-out F7/F8)
-relay.push(branch="feature/x")          # git push origin feature/x
-relay.push(branch="x", remote="fork")   # git push fork x
-relay.request("wandb_sync", timeout=900) # consent-required op
+relay.pull()                             # git pull --ff-only
+relay.fetch()                            # git fetch --all --prune
+relay.status()                           # git status --porcelain=v2
+relay.rebase()                           # git pull --rebase
+relay.push()                             # git push origin HEAD
+relay.push(branch="feature/x")           # git push origin feature/x
+relay.push(branch="x", remote="fork")    # git push fork x
+relay.request("wandb_sync", approve=True, timeout=900)   # consent-required
 ```
 
-Why dedicated methods for git? The raw ``request("git_push")`` call has
-two arg-ordering frictions documented as F7/F8 in the electricrag
-session that motivated this port:
+Why dedicated methods for git? The raw `request("git_push")` call has two
+arg-ordering frictions (documented as F7/F8):
 
-- **F7**: ``request("git_push")`` raises because the whitelist requires
-  at least one arg (the regex is non-empty).
-- **F8**: ``request("git_push", args=["main"])`` is interpreted as
-  ``git push main`` where ``main`` is a *remote* name — not a branch.
+- **F7**: `request("git_push")` raises because the whitelist requires at
+  least one arg.
+- **F8**: `request("git_push", args=["main"])` is interpreted as
+  `git push main` where `main` is a *remote* name — not a branch.
 
-``RelayClient.push()`` builds the args correctly: the default is
-``["origin", "HEAD"]``, which pushes the currently checked-out branch to
-the matching upstream. Override either component with the keyword
+`RelayClient.push()` builds the args correctly: the default is
+`["origin", "HEAD"]`. Override either component with the keyword
 arguments.
 
-For non-git ops, use the generic ``.request()`` method (it just calls
-the underlying :func:`aexp.airgapped.request`):
-
-```python
-relay.request("wandb_sync", timeout=900.0)
-```
-
-Or import the raw function if you want fully-manual control:
+For fully-manual control, import the low-level function:
 
 ```python
 from aexp.airgapped import request
 
 result = request(
     "git_status",
-    queue=Path("~/my-relay").expanduser(),
-    cwd=str(Path.cwd()),
+    ssh_host="cluster-login",
+    remote_repo="~/electricrag",
     timeout=30.0,
 )
 ```
 
+## CLI
+
+The same surface is a subcommand group, reachable as `aexp airgapped ...`
+(or `python -m aexp.airgapped ...`):
+
+```bash
+aexp airgapped status        # ssh <host> true — connectivity check
+aexp airgapped pull
+aexp airgapped fetch
+aexp airgapped rebase
+aexp airgapped repo-status   # git status --porcelain=v2
+aexp airgapped push --branch feature/x --remote origin
+aexp airgapped wandb-sync --approve
+```
+
+Every command accepts `--ssh-host`, `--remote-repo`, `--timeout`,
+`--connect-timeout`, and `--audit-log` (all optional; they fall back to
+the env vars). The CLI exits with the remote command's return code.
+
+## MCP tools
+
+When the `aexp` MCP server is running (it runs on your local machine —
+the same place the SSH originates), the relay is also exposed as typed
+tools:
+
+```
+mcp__aexp__airgapped_status
+mcp__aexp__airgapped_pull
+mcp__aexp__airgapped_fetch
+mcp__aexp__airgapped_repo_status
+mcp__aexp__airgapped_rebase
+mcp__aexp__airgapped_push
+mcp__aexp__airgapped_wandb_sync
+```
+
+Each returns a typed dict. `ok` reports whether the SSH round-trip
+succeeded — it is `True` even when `returncode` is non-zero (git ran and
+reported a result, e.g. a merge conflict). `ok` is `False` only for
+transport / validation / consent failures, with `code` naming the error.
+Set `ssh_host` / `remote_repo` in the `.mcp.json` `env` block.
+
 ## Result + error types
 
-A successful call returns a :class:`aexp.airgapped.RelayResult`:
+A completed call returns a `RelayResult`:
 
 ```python
 @dataclass
 class RelayResult:
-    request_id: str       # uuid; matches the inbox/outbox/log file stem
+    request_id: str       # uuid; also the audit-log correlator
     op: str               # e.g. "git_pull"
-    returncode: int       # subprocess exit code; non-zero is NOT an exception
-    stdout: str           # merged stdout+stderr from the daemon-side run
-    duration_s: float     # wall-clock time on the daemon side
+    returncode: int       # remote command's exit code; non-zero is NOT an exception
+    stdout: str           # merged stdout+stderr from the login-node run
+    duration_s: float     # wall-clock time of the ssh call
 ```
 
-Non-zero ``returncode`` is *not* an exception. The daemon ran the
-command and got a result; the client surfaces it as-is so the caller can
-decide whether (e.g.) a merge conflict is fatal. Inspect ``r.stdout``
-for what git actually said.
+A non-zero `returncode` is *not* an exception — the relay round-trip
+succeeded and the client surfaces git's result as-is. Inspect `r.stdout`.
 
-Protocol-level failures raise subclasses of
-:class:`aexp.airgapped.RelayError`:
+> **`ssh` failure vs git failure.** `ssh(1)` reserves exit code **255**
+> for its *own* transport-layer errors; on a successful connection it
+> returns the remote command's exit code instead. So a 255 unambiguously
+> means the local→sibling SSH itself failed and is raised as
+> `RelayDownError`. Any other non-zero code is git's own result (e.g. the
+> login node's git failing to reach GitHub exits 128) and is returned in
+> the `RelayResult`, *not* raised.
+
+Protocol-level failures raise subclasses of `RelayError`:
 
 | Exception                | Meaning                                                       |
 | ------------------------ | ------------------------------------------------------------- |
-| `RelayDownError`         | Daemon heartbeat missing or stale (>30s).                     |
-| `RelayValidationError`   | Daemon rejected the request (bad op / regex / args / cwd).    |
-| `RelayRejectedError`     | User touched `rejected/<uuid>` for a consent-required op.     |
-| `RelayTimeoutError`      | Client's per-call timeout elapsed before a response arrived.  |
-| `RelayCrashedError`      | Daemon died mid-execution; outbox synthesized on next start.  |
+| `RelayDownError`         | SSH could not reach the login node (unreachable / auth / host key / missing `ssh`). |
+| `RelayValidationError`   | Bad op / regex / args, or `ssh_host`/`remote_repo` not set.   |
+| `RelayRejectedError`     | A consent-required op was called without `approve=True`.      |
+| `RelayTimeoutError`      | The command did not finish within `timeout`.                  |
 
-## Daemon bootstrap (login node)
+## MFA and connection reuse
 
-On the login node, in a one-time setup:
+SSH to a secure login node usually requires MFA. An unattended agent
+cannot answer an MFA challenge on every call, so use SSH **connection
+multiplexing** — authenticate once per session, reuse the connection:
+
+```
+# ~/.ssh/config
+Host cluster-login
+    HostName login.cluster.example
+    User myuser
+    ControlMaster auto
+    ControlPath ~/.ssh/cm-%r@%h:%p
+    ControlPersist 8h
+```
+
+Open one master connection interactively at the start of a session
+(`ssh cluster-login`, complete the MFA), and every subsequent relay call
+multiplexes over it with no re-auth.
+
+> **Windows caveat.** Windows OpenSSH has historically had incomplete
+> `ControlMaster` support. If `ssh -O check cluster-login` does not work
+> on your build, the fallback is simply to **keep one interactive `ssh`
+> session open** in another terminal for the duration of your work —
+> while it is alive, the relay's `ssh` calls succeed without prompting.
+> (Running the relay from WSL, which has full OpenSSH, also works.)
+
+If a relay call hangs and then raises `RelayTimeoutError`, the usual
+cause is no live master connection plus an MFA prompt the agent can't
+see — open the master connection and retry.
+
+## Consent
+
+`wandb_sync` publishes run data to W&B, so it is gated: `request()` /
+`RelayClient.request()` require `approve=True`, the CLI requires
+`--approve`, and the MCP tool requires `approve=True`. Without it the
+call is rejected (`RelayRejectedError`) before any SSH happens.
+
+This is a **soft gate**: the caller technically controls the flag, so an
+autonomous agent *could* set it. Treat it as a "confirm with the user
+first" checkpoint rather than a hard barrier. The compensating control
+is the **audit log**.
+
+## Troubleshooting
+
+Symptoms-and-fixes for the failure modes that catch people most often:
+
+### `Permission denied (publickey,...)` from aexp, but `ssh <alias>` works for me interactively
+
+**Almost always: your SSH key has a passphrase.** Your interactive shell silently uses `ssh-agent` to provide the unlocked key, but aexp runs `ssh -o BatchMode=yes` which can't prompt for a passphrase and can't reliably reach `ssh-agent` from a child subprocess. The fix is to strip the passphrase:
 
 ```bash
-# 1. Install the package on the login node too (the daemon imports
-#    `aexp.airgapped._relay`).
-pip install agentic-experiments
-
-# 2. Optionally install the small approve/reject shell helpers into
-#    ~/.relay/_bin/ and add that to PATH.
-python -m aexp.airgapped install-helpers
-export PATH="$HOME/.relay/_bin:$PATH"      # add to .bashrc
-
-# 3. Launch the daemon under tmux (survives logout; restarts trivially).
-tmux new -d -s relay 'python -m aexp.airgapped daemon --log ~/.relay/daemon.log'
-
-# 4. Verify it's healthy.
-python -m aexp.airgapped status
-# heartbeat: fresh (1.2s old, pid=12345)
-# inbox: 0  processing: 0  pending: 0
+ssh-keygen -p -f ~/.ssh/id_ed25519
+# Enter your current passphrase, then press Enter twice for an empty new one.
 ```
 
-The daemon is single-process, single-threaded, and idempotent under
-restart — kill it and re-launch any time. Pending consent requests
-survive a daemon restart; in-flight processing is recovered on the next
-startup via a sweep of ``processing/``.
+For an HPC research-cluster key used for automation, an empty passphrase is the standard practice. The key file's security comes from OS-level perms on your home directory, not from the passphrase.
 
-> **Subcommands.** ``python -m aexp.airgapped`` exposes `daemon`,
-> `install-helpers`, and `status`. They all accept a shared
-> ``--queue PATH`` (default ``~/.relay``). The daemon also accepts
-> ``--log PATH`` for an optional file handler.
+(If you genuinely need a passphrase for compliance reasons, you'd have to ensure `ssh-agent` is running and has the key loaded — `ssh-add ~/.ssh/id_ed25519` — in *the same environment* aexp runs from. That's fragile across subprocess boundaries and not recommended unless required.)
 
-## Cwd allowlist (optional hardening)
+### aexp's relay calls time out after ~10–60s instead of failing fast
 
-The default policy is "any subdir of ``$HOME`` is allowed." If you want
-to lock the daemon down to a fixed set of project directories, set the
-``AEXP_RELAY_CWD_NAMES`` env var **on the daemon process**:
+Same root cause as above in disguise: ssh is hanging waiting for a passphrase prompt it can't display in a non-TTY subprocess. Strip the passphrase.
+
+### `Host key verification failed`
+
+You haven't seeded `known_hosts` for this host yet. Connect once interactively to accept the host key:
 
 ```bash
-AEXP_RELAY_CWD_NAMES="electricrag,myotherrepo" \
-    tmux new -d -s relay 'python -m aexp.airgapped daemon'
+ssh <alias>
+# Type "yes" when asked about the host key fingerprint, then exit
 ```
 
-A request whose ``cwd`` doesn't resolve to a top-level dir matching one
-of those names is rejected with ``RelayValidationError``. The check
-runs in addition to the always-on under-``$HOME`` enforcement.
+### `ssh: connect to host ... port 22: Connection refused` or `Could not resolve hostname`
 
-## End-to-end: agent-on-compute pulls latest, runs, pushes results
+Network/DNS issue. Check VPN is up, the cluster hostname is reachable (`ping`), and your `~/.ssh/config` `HostName` matches a real address.
 
-```python
-from pathlib import Path
-from aexp.airgapped import RelayClient
+### `RelayValidationError: ssh_host is required` from CLI / Python API
 
-# Compute-node Jupyter cell — kernel has no internet.
-relay = RelayClient(cwd=Path("~/electricrag").expanduser())
+You didn't pass `--ssh-host` and `$AEXP_RELAY_SSH_HOST` isn't set in this shell. Either pass `--ssh-host <alias>` explicitly, or export the env var (`$env:AEXP_RELAY_SSH_HOST = "h4h"` in PowerShell). The MCP tools read this from the `.mcp.json` `env` block instead — different code path.
 
-# 1. Sync latest code from the laptop / GitHub.
-r = relay.pull()
-assert r.returncode == 0, r.stdout
+### MCP tools return `{ok: false, code: "RelayValidationError"}`
 
-# 2. Run the experiment locally (this part doesn't need the relay).
-#    ... training code ...
+The `.mcp.json` `env` block for the `aexp` server doesn't have `AEXP_RELAY_SSH_HOST` and `AEXP_RELAY_REMOTE_REPO`. Run `aexp airgapped init --ssh-host <alias> --remote-repo <path>` to wire them in, then `/mcp` reconnect.
 
-# 3. Commit results to the local clone (still no internet needed).
-import subprocess
-subprocess.run(["git", "add", "outputs/"], check=True, cwd=relay.cwd)
-subprocess.run(["git", "commit", "-m", "results"], check=True, cwd=relay.cwd)
+### New tools (`airgapped_*`) don't appear in the MCP tool list
 
-# 4. Push back through the daemon.
-r = relay.push()  # → git push origin HEAD
-assert r.returncode == 0, r.stdout
+Your MCP server hasn't been restarted since you upgraded aexp. `/mcp` reconnect (or restart Claude Code).
 
-# 5. Optional: sync wandb offline runs (consent-required).
-#    The user must `relay-approve <uuid>` on the login node within
-#    `timeout` seconds, or the call raises RelayTimeoutError.
-r = relay.request("wandb_sync", timeout=900.0)
+## Audit log
+
+Every relay op appends one line to a local-side log (default
+`~/.aexp/airgapped-relay.log`):
+
+```
+2026-05-19T14:03:11+00:00 id=4f3a9c1d op=git_pull args=[] rc=0 dur=1.24s
 ```
 
-## Provenance
+It records the op, args, return code, and duration for every call —
+including failed and consent-gated ones — so there is a complete record
+of what the relay did. A failed audit write never breaks a relay call.
 
-The reference implementation lives upstream in
-[electricrag/dev/relay.py](https://github.com/KadenMc/electricrag) (preserved alongside
-the agentic-experiments port) with a 56-test suite covering daemon
-lifecycle, consent state machine, heartbeat staleness recovery, GC of
-old outbox / log files, and stale-processing recovery. The aexp port's
-``tests/test_airgapped.py`` is a port-level smoke (30 tests) over the
-public surface — for the exhaustive behavioral spec, see the upstream
-suite.
+## Setup
 
-Two specific design decisions the upstream session crystallized that the
-aexp version preserves verbatim:
+> **The sibling node needs almost nothing.** The relay only requires
+> `git` to be installed there (it always is on any login node / jumpbox).
+> The consent-gated `wandb_sync` op additionally needs `wandb` on the
+> sibling node's `PATH` when invoked over SSH. **No Python env, no
+> `aexp` install, no daemon, nothing aexp-specific runs on the sibling
+> side.** The relay just ssh-runs git, against a clone you keep on the
+> shared `$HOME`.
 
-- **Closed whitelist + per-op regex.** No "advanced mode," no escape
-  hatch, no string interpolation that could leak shell metacharacters.
-  The test ``test_validate_shell_injection_in_push_arg_raises`` pins this
-  invariant.
-- **Explicit `cwd` per call.** The earliest electricrag implementation
-  defaulted ``cwd`` to a hard-coded ``~/electricrag``; the port removes
-  that default. ``RelayClient`` fills in ``Path.cwd()`` at construction
-  time so callers don't usually notice, but the underlying
-  ``validate_request`` requires the field — there is no project-specific
-  default baked into the surface.
+One command + a few manual steps. Assuming you've already run
+`aexp install --dev` in your consumer repo (so a `.mcp.json` exists):
+
+```bash
+aexp airgapped init --ssh-host h4h --remote-repo /cluster/home/USER/myrepo
+```
+
+This:
+
+1. Writes `AEXP_RELAY_SSH_HOST` and `AEXP_RELAY_REMOTE_REPO` into the
+   `aexp` MCP server's `env` block in `.mcp.json` (idempotent; safe to
+   re-run; pass `--force` to overwrite a different existing value).
+2. Prints the `~/.ssh/config` snippet to paste in (auto-editing your
+   SSH config is intentionally avoided — your existing host setup is
+   personal).
+
+After running it, do the two manual steps it prints:
+
+| # | What | Why |
+|---|------|-----|
+| 1 | Paste the `Host <alias>` block into `~/.ssh/config` | Names the login node, configures `ControlMaster` for MFA reuse. |
+| 2 | `ssh <alias>` once interactively | Seed `known_hosts`, complete MFA. Leaves the `ControlMaster` socket alive for `ControlPersist` (default 8h); subsequent relay calls multiplex over it with no re-auth. |
+| 3 | `/mcp` reconnect in Claude Code | Restarts the `aexp` MCP server so the new `airgapped_*` tools register and the env block is read. |
+| 4 | `aexp airgapped status` | Verifies SSH connectivity end-to-end. |
+
+If you don't use the MCP tools, you can skip the `.mcp.json` edit and
+just set the two env vars in your shell profile; the CLI and Python API
+read them the same way.
+
+### SSH authentication (passwordless setup)
+
+The relay runs `ssh` non-interactively (`BatchMode=yes`), so a password
+prompt can't be answered — `ssh <alias> true` must succeed **silently**
+for the relay to work. If `ssh <alias>` currently prompts you for a
+password, set up SSH key authentication first. One-time per cluster:
+
+**1. Check whether you already have an SSH key.**
+
+```powershell
+# Windows PowerShell
+ls ~/.ssh/*.pub
+```
+```bash
+# Linux / macOS
+ls ~/.ssh/*.pub
+```
+
+If you see `id_ed25519.pub` (or `id_rsa.pub`), you already have a key —
+skip to step 3.
+
+**2. Generate a key if you don't have one.**
+
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519
+```
+
+> ⚠️ **Use an empty passphrase.** When prompted, press Enter twice.
+> The relay invokes ssh with `BatchMode=yes` so no prompts can be
+> answered — a passphrase-protected key will fail with
+> `Permission denied (publickey,...)` from aexp even though it works
+> in your interactive shell (where `ssh-agent` is caching the unlocked
+> key). If you already created a key with a passphrase, strip it:
+> `ssh-keygen -p -f ~/.ssh/id_ed25519` (enter old passphrase, then
+> press Enter twice for an empty new one).
+
+**3. Copy your public key to the cluster's `~/.ssh/authorized_keys`.**
+
+On Linux / macOS:
+
+```bash
+ssh-copy-id <alias>
+```
+
+On Windows (no `ssh-copy-id` in OpenSSH for Windows), use the
+equivalent one-liner:
+
+```powershell
+Get-Content ~/.ssh/id_ed25519.pub | ssh <alias> "umask 077; mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys"
+```
+
+You'll be prompted for the cluster password **one last time** — you're
+authenticating in order to append the key. After this, the cluster
+trusts the key for future logins.
+
+**4. Verify silent login.**
+
+```bash
+ssh <alias> hostname
+```
+
+This should print the cluster's hostname with **no password prompt**. If
+it does, key auth is working and the relay is good to go.
+
+> **A note on Windows + ControlMaster.** Linux/macOS users sometimes set
+> up `ControlMaster` so an authenticated SSH connection is reused across
+> commands. Windows OpenSSH's `ControlMaster` support is incomplete and
+> often errors out with `getsockname failed: Not a socket`. With
+> passwordless key auth, you don't need `ControlMaster` at all — every
+> relay call does a quick connect → run → disconnect under a second.
+> Just don't include `ControlMaster` lines in your `~/.ssh/config` on
+> Windows.

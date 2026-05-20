@@ -1002,6 +1002,176 @@ def jupyter_parse_introspection(raw_output: str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Tools: airgapped relay (airgapped_status / _pull / _push / ...)
+# ---------------------------------------------------------------------------
+#
+# The aexp MCP server runs on the laptop -- which is exactly where the
+# airgapped relay's SSH transport originates. These tools run whitelisted
+# git/wandb commands on an internet-having HPC login node over SSH, on
+# behalf of an agent whose compute node is network-isolated.
+#
+# ssh_host / remote_repo default to $AEXP_RELAY_SSH_HOST /
+# $AEXP_RELAY_REMOTE_REPO (set them in the .mcp.json `env` block); the
+# per-call params override the env for one call.
+
+
+def _airgapped_call(
+    op: str,
+    *,
+    args: list[str] | None = None,
+    approve: bool = False,
+    ssh_host: str | None = None,
+    remote_repo: str | None = None,
+    timeout: float | None = None,
+) -> dict[str, Any]:
+    """Run one relay op; return a typed dict. Never raises.
+
+    ``ok`` reports whether the SSH round-trip succeeded -- it is True even
+    when ``returncode`` is non-zero (git ran and reported a result, e.g. a
+    merge conflict). ``ok`` is False only for transport/validation/consent
+    failures, with ``code`` naming the RelayError subclass.
+    """
+    from aexp.airgapped import RelayError, request
+
+    try:
+        result = request(
+            op,
+            args,
+            ssh_host=ssh_host,
+            remote_repo=remote_repo,
+            approve=approve,
+            timeout=timeout,
+        )
+    except RelayError as exc:
+        return {
+            "ok": False,
+            "op": op,
+            "error": str(exc),
+            "code": type(exc).__name__,
+        }
+    return {
+        "ok": True,
+        "op": op,
+        "returncode": result.returncode,
+        "stdout": result.stdout,
+        "duration_s": result.duration_s,
+        "request_id": result.request_id,
+    }
+
+
+@mcp.tool()
+def airgapped_status(ssh_host: str | None = None) -> dict[str, Any]:
+    """Check the airgapped relay's login node is reachable over SSH.
+
+    Runs ``ssh <host> true``. Returns ``{ok, ssh_host}`` on success or
+    ``{ok: False, error, code}`` if the login node is unreachable.
+    """
+    from aexp.airgapped import RelayError, check_connection
+
+    try:
+        host = check_connection(ssh_host=ssh_host)
+    except RelayError as exc:
+        return {"ok": False, "error": str(exc), "code": type(exc).__name__}
+    return {"ok": True, "ssh_host": host}
+
+
+@mcp.tool()
+def airgapped_pull(
+    ssh_host: str | None = None,
+    remote_repo: str | None = None,
+    timeout: float | None = None,
+) -> dict[str, Any]:
+    """Run ``git pull --ff-only`` on the login node's repo over SSH."""
+    return _airgapped_call(
+        "git_pull", ssh_host=ssh_host, remote_repo=remote_repo, timeout=timeout
+    )
+
+
+@mcp.tool()
+def airgapped_fetch(
+    ssh_host: str | None = None,
+    remote_repo: str | None = None,
+    timeout: float | None = None,
+) -> dict[str, Any]:
+    """Run ``git fetch --all --prune`` on the login node's repo over SSH."""
+    return _airgapped_call(
+        "git_fetch", ssh_host=ssh_host, remote_repo=remote_repo, timeout=timeout
+    )
+
+
+@mcp.tool()
+def airgapped_repo_status(
+    ssh_host: str | None = None,
+    remote_repo: str | None = None,
+    timeout: float | None = None,
+) -> dict[str, Any]:
+    """Run ``git status --porcelain=v2`` on the login node's repo over SSH."""
+    return _airgapped_call(
+        "git_status", ssh_host=ssh_host, remote_repo=remote_repo, timeout=timeout
+    )
+
+
+@mcp.tool()
+def airgapped_rebase(
+    ssh_host: str | None = None,
+    remote_repo: str | None = None,
+    timeout: float | None = None,
+) -> dict[str, Any]:
+    """Run ``git pull --rebase`` on the login node's repo over SSH.
+
+    Recovers a no-conflict divergence; on a real conflict the rebase
+    aborts and ``returncode`` is non-zero (inspect ``stdout``).
+    """
+    return _airgapped_call(
+        "git_rebase", ssh_host=ssh_host, remote_repo=remote_repo, timeout=timeout
+    )
+
+
+@mcp.tool()
+def airgapped_push(
+    branch: str = "HEAD",
+    remote: str = "origin",
+    ssh_host: str | None = None,
+    remote_repo: str | None = None,
+    timeout: float | None = None,
+) -> dict[str, Any]:
+    """Run ``git push <remote> <branch>`` on the login node over SSH.
+
+    Defaults to ``git push origin HEAD``.
+    """
+    return _airgapped_call(
+        "git_push",
+        args=[remote, branch],
+        ssh_host=ssh_host,
+        remote_repo=remote_repo,
+        timeout=timeout,
+    )
+
+
+@mcp.tool()
+def airgapped_wandb_sync(
+    approve: bool = False,
+    ssh_host: str | None = None,
+    remote_repo: str | None = None,
+    timeout: float | None = None,
+) -> dict[str, Any]:
+    """Run ``wandb sync --sync-all`` on the login node over SSH.
+
+    Consent-required: this publishes run data to W&B. ``approve`` must be
+    True, and you should confirm with the user before setting it. Called
+    without ``approve=True`` it returns ``{ok: False, code:
+    "RelayRejectedError"}`` and runs nothing.
+    """
+    return _airgapped_call(
+        "wandb_sync",
+        approve=approve,
+        ssh_host=ssh_host,
+        remote_repo=remote_repo,
+        timeout=timeout,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 

@@ -1,76 +1,53 @@
-"""File-based bridge between a no-internet compute node and an internet-having login node.
+"""Direct-SSH bridge to an internet-having sibling node.
 
-Designed for **airgapped compute environments** where the agent's runtime
-has no internet access but a sibling node (sharing the user's home
-filesystem) does — the canonical case being secure HPC sites where
-compute nodes are network-isolated for compliance but login nodes
-have outbound internet.
+Runs whitelisted git / wandb commands on a sibling node (login node on
+an HPC, jumpbox elsewhere) on behalf of an agent whose compute machine
+is network-isolated. The agent (and this module) run on the user's
+local machine (where Claude Code runs); that local machine reaches the
+sibling node by SSH; the sibling node has internet and shares ``$HOME``
+with the airgapped compute, so the same git clone is visible to both.
 
-The cluster's compute node (where Jupyter runs and the agent operates) has
-no internet access; only the login node does. They share the user's home
-directory but not the project directory. SSH from agent to cluster is
-forbidden by institutional policy. This module provides a small bridge:
+A per-call ``ssh`` invocation -- no daemon, no queue, no heartbeat.
 
-- A **daemon** (``relay daemon``) runs under tmux on the login node,
-  polling ``~/.relay/inbox/`` for request files dropped by the agent and
-  executing whitelisted commands (git operations, wandb sync) on its
-  behalf. Output streams to a per-request log; a final response file in
-  ``outbox/`` signals completion.
-- A **client** (``relay.request``) is importable from notebook cells on
-  the compute node. It writes a request to ``inbox/`` via atomic rename,
-  polls ``outbox/`` until the response appears, and returns a
-  ``RelayResult``.
-
-Atomicity uses ``Path.replace`` after writing to a sibling ``.tmp`` file
-(POSIX atomic, NTFS-atomic for non-shared opens). Networked-FS event
-mechanisms like ``inotify`` are unreliable cross-node, so the design is
-poll-based.
+Transport
+---------
+:func:`request` runs ``ssh <host> "cd <repo> && <whitelisted argv>"`` via
+``subprocess`` and returns a :class:`RelayResult`.
 
 Whitelist
 ---------
+Auto-approved: ``git_pull``, ``git_push``, ``git_fetch``, ``git_status``,
+``git_rebase``. Consent-required (caller must pass ``approve=True``):
+``wandb_sync``.
 
-Auto-approved (no consent prompt):
+Security
+--------
+- Closed whitelist; per-op ``args_regex`` excludes shell metacharacters.
+- Every token of the remote command is ``shlex.quote``-d for the remote
+  POSIX shell.
+- ``ssh`` runs with ``BatchMode=yes`` so it never blocks on a prompt
+  (host-key or password): a missing ``known_hosts`` entry fails fast
+  rather than hanging an unattended agent.
 
-- ``git_pull``    -> ``git pull --ff-only``
-- ``git_push``    -> ``git push [<refspec>]``
-- ``git_fetch``   -> ``git fetch --all --prune``
-- ``git_status``  -> ``git status --porcelain=v2``
-- ``git_rebase``  -> ``git pull --rebase``
-  (recovers from no-conflict divergence; bails on conflict)
-
-Consent-required (requires explicit ``relay-approve <uuid>`` from the user):
-
-- ``wandb_sync``  -> ``wandb sync --sync-all``
-
-See ``electricrag/dev/README.md`` for the full setup and protocol.
-
-Usage
------
-
-Client (notebook cell on compute node)::
-
-    from electricrag.dev.relay import request
-    result = request("git_pull")
-    print(result.stdout)
-
-Daemon (login node, run once under tmux)::
-
-    tmux new -d -s relay 'cd ~/electricrag && python -m electricrag.dev.relay daemon'
+See ``docs/airgapped.md`` for setup (the ``~/.ssh/config`` host alias,
+ControlMaster for MFA reuse) and the full protocol.
 """
 from __future__ import annotations
 
-import argparse
 import json
 import logging
 import os
 import re
+import shlex
 import subprocess
-import sys
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
+
+import typer
 
 from aexp.utils.atomic import atomic_write
 
@@ -80,27 +57,26 @@ log = logging.getLogger(__name__)
 # Constants
 # ============================================================================
 
-DEFAULT_QUEUE = Path.home() / ".relay"
-
-HEARTBEAT_INTERVAL_S = 5.0          # daemon writes heartbeat every N seconds
-HEARTBEAT_MAX_AGE_S = 30.0          # client treats older heartbeat as down
-GC_INTERVAL_S = 60.0                # daemon GC sweep cadence
-GC_MAX_AGE_S = 7 * 24 * 3600        # purge outbox/log/approved/rejected older than this
-PENDING_TTL_S = 24 * 3600           # daemon-side timeout for un-decided consent
-
-DAEMON_POLL_INTERVAL_S = 0.5
-CLIENT_POLL_INTERVAL_S = 0.25
-
 DEFAULT_CLIENT_TIMEOUT_S = 60.0          # auto-approved ops
-DEFAULT_CONSENT_TIMEOUT_S = 600.0        # consent-required ops (10 min)
+DEFAULT_CONSENT_TIMEOUT_S = 600.0        # consent-required ops (wandb sync is slow)
+DEFAULT_CONNECT_TIMEOUT_S = 10.0         # ssh -o ConnectTimeout
+
+ENV_SSH_HOST = "AEXP_RELAY_SSH_HOST"
+ENV_REMOTE_REPO = "AEXP_RELAY_REMOTE_REPO"
+ENV_AUDIT_LOG = "AEXP_RELAY_AUDIT_LOG"
+ENV_SSH_VERBOSE = "AEXP_RELAY_SSH_VERBOSE"  # if truthy, pass -vv to ssh (diagnostic)
+
+DEFAULT_AUDIT_LOG = Path.home() / ".aexp" / "airgapped-relay.log"
 
 MAX_ARG_LENGTH = 256
 MAX_ARGS = 32
 
-QUEUE_SUBDIRS = (
-    "inbox", "pending", "processing", "outbox", "log",
-    "stale", "approved", "rejected", "_bin",
-)
+# ssh(1) reserves exit code 255 for its own transport-layer failures
+# (connection refused, host unresolved/unreachable, auth or host-key
+# failure, connect timeout). On a *successful* connection it returns the
+# remote command's exit code instead -- so 255 unambiguously means the
+# local->sibling SSH itself failed, not git.
+SSH_TRANSPORT_RC = 255
 
 # ============================================================================
 # Whitelist
@@ -116,12 +92,12 @@ class OpSpec:
     argv : list of str
         Base argv prepended to any per-request ``args``.
     consent : bool
-        If True, requires the user to touch ``approved/<uuid>`` before
-        execution.
+        If True, the op is outward-facing and the caller must pass
+        ``approve=True`` (``--approve`` on the CLI) to authorize it.
+        Without that, :func:`request` raises before any SSH call.
     args_regex : str or None
         If set, every per-request arg must ``re.fullmatch`` this regex.
-        If None, no per-request args are accepted (the request's
-        ``args`` field must be empty).
+        If None, no per-request args are accepted.
     """
 
     argv: list[str]
@@ -136,21 +112,9 @@ ALLOWED: dict[str, OpSpec] = {
     "git_fetch":  OpSpec(["git", "fetch", "--all", "--prune"], consent=False),
     "git_status": OpSpec(["git", "status", "--porcelain=v2"], consent=False),
     "git_rebase": OpSpec(["git", "pull", "--rebase"], consent=False),
-    # Consent-required (requires explicit relay-approve; no other gating)
+    # Consent-required (caller must pass approve=True)
     "wandb_sync": OpSpec(["wandb", "sync", "--sync-all"], consent=True),
 }
-
-# Cwd allowlist. Default: empty tuple = "any subdir under $HOME is allowed"
-# (still enforces the under-$HOME check for security). Project-specific
-# lockdowns set the env var AEXP_RELAY_CWD_NAMES to a comma-separated
-# list of top-level dir names under $HOME (e.g. "myrepo,other-repo").
-def _read_cwd_allowlist() -> tuple[str, ...]:
-    raw = os.environ.get("AEXP_RELAY_CWD_NAMES", "").strip()
-    if not raw:
-        return ()
-    return tuple(part.strip() for part in raw.split(",") if part.strip())
-
-_ALLOWED_CWD_NAMES = _read_cwd_allowlist()
 
 
 # ============================================================================
@@ -159,27 +123,29 @@ _ALLOWED_CWD_NAMES = _read_cwd_allowlist()
 
 
 class RelayError(RuntimeError):
-    """Base for all relay-protocol errors raised by the client."""
+    """Base for all relay errors raised by the client."""
 
 
 class RelayDownError(RelayError):
-    """Heartbeat is missing or older than ``HEARTBEAT_MAX_AGE_S``."""
+    """SSH could not reach the login node.
+
+    Covers connection refused, host unresolved/unreachable, auth or
+    host-key failure, connect timeout, and a missing ``ssh`` binary.
+    Distinct from a non-zero git exit code, which is returned in a
+    :class:`RelayResult` rather than raised.
+    """
 
 
 class RelayValidationError(RelayError):
-    """Daemon rejected a request as invalid (whitelist, regex, args)."""
+    """A request is invalid (unknown op, bad args, or missing config)."""
 
 
 class RelayRejectedError(RelayError):
-    """Kaden touched ``rejected/<uuid>`` for a consent-required request."""
+    """A consent-required op was called without ``approve=True``."""
 
 
 class RelayTimeoutError(RelayError):
-    """Client's per-call timeout elapsed before a response arrived."""
-
-
-class RelayCrashedError(RelayError):
-    """Daemon died mid-execution; outbox was synthesized on next start."""
+    """The SSH command did not complete within the client timeout."""
 
 
 # ============================================================================
@@ -189,13 +155,13 @@ class RelayCrashedError(RelayError):
 
 @dataclass
 class RelayResult:
-    """Return value of a successful (or completed-with-nonzero-rc) request.
+    """Return value of a completed request.
 
-    ``returncode`` is the subprocess exit code; non-zero is *not* an
-    exception (the daemon ran the command and got a result; the client
-    surfaces the result as-is). Protocol-level failures (down,
-    rejected, timeout, etc.) raise ``RelayError`` subclasses instead of
-    returning a ``RelayResult``.
+    ``returncode`` is the remote command's exit code; a non-zero value is
+    *not* an exception -- the relay round-trip succeeded and the client
+    surfaces the result as-is so the caller can decide whether (e.g.) a
+    merge conflict is fatal. SSH-transport failures raise
+    :class:`RelayDownError` instead of returning a ``RelayResult``.
     """
 
     request_id: str
@@ -206,101 +172,42 @@ class RelayResult:
 
 
 # ============================================================================
-# Queue layout
-# ============================================================================
-
-
-def ensure_queue(queue: Path) -> None:
-    """Create the queue directory and all subdirs if missing.
-
-    Mode is left at the umask default; the daemon's startup will tighten
-    perms on its own to ``0o700``.
-    """
-    queue.mkdir(parents=True, exist_ok=True)
-    for sub in QUEUE_SUBDIRS:
-        (queue / sub).mkdir(parents=True, exist_ok=True)
-
-
-def _request_paths(queue: Path, request_id: str) -> dict[str, Path]:
-    """Return the standard set of per-request paths."""
-    return {
-        "inbox":      queue / "inbox" / f"{request_id}.json",
-        "processing": queue / "processing" / f"{request_id}.json",
-        "pending":    queue / "pending" / f"{request_id}.json",
-        "outbox":     queue / "outbox" / f"{request_id}.json",
-        "log":        queue / "log" / f"{request_id}.txt",
-        "stale":      queue / "stale" / f"{request_id}.json",
-        "approved":   queue / "approved" / request_id,
-        "rejected":   queue / "rejected" / request_id,
-    }
-
-
-def _resolve_cwd(cwd_str: str) -> Path:
-    """Expand and resolve a cwd string, then verify it's allowlisted.
-
-    Raises RelayValidationError if the resolved cwd is not under
-    ``Path.home()`` or its top-level name doesn't match the allowlist.
-    """
-    cwd = Path(cwd_str).expanduser().resolve()
-    home = Path.home().resolve()
-    try:
-        rel = cwd.relative_to(home)
-    except ValueError as err:
-        raise RelayValidationError(
-            f"cwd not under home: {cwd} (home={home})"
-        ) from err
-    # If a name allowlist is set, the cwd's first segment must match.
-    # Empty allowlist = no name restriction beyond the under-$HOME check.
-    if _ALLOWED_CWD_NAMES and (not rel.parts or rel.parts[0] not in _ALLOWED_CWD_NAMES):
-        raise RelayValidationError(
-            f"cwd not in allowlist: {cwd} (allowed names under home: {_ALLOWED_CWD_NAMES})"
-        )
-    return cwd
-
-
-# ============================================================================
 # Validation
 # ============================================================================
 
 
-def validate_request(payload: dict) -> tuple[str, list[str], Path]:
-    """Validate a request payload and return ``(op, args, cwd)``.
+def validate_request(op: str, args: list[str] | None) -> tuple[str, list[str]]:
+    """Validate an op + args pair against the whitelist.
 
     Parameters
     ----------
-    payload : dict
-        Parsed JSON from an inbox file.
+    op : str
+        Operation name; must be a key of :data:`ALLOWED`.
+    args : list of str or None
+        Per-request arguments. Required for ops whose ``args_regex`` is
+        set; must be empty/None otherwise.
 
     Returns
     -------
     op : str
-        The whitelisted operation name.
+        The validated operation name.
     args : list of str
-        Validated per-request arguments.
-    cwd : Path
-        Resolved, allowlisted working directory.
+        The validated argument list (normalized from None to ``[]``).
 
     Raises
     ------
     RelayValidationError
-        If any field is missing, malformed, exceeds limits, or fails
-        the per-op regex.
+        If the op is unknown, or args are missing/malformed/over-limit
+        or fail the per-op regex.
     """
-    op = payload.get("op")
     if not isinstance(op, str) or op not in ALLOWED:
         raise RelayValidationError(
             f"unknown op: {op!r}; allowed: {sorted(ALLOWED)}"
         )
 
-    args = payload.get("args", [])
-    if not isinstance(args, list):
-        raise RelayValidationError(
-            f"args must be a list, got {type(args).__name__}"
-        )
+    args = list(args or [])
     if len(args) > MAX_ARGS:
-        raise RelayValidationError(
-            f"too many args ({len(args)} > {MAX_ARGS})"
-        )
+        raise RelayValidationError(f"too many args ({len(args)} > {MAX_ARGS})")
 
     spec = ALLOWED[op]
     if spec.args_regex is None:
@@ -326,400 +233,169 @@ def validate_request(payload: dict) -> tuple[str, list[str], Path]:
                 raise RelayValidationError(
                     f"arg failed regex {spec.args_regex!r}: {a!r}"
                 )
+    return op, args
 
-    cwd_str = payload.get("cwd")
-    if not cwd_str:
+
+# ============================================================================
+# Helpers
+# ============================================================================
+
+
+def _resolve_config(
+    ssh_host: str | None, remote_repo: str | None,
+) -> tuple[str, str]:
+    """Resolve ``ssh_host`` / ``remote_repo`` from args, falling back to env."""
+    host = (ssh_host or os.environ.get(ENV_SSH_HOST, "")).strip()
+    repo = (remote_repo or os.environ.get(ENV_REMOTE_REPO, "")).strip()
+    if not host:
         raise RelayValidationError(
-            "cwd is required (the client should pass an explicit cwd; "
-            "RelayClient defaults to Path.cwd())"
+            f"ssh_host is required: pass ssh_host=... or set ${ENV_SSH_HOST}. "
+            "It should name an ~/.ssh/config Host alias (auth/keys/MFA live "
+            "in your SSH config, not here)."
         )
-    if not isinstance(cwd_str, str):
+    if not repo:
         raise RelayValidationError(
-            f"cwd must be str, got {type(cwd_str).__name__}"
+            f"remote_repo is required: pass remote_repo=... or set "
+            f"${ENV_REMOTE_REPO}. It is the absolute path of the git repo "
+            "on the login node."
         )
-    cwd = _resolve_cwd(cwd_str)
-
-    return op, args, cwd
+    return host, repo
 
 
-# ============================================================================
-# JSON helpers
-# ============================================================================
+def _resolve_audit_log(audit_log: Path | str | None) -> Path:
+    """Resolve the audit-log path: explicit arg, then env, then default."""
+    if audit_log is not None:
+        return Path(audit_log).expanduser()
+    env = os.environ.get(ENV_AUDIT_LOG, "").strip()
+    if env:
+        return Path(env).expanduser()
+    return DEFAULT_AUDIT_LOG
 
 
-def _read_json(path: Path) -> dict:
-    """Read a JSON file; return ``{}`` on missing or unreadable."""
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
+def _build_remote_command(remote_repo: str, op: str, args: list[str]) -> str:
+    """Build the shell command string executed on the login node.
 
-
-def _write_json(path: Path, payload: dict) -> Path:
-    """Atomic JSON write."""
-    return atomic_write(path, json.dumps(payload, indent=2, sort_keys=True))
-
-
-# ============================================================================
-# Daemon
-# ============================================================================
-
-
-@dataclass
-class Daemon:
-    """The relay daemon that runs on the login node.
-
-    Designed for testability: ``_tick()`` runs one iteration of the main
-    loop and returns; ``run()`` calls ``_tick()`` in a sleep loop.
-    Tests instantiate ``Daemon(queue=tmp_path)`` and drive ``_tick()``
-    directly.
+    Every token is ``shlex.quote``-d for the remote POSIX shell. Per-request
+    args have already passed the per-op regex (no shell metacharacters);
+    quoting is defense-in-depth and is what makes a ``remote_repo`` path
+    containing spaces safe.
     """
+    argv = list(ALLOWED[op].argv) + list(args)
+    quoted = " ".join(shlex.quote(tok) for tok in argv)
+    return f"cd {shlex.quote(remote_repo)} && {quoted}"
 
-    queue: Path
-    _last_heartbeat: float = 0.0
-    _last_gc: float = 0.0
-    _shutdown: bool = False
-    # Tracks pending requests' first-seen-time (for client-visible
-    # pending detection) -- not authoritative for the TTL, that comes
-    # from the file's mtime.
-    _pending_seen: dict[str, float] = field(default_factory=dict)
 
-    # ---- lifecycle ----
+def _is_ssh_transport_failure(returncode: int) -> bool:
+    """True if the exit code indicates an SSH-transport (not git) failure.
 
-    def startup(self) -> None:
-        """One-time startup: ensure queue, recover stale processing,
-        write PID file, atomicity self-test."""
-        ensure_queue(self.queue)
-        try:
-            self.queue.chmod(0o700)
-        except OSError:  # pragma: no cover — Windows perm semantics differ
-            pass
-        self._atomicity_self_test()
-        self._recover_stale_processing()
-        self._write_pid()
-        self._touch_heartbeat()
-        log.info("relay daemon started; queue=%s pid=%d", self.queue, os.getpid())
+    See :data:`SSH_TRANSPORT_RC` -- ssh(1) returns 255 only for its own
+    errors; any other code is the remote command's own exit status.
+    """
+    return returncode == SSH_TRANSPORT_RC
 
-    def run(self) -> None:
-        """Main loop. Returns when ``_shutdown`` is set (e.g., SIGTERM)."""
-        self.startup()
-        try:
-            while not self._shutdown:
-                self._tick()
-                time.sleep(DAEMON_POLL_INTERVAL_S)
-        finally:
-            log.info("relay daemon stopping; pid=%d", os.getpid())
 
-    def stop(self) -> None:
-        """Signal the main loop to exit on its next iteration."""
-        self._shutdown = True
+def _tail(text: str, n: int) -> str:
+    """Return the last ``n`` characters of ``text`` (stripped), with an ellipsis."""
+    text = (text or "").strip()
+    return text if len(text) <= n else "..." + text[-n:]
 
-    # ---- one iteration ----
 
-    def _tick(self) -> None:
-        """One iteration of the main loop. Idempotent; safe to call in tests."""
-        now = time.monotonic()
-        if now - self._last_heartbeat >= HEARTBEAT_INTERVAL_S:
-            self._touch_heartbeat()
-            self._last_heartbeat = now
-        if now - self._last_gc >= GC_INTERVAL_S:
-            self._gc_old_files()
-            self._last_gc = now
-
-        # Process new inbox requests in mtime order.
-        inbox = self.queue / "inbox"
-        for req_path in sorted(inbox.glob("*.json"), key=lambda p: p.stat().st_mtime):
-            self._handle_inbox(req_path)
-
-        # Check pending requests for consent / timeout.
-        pending = self.queue / "pending"
-        for req_path in list(pending.glob("*.json")):
-            self._check_consent(req_path)
-
-    # ---- inbox handling ----
-
-    def _handle_inbox(self, req_path: Path) -> None:
-        """Validate one inbox request and route it.
-
-        Auto-approved -> processing/ -> execute.
-        Consent-required -> pending/ + log to consent.log.
-        Validation failure -> outbox/ with error.
-        """
-        request_id = req_path.stem
-        paths = _request_paths(self.queue, request_id)
-        payload = _read_json(req_path)
-        if not payload:
-            self._finalize_error(
-                request_id, op="?", error_kind="validation",
-                message=f"inbox file empty or unparseable: {req_path.name}",
-            )
-            try:
-                req_path.unlink()
-            except FileNotFoundError:
-                pass
-            return
-
-        try:
-            op, args, cwd = validate_request(payload)
-        except RelayValidationError as exc:
-            self._finalize_error(
-                request_id, op=str(payload.get("op", "?")),
-                error_kind="validation", message=str(exc),
-            )
-            try:
-                req_path.unlink()
-            except FileNotFoundError:
-                pass
-            return
-
-        spec = ALLOWED[op]
-        if spec.consent:
-            # Move to pending/. Keep the validated payload so we don't
-            # re-validate at consent-check time.
-            payload_out = {"op": op, "args": args, "cwd": str(cwd),
-                           "submitted_at": payload.get("submitted_at")}
-            _write_json(paths["pending"], payload_out)
-            try:
-                req_path.unlink()
-            except FileNotFoundError:
-                pass
-            self._log_consent_request(request_id, op, args, cwd)
-            log.info("[%s] pending consent: %s %s", request_id, op, args)
-        else:
-            # Move to processing/ atomically before executing.
-            payload_out = {"op": op, "args": args, "cwd": str(cwd)}
-            _write_json(paths["processing"], payload_out)
-            try:
-                req_path.unlink()
-            except FileNotFoundError:
-                pass
-            self._execute(request_id, op, args, cwd)
-
-    # ---- consent handling ----
-
-    def _check_consent(self, req_path: Path) -> None:
-        """Check if a pending request has been approved, rejected, or timed out."""
-        request_id = req_path.stem
-        paths = _request_paths(self.queue, request_id)
-        # Rejected wins (fail-safe).
-        if paths["rejected"].exists():
-            self._finalize_error(
-                request_id, op=str(_read_json(req_path).get("op", "?")),
-                error_kind="rejected", message="user rejected request",
-            )
-            self._cleanup_consent_markers(request_id)
-            try:
-                req_path.unlink()
-            except FileNotFoundError:
-                pass
-            return
-        if paths["approved"].exists():
-            payload = _read_json(req_path)
-            op = payload.get("op", "?")
-            args = payload.get("args", [])
-            cwd_str = payload.get("cwd")
-            if not (op in ALLOWED and isinstance(args, list) and isinstance(cwd_str, str)):
-                # Defensive — the pending payload was already validated
-                # at inbox time, so this shouldn't happen.
-                self._finalize_error(
-                    request_id, op=str(op), error_kind="validation",
-                    message="pending payload corrupt",
-                )
-            else:
-                cwd = Path(cwd_str)
-                _write_json(paths["processing"], payload)
-                self._execute(request_id, op, args, cwd)
-            self._cleanup_consent_markers(request_id)
-            try:
-                req_path.unlink()
-            except FileNotFoundError:
-                pass
-            return
-        # Timeout check.
-        try:
-            mtime = req_path.stat().st_mtime
-        except FileNotFoundError:
-            return
-        if time.time() - mtime > PENDING_TTL_S:
-            self._finalize_error(
-                request_id, op=str(_read_json(req_path).get("op", "?")),
-                error_kind="timeout",
-                message=f"consent not granted within {PENDING_TTL_S}s",
-            )
-            self._cleanup_consent_markers(request_id)
-            try:
-                req_path.unlink()
-            except FileNotFoundError:
-                pass
-
-    def _cleanup_consent_markers(self, request_id: str) -> None:
-        paths = _request_paths(self.queue, request_id)
-        for marker in (paths["approved"], paths["rejected"]):
-            try:
-                marker.unlink()
-            except FileNotFoundError:
-                pass
-
-    def _log_consent_request(self, request_id: str, op: str, args: list[str], cwd: Path) -> None:
-        """Append one line to ``consent.log`` so a side tmux pane can ``tail -f``."""
-        line = "{ts} [{rid}] op={op} args={args} cwd={cwd}\n".format(
+def _append_audit(
+    audit_log: Path, request_id: str, op: str, args: list[str],
+    returncode: int, duration_s: float,
+) -> None:
+    """Append one line to the local-side audit log. Never raises."""
+    line = (
+        "{ts} id={rid} op={op} args={args} rc={rc} dur={dur:.2f}s\n".format(
             ts=datetime.now(UTC).isoformat(timespec="seconds"),
-            rid=request_id, op=op, args=args, cwd=cwd,
+            rid=request_id[:8], op=op, args=args, rc=returncode, dur=duration_s,
         )
-        with (self.queue / "consent.log").open("a", encoding="utf-8") as f:
+    )
+    try:
+        audit_log.parent.mkdir(parents=True, exist_ok=True)
+        with audit_log.open("a", encoding="utf-8") as f:
             f.write(line)
+    except OSError as exc:  # pragma: no cover -- audit must never break a call
+        log.warning("could not write audit log %s: %s", audit_log, exc)
 
-    # ---- execution ----
 
-    def _execute(self, request_id: str, op: str, args: list[str], cwd: Path) -> None:
-        """Run the whitelisted command, stream output to log, write outbox."""
-        spec = ALLOWED[op]
-        cmd = list(spec.argv) + list(args)
-        paths = _request_paths(self.queue, request_id)
-        log_path = paths["log"]
+def _ssh_argv(host: str, connect_timeout: float, remote_command: str) -> list[str]:
+    """Build the ``ssh`` argv with the fixed hardening options.
 
-        log.info("[%s] exec: %s (cwd=%s)", request_id, " ".join(cmd), cwd)
-        t_start = time.monotonic()
-        rc = -1
-        try:
-            with log_path.open("w", encoding="utf-8") as logf:
-                logf.write(f"$ {' '.join(cmd)}  (cwd={cwd})\n")
-                logf.flush()
-                try:
-                    proc = subprocess.Popen(
-                        cmd, cwd=str(cwd),
-                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                        bufsize=1, text=True,
-                    )
-                except (FileNotFoundError, OSError) as exc:
-                    logf.write(f"\n[relay] failed to spawn: {exc}\n")
-                    rc = 127
-                else:
-                    assert proc.stdout is not None
-                    for line in proc.stdout:
-                        logf.write(line)
-                        logf.flush()
-                    rc = proc.wait()
-        except Exception as exc:  # pragma: no cover — defensive
-            log.exception("[%s] unexpected exec error", request_id)
-            try:
-                with log_path.open("a", encoding="utf-8") as logf:
-                    logf.write(f"\n[relay] internal error: {exc!r}\n")
-            except OSError:
-                pass
-            rc = -1
-        duration = time.monotonic() - t_start
+    If ``$AEXP_RELAY_SSH_VERBOSE`` is set to a truthy value, prepends
+    ``-vv`` so the subprocess captures ssh's verbose log -- useful when
+    diagnosing why a call hung or failed in a non-interactive context
+    (e.g. an MCP server's subprocess).
+    """
+    argv = [
+        "ssh",
+        # -n: never read from stdin. The relay runs a fixed remote command
+        # and wants only its output; without -n, ssh inherits the caller's
+        # stdin and -- if that is a pipe that never closes (e.g. an MCP
+        # server's stdio transport) -- ssh stays alive after the remote
+        # command finishes, hanging the subprocess until the timeout.
+        "-n",
+        "-o", "BatchMode=yes",
+        "-o", f"ConnectTimeout={int(connect_timeout)}",
+    ]
+    if os.environ.get(ENV_SSH_VERBOSE, "").strip().lower() in ("1", "true", "yes"):
+        argv.insert(1, "-vv")
+    argv.extend([host, remote_command])
+    return argv
 
-        # Move from processing -> done (delete the processing marker).
-        try:
-            paths["processing"].unlink()
-        except FileNotFoundError:
-            pass
 
-        # Read full log into outbox payload (small for git ops; bounded
-        # by command output size for wandb_sync).
-        try:
-            stdout = log_path.read_text(encoding="utf-8")
-        except OSError:
-            stdout = ""
+def _decode_stderr(raw: bytes | str | None) -> str:
+    """Decode subprocess stderr (which may be bytes if TimeoutExpired)."""
+    if raw is None:
+        return ""
+    if isinstance(raw, bytes):
+        return raw.decode("utf-8", errors="replace")
+    return raw
 
-        _write_json(paths["outbox"], {
-            "request_id": request_id,
-            "op": op,
-            "status": "completed",
-            "returncode": rc,
-            "stdout": stdout,
-            "duration_s": round(duration, 4),
-        })
-        log.info("[%s] done rc=%d duration=%.2fs", request_id, rc, duration)
 
-    # ---- finalize errors ----
+# ============================================================================
+# Connectivity check
+# ============================================================================
 
-    def _finalize_error(
-        self, request_id: str, *, op: str, error_kind: str, message: str,
-    ) -> None:
-        """Write an outbox payload for a non-execution failure path."""
-        paths = _request_paths(self.queue, request_id)
-        _write_json(paths["outbox"], {
-            "request_id": request_id,
-            "op": op,
-            "status": error_kind,
-            "returncode": -1,
-            "stdout": "",
-            "error": message,
-            "duration_s": 0.0,
-        })
-        log.info("[%s] %s: %s", request_id, error_kind, message)
 
-    # ---- heartbeat / pid / GC / recovery ----
+def check_connection(
+    *,
+    ssh_host: str | None = None,
+    connect_timeout: float = DEFAULT_CONNECT_TIMEOUT_S,
+) -> str:
+    """Verify the login node is reachable over SSH (``ssh <host> true``).
 
-    def _touch_heartbeat(self) -> None:
-        _write_json(self.queue / "heartbeat", {
-            "ts_monotonic": time.monotonic(),
-            "wall": datetime.now(UTC).isoformat(timespec="seconds"),
-            "pid": os.getpid(),
-        })
-
-    def _write_pid(self) -> None:
-        _write_json(self.queue / "pid", {
-            "pid": os.getpid(),
-            "started_wall": datetime.now(UTC).isoformat(timespec="seconds"),
-        })
-
-    def _gc_old_files(self) -> None:
-        """Remove old outbox / log / approved / rejected files."""
-        now = time.time()
-        for sub in ("outbox", "log", "approved", "rejected", "stale"):
-            d = self.queue / sub
-            if not d.exists():
-                continue
-            for p in d.iterdir():
-                try:
-                    if now - p.stat().st_mtime > GC_MAX_AGE_S:
-                        p.unlink()
-                except (FileNotFoundError, OSError):
-                    pass
-
-    def _recover_stale_processing(self) -> None:
-        """On startup, treat anything in processing/ as a prior crash."""
-        proc_dir = self.queue / "processing"
-        if not proc_dir.exists():
-            return
-        for p in list(proc_dir.glob("*.json")):
-            request_id = p.stem
-            payload = _read_json(p)
-            paths = _request_paths(self.queue, request_id)
-            try:
-                p.replace(paths["stale"])
-            except OSError:
-                # If we can't move it, at least synthesize the response.
-                pass
-            self._finalize_error(
-                request_id,
-                op=str(payload.get("op", "?")),
-                error_kind="crashed",
-                message="daemon died mid-execution; please retry",
-            )
-            log.warning("[%s] recovered stale processing entry", request_id)
-
-    def _atomicity_self_test(self) -> None:
-        """Verify atomic_write works on the queue's filesystem.
-
-        Networked filesystems vary; this is a cheap canary at startup
-        rather than discovering the failure mid-request.
-        """
-        probe = self.queue / "_probe.json"
-        try:
-            atomic_write(probe, json.dumps({"ok": True}))
-            data = json.loads(probe.read_text(encoding="utf-8"))
-            if not data.get("ok"):
-                raise RuntimeError("probe content mismatch")
-            probe.unlink()
-        except Exception as exc:
-            raise RuntimeError(
-                f"atomicity self-test failed at {probe}: {exc!r}. "
-                "Confirm the filesystem supports POSIX rename semantics."
-            ) from exc
+    Returns the resolved host on success; raises :class:`RelayDownError`
+    if the connection fails, or :class:`RelayValidationError` if no host
+    is configured.
+    """
+    host = (ssh_host or os.environ.get(ENV_SSH_HOST, "")).strip()
+    if not host:
+        raise RelayValidationError(
+            f"ssh_host is required: pass ssh_host=... or set ${ENV_SSH_HOST}."
+        )
+    argv = _ssh_argv(host, connect_timeout, "true")
+    overall_timeout = connect_timeout + 10.0
+    try:
+        proc = subprocess.run(
+            argv, capture_output=True, text=True, timeout=overall_timeout,
+            stdin=subprocess.DEVNULL,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RelayDownError(
+            f"ssh to {host!r} timed out after {overall_timeout:.0f}s. "
+            f"stderr tail: {_tail(_decode_stderr(exc.stderr), 600)}"
+        ) from exc
+    except FileNotFoundError as exc:
+        raise RelayDownError(
+            "`ssh` was not found on PATH. Install the OpenSSH client."
+        ) from exc
+    if proc.returncode != 0:
+        raise RelayDownError(
+            f"ssh to {host!r} failed (rc={proc.returncode}). "
+            f"stderr: {_tail(proc.stderr, 400)}"
+        )
+    return host
 
 
 # ============================================================================
@@ -727,257 +403,533 @@ class Daemon:
 # ============================================================================
 
 
-def _check_heartbeat(queue: Path) -> None:
-    """Raise RelayDownError if heartbeat is missing or stale."""
-    hb_path = queue / "heartbeat"
-    try:
-        mtime = hb_path.stat().st_mtime
-    except FileNotFoundError as err:
-        raise RelayDownError(
-            f"heartbeat file not found at {hb_path}. "
-            "Daemon not running? Bootstrap on the login node:\n"
-            "  tmux new -d -s relay 'python -m aexp airgapped daemon'"
-        ) from err
-    age = time.time() - mtime
-    if age > HEARTBEAT_MAX_AGE_S:
-        raise RelayDownError(
-            f"heartbeat stale ({age:.0f}s old at {hb_path}). "
-            "Daemon may have died. Re-bootstrap on the login node:\n"
-            "  tmux kill-session -t relay 2>/dev/null; "
-            "tmux new -d -s relay 'python -m aexp airgapped daemon'"
-        )
-
-
 def request(
     op: str,
     args: list[str] | None = None,
     *,
-    queue: Path | None = None,
-    cwd: str | None = None,
+    ssh_host: str | None = None,
+    remote_repo: str | None = None,
+    approve: bool = False,
     timeout: float | None = None,
-    poll_interval: float = CLIENT_POLL_INTERVAL_S,
+    connect_timeout: float = DEFAULT_CONNECT_TIMEOUT_S,
+    audit_log: Path | str | None = None,
 ) -> RelayResult:
-    """Submit a request to the daemon and block until completion.
+    """Run one whitelisted op on the login node over SSH; block for the result.
 
     Parameters
     ----------
     op : str
-        One of the keys in ``ALLOWED``.
+        One of the keys in :data:`ALLOWED`.
     args : list of str, optional
         Per-request arguments. Required for ops whose ``args_regex`` is
         set; must be empty/None otherwise.
-    queue : Path, optional
-        Queue directory. Defaults to ``~/.relay``.
-    cwd : str, optional
-        Working directory for the daemon to ``cd`` into. Must resolve
-        under ``$HOME`` (and, if ``AEXP_RELAY_CWD_NAMES`` is set, the
-        first segment must match the allowlist). Default is ``Path.cwd()``.
+    ssh_host : str, optional
+        SSH host (ideally an ``~/.ssh/config`` alias). Falls back to
+        ``$AEXP_RELAY_SSH_HOST``.
+    remote_repo : str, optional
+        Absolute path of the git repo on the login node. Falls back to
+        ``$AEXP_RELAY_REMOTE_REPO``.
+    approve : bool, optional
+        Must be True for consent-required ops (``wandb_sync``).
     timeout : float, optional
-        Client-side timeout in seconds. Default is 60s for auto-approved
+        Client-side timeout in seconds. Defaults to 60s for auto-approved
         ops, 600s for consent-required ops.
-    poll_interval : float, optional
-        How often to poll the outbox.
+    connect_timeout : float, optional
+        ``ssh -o ConnectTimeout`` value.
+    audit_log : Path or str, optional
+        Where to append the one-line audit record. Falls back to
+        ``$AEXP_RELAY_AUDIT_LOG`` then ``~/.aexp/airgapped-relay.log``.
 
     Returns
     -------
     RelayResult
-        Subprocess result. Non-zero ``returncode`` is *not* an exception.
+        The remote command's result. A non-zero ``returncode`` is *not*
+        an exception.
 
     Raises
     ------
-    RelayDownError, RelayValidationError, RelayRejectedError,
-    RelayTimeoutError, RelayCrashedError
+    RelayValidationError
+        Unknown op, bad args, or missing ssh_host/remote_repo config.
+    RelayRejectedError
+        A consent-required op was called without ``approve=True``.
+    RelayDownError
+        The SSH transport itself failed (unreachable, auth, host key).
+    RelayTimeoutError
+        The command did not finish within ``timeout``.
     """
-    queue = (queue or DEFAULT_QUEUE).expanduser()
-    ensure_queue(queue)
-    _check_heartbeat(queue)
-
-    if op not in ALLOWED:
-        raise RelayValidationError(
-            f"unknown op: {op!r}; allowed: {sorted(ALLOWED)}"
-        )
+    op, args = validate_request(op, args)
     spec = ALLOWED[op]
+    if spec.consent and not approve:
+        raise RelayRejectedError(
+            f"op {op!r} is consent-required; pass approve=True (--approve) to "
+            "authorize it. Confirm with the user before doing so -- it is an "
+            "outward-facing operation."
+        )
+
+    host, repo = _resolve_config(ssh_host, remote_repo)
     if timeout is None:
         timeout = DEFAULT_CONSENT_TIMEOUT_S if spec.consent else DEFAULT_CLIENT_TIMEOUT_S
+    audit_path = _resolve_audit_log(audit_log)
 
+    remote_cmd = _build_remote_command(repo, op, args)
+    argv = _ssh_argv(host, connect_timeout, remote_cmd)
     request_id = uuid.uuid4().hex
-    payload = {
-        "op": op,
-        "args": list(args or []),
-        "cwd": cwd or str(Path.cwd()),
-        "submitted_at": datetime.now(UTC).isoformat(timespec="seconds"),
-    }
-    paths = _request_paths(queue, request_id)
-    _write_json(paths["inbox"], payload)
-    log.debug("submitted request %s (op=%s, args=%s)", request_id, op, args)
+    log.debug("relay %s: ssh %s %r", request_id[:8], host, remote_cmd)
 
-    deadline = time.monotonic() + timeout
-    consent_announced = False
-    while True:
-        if paths["outbox"].exists():
-            response = _read_json(paths["outbox"])
-            return _interpret_response(response, request_id, op)
-        # Surface consent prompt the first time we see the request in pending.
-        if (
-            spec.consent
-            and not consent_announced
-            and paths["pending"].exists()
-        ):
-            print(
-                f"[relay] Awaiting consent for {op} (request {request_id}).\n"
-                f"        Approve: bash ~/.relay/_bin/relay-approve {request_id}\n"
-                f"        Reject:  bash ~/.relay/_bin/relay-reject  {request_id}",
-                file=sys.stderr,
-                flush=True,
-            )
-            consent_announced = True
-        if time.monotonic() >= deadline:
-            raise RelayTimeoutError(
-                f"no response within {timeout:.0f}s for request {request_id} "
-                f"(op={op}). The daemon may still complete it; check "
-                f"{paths['outbox']} later."
-            )
-        time.sleep(poll_interval)
-
-
-def _interpret_response(response: dict, request_id: str, op: str) -> RelayResult:
-    """Map a daemon outbox payload to a RelayResult or raise."""
-    status = response.get("status", "?")
-    if status == "completed":
-        return RelayResult(
-            request_id=request_id,
-            op=op,
-            returncode=int(response.get("returncode", -1)),
-            stdout=str(response.get("stdout", "")),
-            duration_s=float(response.get("duration_s", 0.0)),
+    t_start = time.monotonic()
+    try:
+        proc = subprocess.run(
+            argv, capture_output=True, text=True, timeout=timeout,
+            stdin=subprocess.DEVNULL,
         )
-    msg = str(response.get("error", "(no message)"))
-    if status == "validation":
-        raise RelayValidationError(f"daemon rejected {op}: {msg}")
-    if status == "rejected":
-        raise RelayRejectedError(f"user rejected {op} (request {request_id})")
-    if status == "timeout":
-        raise RelayTimeoutError(f"daemon-side consent timeout for {op}: {msg}")
-    if status == "crashed":
-        raise RelayCrashedError(f"{op}: {msg}")
-    raise RelayError(f"unknown response status {status!r} for {op}: {response!r}")
+    except subprocess.TimeoutExpired as exc:
+        duration = time.monotonic() - t_start
+        _append_audit(audit_path, request_id, op, args, -1, duration)
+        stderr_tail = _tail(_decode_stderr(exc.stderr), 800)
+        raise RelayTimeoutError(
+            f"ssh to {host!r} did not finish within {timeout:.0f}s for op "
+            f"{op!r}. stderr tail (partial):\n{stderr_tail}\n"
+            "If this is the session's first connection it may be waiting on "
+            "MFA -- open an interactive `ssh` session first so subsequent "
+            f"calls reuse it. Or set ${ENV_SSH_VERBOSE}=1 in the env to "
+            "get ssh -vv output on the next attempt."
+        ) from exc
+    except FileNotFoundError as exc:
+        raise RelayDownError(
+            "`ssh` was not found on PATH. Install the OpenSSH client "
+            "(Windows: Settings -> Optional features -> OpenSSH Client)."
+        ) from exc
+    duration = time.monotonic() - t_start
+
+    rc = proc.returncode
+    # git writes progress + conflict text to stderr; merge the streams so
+    # RelayResult.stdout carries everything the caller needs to inspect.
+    merged = (proc.stdout or "") + (proc.stderr or "")
+    _append_audit(audit_path, request_id, op, args, rc, duration)
+
+    if _is_ssh_transport_failure(rc):
+        raise RelayDownError(
+            f"ssh to {host!r} failed (rc={rc}) -- an SSH transport failure, "
+            f"not a git error. stderr tail:\n{_tail(proc.stderr, 500)}\n"
+            "Check: the host alias in ~/.ssh/config, known_hosts seeded "
+            "(connect interactively once), VPN/network, and MFA / ControlMaster."
+        )
+
+    return RelayResult(
+        request_id=request_id,
+        op=op,
+        returncode=rc,
+        stdout=merged,
+        duration_s=round(duration, 4),
+    )
 
 
 # ============================================================================
 # CLI
 # ============================================================================
 
+airgapped_app = typer.Typer(
+    help=(
+        "Run whitelisted git/wandb commands on an internet-having sibling "
+        "node over SSH -- the bridge for an airgapped compute machine."
+    ),
+    no_args_is_help=True,
+)
 
-def _cli_daemon(args: argparse.Namespace) -> int:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s",
+
+def _emit(result: RelayResult, op: str) -> None:
+    """Print a RelayResult to stdout and exit with the remote returncode."""
+    body = result.stdout.rstrip()
+    if body:
+        typer.echo(body)
+    typer.echo(
+        f"[aexp.airgapped] {op} -> rc={result.returncode} "
+        f"({result.duration_s:.2f}s)"
     )
-    if args.log:
-        # Add a file handler in addition to the stderr stream handler.
-        # Ensure the log file's parent exists — the daemon's startup() creates
-        # the queue dir, but the log handler opens its file first. Without
-        # this, ``--log ~/.relay/daemon.log`` fails on a fresh machine where
-        # ~/.relay/ doesn't exist yet (caught by the laptop daemon smoke).
-        log_path = Path(args.log).expanduser()
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        fh = logging.FileHandler(log_path)
-        fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
-        logging.getLogger().addHandler(fh)
-    daemon = Daemon(queue=Path(args.queue).expanduser())
-    daemon.run()
-    return 0
+    raise typer.Exit(code=result.returncode)
 
 
-def _cli_install_helpers(args: argparse.Namespace) -> int:
-    queue = Path(args.queue).expanduser()
-    ensure_queue(queue)
-    bin_dir = queue / "_bin"
-    bin_dir.mkdir(parents=True, exist_ok=True)
-    helpers = {
-        "relay-approve": (
-            '#!/usr/bin/env bash\nset -eu\n'
-            'touch "$HOME/.relay/approved/$1"\necho "approved: $1"\n'
-        ),
-        "relay-reject": (
-            '#!/usr/bin/env bash\nset -eu\n'
-            'touch "$HOME/.relay/rejected/$1"\necho "rejected: $1"\n'
-        ),
-        "relay-list-pending": (
-            '#!/usr/bin/env bash\nset -eu\nls -t "$HOME/.relay/pending/" 2>/dev/null '
-            "| sed 's/\\.json$//'\n"
-        ),
+def _run_op(
+    op: str,
+    args: list[str] | None,
+    *,
+    ssh_host: str | None,
+    remote_repo: str | None,
+    timeout: float | None,
+    connect_timeout: float,
+    audit_log: str | None,
+    approve: bool = False,
+) -> None:
+    """Shared body for the per-op CLI commands."""
+    try:
+        result = request(
+            op, args,
+            ssh_host=ssh_host, remote_repo=remote_repo, approve=approve,
+            timeout=timeout, connect_timeout=connect_timeout,
+            audit_log=audit_log,
+        )
+    except RelayError as exc:
+        typer.echo(f"[aexp.airgapped] {type(exc).__name__}: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _emit(result, op)
+
+
+@airgapped_app.command("status")
+def _cli_status(
+    ssh_host: str | None = typer.Option(
+        None, "--ssh-host", help=f"SSH host alias; default ${ENV_SSH_HOST}."
+    ),
+    connect_timeout: float = typer.Option(
+        DEFAULT_CONNECT_TIMEOUT_S, "--connect-timeout",
+        help="SSH connect timeout (seconds).",
+    ),
+) -> None:
+    """Check that the login node is reachable over SSH (`ssh <host> true`)."""
+    try:
+        host = check_connection(ssh_host=ssh_host, connect_timeout=connect_timeout)
+    except RelayError as exc:
+        typer.echo(f"[aexp.airgapped] login node UNREACHABLE: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"[aexp.airgapped] login node reachable: {host}")
+
+
+@airgapped_app.command("pull")
+def _cli_pull(
+    ssh_host: str | None = typer.Option(None, "--ssh-host"),
+    remote_repo: str | None = typer.Option(None, "--remote-repo"),
+    timeout: float | None = typer.Option(None, "--timeout"),
+    connect_timeout: float = typer.Option(DEFAULT_CONNECT_TIMEOUT_S, "--connect-timeout"),
+    audit_log: str | None = typer.Option(None, "--audit-log"),
+) -> None:
+    """git pull --ff-only on the login node."""
+    _run_op(
+        "git_pull", None, ssh_host=ssh_host, remote_repo=remote_repo,
+        timeout=timeout, connect_timeout=connect_timeout, audit_log=audit_log,
+    )
+
+
+@airgapped_app.command("fetch")
+def _cli_fetch(
+    ssh_host: str | None = typer.Option(None, "--ssh-host"),
+    remote_repo: str | None = typer.Option(None, "--remote-repo"),
+    timeout: float | None = typer.Option(None, "--timeout"),
+    connect_timeout: float = typer.Option(DEFAULT_CONNECT_TIMEOUT_S, "--connect-timeout"),
+    audit_log: str | None = typer.Option(None, "--audit-log"),
+) -> None:
+    """git fetch --all --prune on the login node."""
+    _run_op(
+        "git_fetch", None, ssh_host=ssh_host, remote_repo=remote_repo,
+        timeout=timeout, connect_timeout=connect_timeout, audit_log=audit_log,
+    )
+
+
+@airgapped_app.command("rebase")
+def _cli_rebase(
+    ssh_host: str | None = typer.Option(None, "--ssh-host"),
+    remote_repo: str | None = typer.Option(None, "--remote-repo"),
+    timeout: float | None = typer.Option(None, "--timeout"),
+    connect_timeout: float = typer.Option(DEFAULT_CONNECT_TIMEOUT_S, "--connect-timeout"),
+    audit_log: str | None = typer.Option(None, "--audit-log"),
+) -> None:
+    """git pull --rebase on the login node."""
+    _run_op(
+        "git_rebase", None, ssh_host=ssh_host, remote_repo=remote_repo,
+        timeout=timeout, connect_timeout=connect_timeout, audit_log=audit_log,
+    )
+
+
+@airgapped_app.command("repo-status")
+def _cli_repo_status(
+    ssh_host: str | None = typer.Option(None, "--ssh-host"),
+    remote_repo: str | None = typer.Option(None, "--remote-repo"),
+    timeout: float | None = typer.Option(None, "--timeout"),
+    connect_timeout: float = typer.Option(DEFAULT_CONNECT_TIMEOUT_S, "--connect-timeout"),
+    audit_log: str | None = typer.Option(None, "--audit-log"),
+) -> None:
+    """git status --porcelain=v2 on the login node's repo."""
+    _run_op(
+        "git_status", None, ssh_host=ssh_host, remote_repo=remote_repo,
+        timeout=timeout, connect_timeout=connect_timeout, audit_log=audit_log,
+    )
+
+
+@airgapped_app.command("push")
+def _cli_push(
+    branch: str = typer.Option("HEAD", "--branch", help="Branch to push."),
+    remote: str = typer.Option("origin", "--remote", help="Remote name."),
+    ssh_host: str | None = typer.Option(None, "--ssh-host"),
+    remote_repo: str | None = typer.Option(None, "--remote-repo"),
+    timeout: float | None = typer.Option(None, "--timeout"),
+    connect_timeout: float = typer.Option(DEFAULT_CONNECT_TIMEOUT_S, "--connect-timeout"),
+    audit_log: str | None = typer.Option(None, "--audit-log"),
+) -> None:
+    """git push <remote> <branch> on the login node (default: origin HEAD)."""
+    _run_op(
+        "git_push", [remote, branch], ssh_host=ssh_host, remote_repo=remote_repo,
+        timeout=timeout, connect_timeout=connect_timeout, audit_log=audit_log,
+    )
+
+
+@airgapped_app.command("wandb-sync")
+def _cli_wandb_sync(
+    approve: bool = typer.Option(
+        False, "--approve",
+        help="Required: authorize this outward-facing wandb sync.",
+    ),
+    ssh_host: str | None = typer.Option(None, "--ssh-host"),
+    remote_repo: str | None = typer.Option(None, "--remote-repo"),
+    timeout: float | None = typer.Option(None, "--timeout"),
+    connect_timeout: float = typer.Option(DEFAULT_CONNECT_TIMEOUT_S, "--connect-timeout"),
+    audit_log: str | None = typer.Option(None, "--audit-log"),
+) -> None:
+    """wandb sync --sync-all on the login node (consent-required)."""
+    if not approve:
+        typer.echo(
+            "[aexp.airgapped] wandb-sync is consent-required (it publishes "
+            "run data). Re-run with --approve once the user authorizes it.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    _run_op(
+        "wandb_sync", None, ssh_host=ssh_host, remote_repo=remote_repo,
+        timeout=timeout, connect_timeout=connect_timeout, audit_log=audit_log,
+        approve=True,
+    )
+
+
+# ============================================================================
+# `aexp airgapped init` -- one-shot setup helper
+# ============================================================================
+
+
+def init_mcp_config(
+    mcp_config_path: Path,
+    *,
+    ssh_host: str,
+    remote_repo: str,
+    server_name: str = "aexp",
+    force: bool = False,
+) -> dict[str, Any]:
+    """Wire airgapped env config into an existing ``.mcp.json``.
+
+    Reads the file, locates the named MCP server entry (default
+    ``"aexp"``), adds or updates the ``AEXP_RELAY_SSH_HOST`` and
+    ``AEXP_RELAY_REMOTE_REPO`` env keys inside that entry's ``env``
+    block, and writes the file back atomically.
+
+    Parameters
+    ----------
+    mcp_config_path : Path
+        Path to the ``.mcp.json`` file. Must already exist (typically
+        generated by ``aexp install --dev`` in a consumer repo).
+    ssh_host : str
+        SSH host to use -- ideally a ``~/.ssh/config`` Host alias so
+        auth detail (identity file, MFA, ControlMaster) lives there.
+    remote_repo : str
+        Absolute path of the git repo on the login node.
+    server_name : str, optional
+        Which ``mcpServers`` entry to update. Defaults to ``"aexp"``.
+    force : bool, optional
+        Allow overwriting existing env values that differ from the
+        requested ones. Without ``force``, a value conflict raises.
+
+    Returns
+    -------
+    dict
+        ``{path, changes, already_correct}`` -- ``changes`` is a list of
+        human-readable change descriptions; ``already_correct`` is True
+        if no write was needed (idempotent re-run).
+
+    Raises
+    ------
+    FileNotFoundError
+        If ``mcp_config_path`` does not exist.
+    ValueError
+        If the file is unparseable or has no entry for ``server_name``.
+    RuntimeError
+        If an env value differs from the requested one and ``force`` is
+        False.
+    """
+    if not mcp_config_path.is_file():
+        raise FileNotFoundError(
+            f".mcp.json not found at {mcp_config_path}. "
+            "Run `aexp install --dev` first to generate one, or pass "
+            "--mcp-config /path/to/file."
+        )
+
+    try:
+        data = json.loads(mcp_config_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"{mcp_config_path} is not valid JSON: {exc}"
+        ) from exc
+
+    servers = data.get("mcpServers")
+    if not isinstance(servers, dict) or server_name not in servers:
+        available = sorted(servers.keys()) if isinstance(servers, dict) else []
+        raise ValueError(
+            f"mcpServers.{server_name!r} not found in {mcp_config_path}. "
+            f"Available servers: {available}. "
+            "Run `aexp install --dev` to install the aexp MCP server entry."
+        )
+
+    server = servers[server_name]
+    if not isinstance(server, dict):
+        raise ValueError(
+            f"mcpServers.{server_name} is not an object in {mcp_config_path}."
+        )
+    env = server.setdefault("env", {})
+    if not isinstance(env, dict):
+        raise ValueError(
+            f"mcpServers.{server_name}.env is not an object in {mcp_config_path}."
+        )
+
+    changes: list[str] = []
+    for key, new_value in ((ENV_SSH_HOST, ssh_host), (ENV_REMOTE_REPO, remote_repo)):
+        existing = env.get(key)
+        if existing is None:
+            env[key] = new_value
+            changes.append(f"added {key}={new_value!r}")
+        elif existing == new_value:
+            continue  # idempotent
+        elif not force:
+            raise RuntimeError(
+                f"{key} already set to {existing!r} in {mcp_config_path}; "
+                f"re-run with --force to overwrite to {new_value!r}, or edit "
+                "the file manually."
+            )
+        else:
+            env[key] = new_value
+            changes.append(f"updated {key}: {existing!r} -> {new_value!r}")
+
+    if changes:
+        atomic_write(mcp_config_path, json.dumps(data, indent=2) + "\n")
+
+    return {
+        "path": mcp_config_path,
+        "changes": changes,
+        "already_correct": not changes,
     }
-    for name, body in helpers.items():
-        path = bin_dir / name
-        path.write_text(body, encoding="utf-8", newline="\n")
-        try:
-            path.chmod(0o755)
-        except OSError:  # pragma: no cover — Windows
-            pass
-    print(f"installed helpers to {bin_dir}")
-    return 0
 
 
-def _cli_status(args: argparse.Namespace) -> int:
-    queue = Path(args.queue).expanduser()
-    hb = queue / "heartbeat"
-    if not hb.exists():
-        print(f"heartbeat: MISSING ({hb})")
-        return 1
-    age = time.time() - hb.stat().st_mtime
-    state = "fresh" if age <= HEARTBEAT_MAX_AGE_S else "STALE"
-    payload = _read_json(hb)
-    print(f"heartbeat: {state} ({age:.1f}s old, pid={payload.get('pid')})")
-    pending_count = (
-        len(list((queue / "pending").glob("*.json")))
-        if (queue / "pending").exists() else 0
+@airgapped_app.command("init")
+def _cli_init(
+    ssh_host: str = typer.Option(
+        ..., "--ssh-host",
+        help="SSH host alias to use (ideally an entry in ~/.ssh/config).",
+    ),
+    remote_repo: str = typer.Option(
+        ..., "--remote-repo",
+        help="Absolute path of the git repo on the login node.",
+    ),
+    mcp_config: Path = typer.Option(
+        Path(".mcp.json"), "--mcp-config",
+        help="Path to .mcp.json. Default: ./.mcp.json (run from the consumer repo).",
+    ),
+    force: bool = typer.Option(
+        False, "--force",
+        help="Overwrite existing AEXP_RELAY_* env values that differ from these.",
+    ),
+) -> None:
+    """One-shot wiring: write airgapped env into .mcp.json + print next steps.
+
+    Edits the ``.mcp.json`` aexp server's env block (idempotent) and prints
+    the ``~/.ssh/config`` snippet plus the remaining manual steps (the
+    interactive SSH + MFA, the ``/mcp`` reconnect, and the verification).
+    """
+    try:
+        result = init_mcp_config(
+            mcp_config_path=mcp_config.expanduser().resolve(),
+            ssh_host=ssh_host, remote_repo=remote_repo, force=force,
+        )
+    except FileNotFoundError as exc:
+        typer.echo(f"[aexp.airgapped init] {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    except ValueError as exc:
+        typer.echo(f"[aexp.airgapped init] {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    except RuntimeError as exc:
+        typer.echo(f"[aexp.airgapped init] {exc}", err=True)
+        raise typer.Exit(code=2) from exc
+
+    typer.echo(f"[aexp.airgapped init] {result['path']}")
+    if result["already_correct"]:
+        typer.echo("  (.mcp.json env already matches; nothing to write)")
+        typer.echo("")
+        typer.echo("To re-print the setup steps, run with --force, or see")
+        typer.echo("docs/airgapped.md for the full setup guide.")
+        return
+    for change in result["changes"]:
+        typer.echo(f"  - {change}")
+
+    typer.echo("")
+    ssh_config_path = (
+        "%USERPROFILE%\\.ssh\\config (e.g. C:\\Users\\<you>\\.ssh\\config)"
+        if os.name == "nt" else "~/.ssh/config"
     )
-    inbox_count = (
-        len(list((queue / "inbox").glob("*.json")))
-        if (queue / "inbox").exists() else 0
-    )
-    processing_count = (
-        len(list((queue / "processing").glob("*.json")))
-        if (queue / "processing").exists() else 0
-    )
-    print(f"inbox: {inbox_count}  processing: {processing_count}  pending: {pending_count}")
-    return 0 if state == "fresh" else 1
+    typer.echo("=" * 72)
+    typer.echo("All steps below happen on your LOCAL machine (the one that")
+    typer.echo("runs Claude Code), NOT on the cluster.")
+    typer.echo("=" * 72)
+    typer.echo("")
+    typer.echo(f"Step 1. Add this block to {ssh_config_path}")
+    typer.echo("        (adjust HostName / User to match your cluster):")
+    typer.echo("")
+    typer.echo(f"            Host {ssh_host}")
+    typer.echo("                HostName <login-node-hostname>")
+    typer.echo("                User <your-username>")
+    typer.echo("")
+    typer.echo(f"Step 2. Ensure passwordless SSH works: `ssh {ssh_host} hostname`")
+    typer.echo("        should print the cluster's hostname with NO password")
+    typer.echo("        prompt. If it asks for a password, set up SSH key auth:")
+    typer.echo("")
+    typer.echo("        a) Generate a key (skip if you already have one):")
+    typer.echo("")
+    typer.echo("              ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519")
+    typer.echo("")
+    typer.echo("           IMPORTANT: when it asks for a passphrase, press")
+    typer.echo("           Enter twice to leave it EMPTY. A passphrase-protected")
+    typer.echo("           key cannot be used non-interactively without ssh-agent")
+    typer.echo("           and will cause `Permission denied (publickey,...)`.")
+    typer.echo("")
+    typer.echo("        b) Copy your public key to the cluster:")
+    typer.echo("")
+    if os.name == "nt":
+        typer.echo(
+            f"              Get-Content ~/.ssh/id_ed25519.pub | ssh {ssh_host} "
+            '"umask 077; mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys && '
+            'chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys"'
+        )
+    else:
+        typer.echo(f"              ssh-copy-id {ssh_host}")
+    typer.echo("")
+    typer.echo("           (You'll be prompted for the cluster password ONCE.")
+    typer.echo("            After this, key auth takes over.)")
+    typer.echo("")
+    typer.echo(f"        c) Re-test: `ssh {ssh_host} hostname` should now be silent.")
+    typer.echo("")
+    typer.echo("Step 3. In Claude Code: /mcp  (reconnect the aexp server so")
+    typer.echo("        the new .mcp.json env block is read).")
+    typer.echo("")
+    typer.echo(f"Step 4. Verify: aexp airgapped status --ssh-host {ssh_host}")
+
+
+# ============================================================================
+# Module entry point
+# ============================================================================
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="electricrag.dev.relay")
-    # Shared --queue arg: defined on a parent parser so each subcommand
-    # accepts it AFTER the subcommand name (the natural CLI shape).
-    common = argparse.ArgumentParser(add_help=False)
-    common.add_argument(
-        "--queue", default=str(DEFAULT_QUEUE),
-        help="Queue directory (default: ~/.relay)",
-    )
-    sub = parser.add_subparsers(dest="cmd", required=True)
+    """Entry point for ``python -m aexp.airgapped``.
 
-    p_daemon = sub.add_parser(
-        "daemon", parents=[common],
-        help="Run the relay daemon (login node)",
-    )
-    p_daemon.add_argument("--log", default=None, help="Optional log file path")
-    p_daemon.set_defaults(func=_cli_daemon)
-
-    p_install = sub.add_parser(
-        "install-helpers", parents=[common],
-        help="Install relay-approve / relay-reject / relay-list-pending shell helpers",
-    )
-    p_install.set_defaults(func=_cli_install_helpers)
-
-    p_status = sub.add_parser(
-        "status", parents=[common],
-        help="Print daemon liveness summary",
-    )
-    p_status.set_defaults(func=_cli_status)
-
-    args = parser.parse_args(argv)
-    return args.func(args)
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+    Delegates to the Typer ``airgapped_app``. Returns the process exit
+    code so ``__main__.py`` can ``raise SystemExit(main(...))``.
+    """
+    try:
+        airgapped_app(args=argv, standalone_mode=True)
+    except SystemExit as exc:
+        code = exc.code
+        if code is None:
+            return 0
+        return code if isinstance(code, int) else 1
+    return 0
