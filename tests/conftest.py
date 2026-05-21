@@ -13,14 +13,14 @@ VENDOR_ROOT = PACKAGE_ROOT / "src" / "aexp" / "vendor" / "limina"
 
 @pytest.fixture
 def vendored_tree() -> Path:
-    """Absolute path to the vendored Limina snapshot in this repo."""
-    assert VENDOR_ROOT.is_dir(), f"vendored Limina missing at {VENDOR_ROOT}"
+    """Absolute path to the vendored research-harness snapshot in this repo."""
+    assert VENDOR_ROOT.is_dir(), f"vendored research harness missing at {VENDOR_ROOT}"
     return VENDOR_ROOT
 
 
 @pytest.fixture
 def scaffold_project(tmp_path: Path) -> Path:
-    """Copy the vendored Limina snapshot into a tmp dir.
+    """Copy the vendored research-harness snapshot into a tmp dir.
 
     Gives each test an isolated ``PROJECT_ROOT`` — the ported hooks derive
     their root from ``Path(__file__).resolve().parents[2]``, so running a

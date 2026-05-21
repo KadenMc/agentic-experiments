@@ -1,4 +1,4 @@
-"""Create Limina ``kb/`` artifacts (H/E/F) with bidirectional backlinks.
+"""Create ``kb/`` artifacts (H/E/F) with bidirectional backlinks.
 
 This is the v1.1 surface flagged as planned in ``aexp.kb_io``: rather
 than hand-rolling markdown from templates per slash-command invocation,

@@ -7,7 +7,7 @@ and an optional initial notebook scaffold. On first use, it also
 initializes the sandbox root (``notebooks/_sandbox/`` + its README +
 ``.gitignore``).
 
-A sandbox is *not* a tracked Limina artifact (no ``H###``/``E###``
+A sandbox is *not* a tracked research artifact (no ``H###``/``E###``
 allocated, no ``kb_write_guard`` validation). It's a free-form
 exploratory workspace whose conventions are encoded by the scaffolder.
 Promote a sandbox experiment to the tracked-artifact graph with

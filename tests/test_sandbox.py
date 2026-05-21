@@ -31,7 +31,7 @@ def _git_init_repo(repo: Path) -> None:
 def repo(tmp_path: Path) -> Path:
     """A fresh git-initialized repo for sandbox tests.
 
-    Sandbox scaffolding doesn't require Limina to be installed
+    Sandbox scaffolding doesn't require the aexp scaffold to be installed
     (it's not a tracked artifact), so we skip the install step
     that test_artifacts.py uses.
     """

@@ -1,4 +1,4 @@
-"""Tests for the signac-backed run store + Limina-aware run API."""
+"""Tests for the signac-backed run store + research-aware run API."""
 from __future__ import annotations
 
 import subprocess
@@ -36,7 +36,7 @@ def _git_init(path: Path) -> None:
 
 @pytest.fixture
 def installed_repo(tmp_path: Path) -> Path:
-    """A tmp dir with a git repo + Limina installed + signac initialized."""
+    """A tmp dir with a git repo + aexp scaffold installed + signac initialized."""
     repo = tmp_path / "repo"
     repo.mkdir()
     _git_init(repo)

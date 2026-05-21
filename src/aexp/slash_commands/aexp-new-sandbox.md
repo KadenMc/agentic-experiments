@@ -12,7 +12,7 @@ Create a new sandbox experiment directory for exploratory notebook work. `aexp` 
 
 ## What this is
 
-A **sandbox** is exploratory free-form work that hasn't yet promoted to a tracked Limina artifact. It's *not* in the H/E/F chain — no `kb_write_guard` validation applies, no artifact id is allocated. It's a working surface where iteration is cheap and reversible (`git checkout <slug-dir>` undoes everything).
+A **sandbox** is exploratory free-form work that hasn't yet promoted to a tracked research artifact. It's *not* in the H/E/F chain — no `kb_write_guard` validation applies, no artifact id is allocated. It's a working surface where iteration is cheap and reversible (`git checkout <slug-dir>` undoes everything).
 
 Promote a sandbox experiment to the tracked-artifact graph when its result is going to be cited as a paper finding:
 

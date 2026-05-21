@@ -31,7 +31,7 @@ def _write_artifact(
     frontmatter: dict[str, object],
     body: str,
 ) -> Path:
-    """Write a minimal Limina-shaped artifact to disk."""
+    """Write a minimal kb/-shaped artifact to disk."""
     fm_lines = ["---"]
     for k, v in frontmatter.items():
         if isinstance(v, list):

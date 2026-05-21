@@ -1,4 +1,4 @@
-"""Tests for the aexp hooks (ported from vendored Limina scripts).
+"""Tests for the aexp hooks (ported from the vendored harness scripts).
 
 Covers:
 
@@ -260,12 +260,12 @@ def test_kb_write_guard_blocks_invalid_md(
     """A malformed artifact under kb/research/ triggers kb_validate -> blocked."""
     target = scaffold_project / "kb" / "research" / "hypotheses" / "H050-bogus.md"
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text("this is not a valid Limina artifact", encoding="utf-8")
+    target.write_text("this is not a valid kb/ artifact", encoding="utf-8")
 
     payload = {
         "tool_input": {
             "file_path": str(target),
-            "content": "this is not a valid Limina artifact",
+            "content": "this is not a valid kb/ artifact",
         }
     }
     r = _run_hook(scaffold_project, "kb_write_guard", payload, python_exe)
@@ -281,7 +281,7 @@ def test_kb_write_guard_blocks_invalid_md(
 def test_stop_validate_passes_on_clean_kb(
     scaffold_project: Path, python_exe: str
 ) -> None:
-    """Vendored Limina's shipped kb/ template validates cleanly out of the box."""
+    """The vendored shipped kb/ template validates cleanly out of the box."""
     r = _run_hook(scaffold_project, "stop_validate", None, python_exe, timeout=30)
     assert r.returncode == 0, (r.returncode, r.stdout, r.stderr)
 

@@ -1,11 +1,11 @@
 """KB structural validator — frontmatter, aliases, wikilinks, H->E->F chain.
 
-Ported from the vendored Limina ``kb_validate.py`` into the package. Callable
+Ported from the vendored ``kb_validate.py`` into the package. Callable
 in-process via :func:`validate_kb`; :func:`main` preserves a ``python -m
 aexp.kb_validate`` CLI for parity with the old script invocation.
 
-Upstream Limina's optional telemetry hooks are intentionally dropped — ``aexp``
-does not emit to Limina's telemetry sink.
+The upstream validator's optional telemetry hooks are intentionally dropped
+— ``aexp`` does not emit to any external telemetry sink.
 """
 
 from __future__ import annotations
@@ -121,7 +121,7 @@ class ValidationResult:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Validate the Limina kb/ research graph.")
+    parser = argparse.ArgumentParser(description="Validate the kb/ research graph.")
     parser.add_argument("--kb-root", default="./kb", help="Path to kb/ (default: ./kb)")
     parser.add_argument("--check-file", default=None, help="Validate one file in isolation")
     parser.add_argument("--format", choices=("text", "json"), default="text")
@@ -752,7 +752,7 @@ def validate_kb(
     *,
     check_file: Path | str | None = None,
 ) -> ValidationResult:
-    """Validate a Limina ``kb/`` tree (or a single file inside it).
+    """Validate a ``kb/`` tree (or a single file inside it).
 
     Pure in-process entry point — no I/O beyond reading the KB tree, no CLI
     side effects. Hooks, ``aexp validate``, and tests all call this directly.

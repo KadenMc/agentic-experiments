@@ -27,7 +27,7 @@ aexp install
 
 After 10 seconds:
 
-- `kb/` seeded with Limina's template (`ACTIVE.md`, `DASHBOARD.md`, `mission/CHALLENGE.md`, `research/...`).
+- `kb/` seeded with the research-graph template (`ACTIVE.md`, `DASHBOARD.md`, `mission/CHALLENGE.md`, `research/...`).
 - `.claude/settings.json` with Python hooks enforcing the H→E→F chain.
 - `.runs/` initialized as a signac project.
 - `AGENTS.md` + `CLAUDE.md` merged in.

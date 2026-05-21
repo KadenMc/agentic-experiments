@@ -1,4 +1,4 @@
-"""agentic-experiments: Limina-fork + signac + W&B fusion layer.
+"""agentic-experiments: research harness + signac + W&B fusion layer.
 
 Top-level public API. Import from here; sub-modules may be reorganized.
 """
@@ -37,7 +37,7 @@ from aexp.install import (
     is_scaffold_installed,
 )
 
-# Limina readers ------------------------------------------------------------
+# kb/ artifact readers ------------------------------------------------------
 from aexp.kb_io import (
     ArtifactNotFoundError,
     ArtifactReadError,

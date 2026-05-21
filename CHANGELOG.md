@@ -32,6 +32,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     cleanup. The cluster-side `[jupyter]` extra and `aexp jupyter setup`
     extension recipe are unchanged.
 
+- **De-branded the vendored "limina" research harness.** `limina`
+  (vendored 2026-04-20) is no longer surfaced as a named centerpiece —
+  the harness reads as plain `aexp`. **Breaking** public-API renames
+  (old names removed; one shim — see below):
+  - `install_limina()` → `install_scaffold()`
+  - `is_limina_installed()` → `is_scaffold_installed()`
+  - `LiminaArtifactRef` → `ArtifactRef`
+  - module `aexp.limina_io` → `aexp.kb_io`. `aexp.limina_io` is kept as
+    a deprecation shim (re-exports `aexp.kb_io`, emits a
+    `DeprecationWarning`) for one release.
+
+  Persisted keys are renamed with a **read-side fallback**, so existing
+  signac projects and install markers keep resolving with no migration:
+  - run-link key `job.doc["limina"]` → `job.doc["aexp"]`
+  - install-marker field `limina_vendor_sha` → `vendor_sha`
+  - W&B run-config block `config["limina"]` → `config["aexp"]` (past
+    W&B runs keep `config.limina`; new runs get `config.aexp`)
+  - validator error codes `limina.validation_failed` /
+    `limina.validator_unavailable` → `aexp.*`
+
+  The vendored directory `src/aexp/vendor/limina/` keeps its name (a
+  vendoring convention; the upstream credit is in the README). Its
+  contents, the slash commands, `AGENTS.md` / `CLAUDE.md`, and the docs
+  are de-branded. The stale top-level "limina" skill was removed —
+  `aexp install` already scaffolds a project.
+
 ### Fixed
 
 - **`aexp install --with-jupyter` now pins the `.mcp.json` `jupyter`

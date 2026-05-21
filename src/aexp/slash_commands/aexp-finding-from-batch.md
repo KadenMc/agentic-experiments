@@ -1,5 +1,5 @@
 ---
-description: "Create a Limina finding (F###) citing a batch of runs by selector."
+description: "Create a finding (F###) citing a batch of runs by selector."
 ---
 
 Create a new finding that cites a batch selector — typically all runs

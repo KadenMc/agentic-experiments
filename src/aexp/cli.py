@@ -66,7 +66,7 @@ from aexp.validate import ValidateResult, validate_repo
 
 app = typer.Typer(
     name="aex",
-    help="Agentic Experiments — Limina + signac + W&B fusion layer.",
+    help="Agentic Experiments — signac + W&B experiment-tracking fusion layer.",
     no_args_is_help=True,
     pretty_exceptions_show_locals=False,
 )
@@ -505,7 +505,7 @@ def new_sandbox_cmd(
 ) -> None:
     """Scaffold a new sandbox experiment subdirectory under `notebooks/_sandbox/`.
 
-    A sandbox is exploratory free-form work. It's NOT a tracked Limina
+    A sandbox is exploratory free-form work. It's NOT a tracked research
     artifact (no H###/E### allocation, no kb_write_guard validation).
     Promote to the tracked-artifact graph with `/aexp-promote-nb` once
     a directional hypothesis lands.
@@ -643,13 +643,13 @@ def close_thread_cmd(
 
 @app.command("new-run")
 def new_run(
-    experiment: str = typer.Option(..., "--experiment", help="Limina E### id."),
+    experiment: str = typer.Option(..., "--experiment", help="E### id."),
     hypothesis: str | None = typer.Option(None, "--hypothesis"),
     sub_hypothesis: str | None = typer.Option(None, "--sub-hypothesis"),
     sp: str | None = typer.Option(None, "--sp", help="KEY=VAL,KEY=VAL state-point params."),
     no_commit: bool = typer.Option(False, "--no-commit", help="Skip code_commit/code_dirty in sp."),
 ) -> None:
-    """Create a signac job linked to a Limina experiment."""
+    """Create a signac job linked to an experiment."""
     statepoint = _parse_sp_kv(sp)
     job = create_run(
         experiment_id=experiment,
@@ -669,7 +669,7 @@ def list_runs_cmd(
     status: str | None = typer.Option(None, "--status"),
     sp: str | None = typer.Option(None, "--sp", help="Exact-match filter KEY=VAL,..."),
 ) -> None:
-    """List signac jobs filtered by Limina link + sp."""
+    """List signac jobs filtered by run-link + sp."""
     sp_filters = _parse_sp_kv(sp)
     jobs = find_runs(
         experiment_id=experiment,
@@ -720,7 +720,7 @@ def list_batches_cmd(
 
 @app.command("show-run")
 def show_run(job_id: str) -> None:
-    """Show state point, doc, linked Limina frame for a run."""
+    """Show state point, doc, linked research frame for a run."""
     job = open_run(job_id)
     s = summarize_run(job)
     console.print(f"[bold]{job.id}[/bold] ({s.batch_slug})")
@@ -834,7 +834,7 @@ def validate(
     kb_only: bool = typer.Option(False, "--kb-only"),
     runs_only: bool = typer.Option(False, "--runs-only"),
 ) -> None:
-    """Validate Limina KB + run-link integrity."""
+    """Validate the KB + run-link integrity."""
     if kb_only and runs_only:
         console.print("[red]cannot combine --kb-only and --runs-only[/red]")
         _exit(2)
@@ -1205,7 +1205,7 @@ def _parse_slurm_kwargs(
 
 @queue_app.command("add")
 def queue_add_cmd(
-    experiment: str = typer.Option(..., "--experiment", help="Limina E### id."),
+    experiment: str = typer.Option(..., "--experiment", help="E### id."),
     hypothesis: str | None = typer.Option(None, "--hypothesis"),
     sp: str | None = typer.Option(
         None, "--sp", help="Fixed sp values: KEY=VAL,KEY=VAL."

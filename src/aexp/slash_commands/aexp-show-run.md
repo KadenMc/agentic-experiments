@@ -1,5 +1,5 @@
 ---
-description: "Show state point, doc, and linked Limina frame for one signac run."
+description: "Show state point, doc, and linked research frame for one signac run."
 ---
 
 Show full detail for a single signac run — its state point, doc, status,

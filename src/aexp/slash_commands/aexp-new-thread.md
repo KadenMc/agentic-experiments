@@ -1,5 +1,5 @@
 ---
-description: "Create a new Limina thread (T###) — forward-looking research concern broader than a hypothesis."
+description: "Create a new research thread (T###) — forward-looking research concern broader than a hypothesis."
 ---
 
 Create a thread artifact. **Threads are not hypotheses.** A hypothesis

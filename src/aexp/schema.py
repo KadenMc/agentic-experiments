@@ -172,13 +172,13 @@ SupportingRun = SupportingJobRun | BatchSelector
 
 
 # ---------------------------------------------------------------------------
-# Limina artifact reference (read-only handle returned by kb_io)
+# Artifact reference (read-only handle returned by kb_io)
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class ArtifactRef:
-    """A typed pointer to one Limina artifact on disk.
+    """A typed pointer to one research artifact on disk.
 
     Returned by ``kb_io.load_*`` helpers. The raw frontmatter dict is
     exposed as ``metadata`` so callers can read fields we don't model.

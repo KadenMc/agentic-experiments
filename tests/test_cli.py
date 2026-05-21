@@ -35,7 +35,7 @@ def runner(monkeypatch: pytest.MonkeyPatch) -> CliRunner:
 
 @pytest.fixture
 def installed_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Install Limina, chdir into the repo, and return its path."""
+    """Install the aexp scaffold, chdir into the repo, and return its path."""
     repo = tmp_path / "repo"
     repo.mkdir()
     _git_commit(repo)

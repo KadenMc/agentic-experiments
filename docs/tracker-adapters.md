@@ -46,7 +46,7 @@ with tracked_run(job, project="my-project", offline=True) as run:
 What `tracked_run` does:
 
 - Derives the deterministic group slug `H###/E###/condition` from the linked
-  Limina artifacts and `job.sp`.
+  research artifacts and `job.sp`.
 - Assembles tags (`kind=experiment`, `H###`, `E###`, `condition=X`), pulls
   the hypothesis statement / local hypothesis / success criteria into
   `notes`, flattens the state point into `config`, and sets `dir` to the
@@ -252,8 +252,8 @@ aexp sync-offline --dry-run
 Or drive wandb directly: `wandb sync --sync-all .runs/`.
 
 Run IDs are stable between offline and online, so synced runs show up in
-W&B with the same id, group (`H012/E018/full`), tags, and full Limina
-config (`limina.experiment_id`, `limina.hypothesis_id`, etc.) regardless of
+W&B with the same id, group (`H012/E018/full`), tags, and full run-link
+config (`aexp.experiment_id`, `aexp.hypothesis_id`, etc.) regardless of
 which mode initialized them.
 
 ### Python API
@@ -298,5 +298,5 @@ OpenTelemetry is a plausible v1.1 extra (`pip install
 agentic-experiments[otel]`): Claude Code itself emits OTEL under
 `CLAUDE_CODE_ENABLE_TELEMETRY=1`, so our spans could land in the same
 collector and correlate by session id. Not shipping in v1 — we don't yet
-know whether structured JSON logs to stderr (which the Limina hooks already
+know whether structured JSON logs to stderr (which the aexp hooks already
 produce) are enough.

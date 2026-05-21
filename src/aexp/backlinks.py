@@ -1,4 +1,4 @@
-"""Bidirectional wiki-link maintenance for Limina ``kb/`` artifacts.
+"""Bidirectional wiki-link maintenance for ``kb/`` artifacts.
 
 ``kb_validate`` enforces that a child artifact (``F###``) and its parent
 (``H###``, ``E###``) link each other in their ``## Links`` sections. Creating

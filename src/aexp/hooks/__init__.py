@@ -13,6 +13,6 @@ Design notes
   is used as a fallback when that assumption does not hold.
 - Hooks never subprocess into ``scripts/`` files. Validation calls
   :func:`aexp.kb_validate.validate_kb` in-process.
-- Limina upstream's telemetry has been intentionally stripped — ``aexp`` does
-  not emit to Limina's sink.
+- The upstream harness's telemetry has been intentionally stripped — ``aexp``
+  does not emit to any external sink.
 """

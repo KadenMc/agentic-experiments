@@ -34,7 +34,7 @@ def _write_artifact(
     *,
     links: list[str] | None = None,
 ) -> Path:
-    """Write a minimally-conforming Limina artifact (aliases + Links section).
+    """Write a minimally-conforming kb/ artifact (aliases + Links section).
 
     kb_validate requires an ``aliases`` frontmatter entry matching the id and
     a ``## Links`` section listing wikilinks to related artifacts; without
@@ -303,7 +303,7 @@ def test_validate_surfaces_kb_validate_errors(installed_repo: Path) -> None:
 
 
 def test_validate_flags_orphan_run(installed_repo: Path) -> None:
-    # Create a job then wipe its Limina link so it becomes orphan.
+    # Create a job then wipe its run link so it becomes orphan.
     job = create_run(
         experiment_id="E001",
         statepoint={"c": "f"},

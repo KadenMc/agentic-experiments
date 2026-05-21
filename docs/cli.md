@@ -124,8 +124,8 @@ marker matches the current sha, the command short-circuits with an
 
 ### `aexp new-run`
 
-Create (or re-open) a signac job linked to a Limina experiment. Always
-writes `job.doc["limina"]` and `job.doc["status"] = "created"`. `--sp` takes
+Create (or re-open) a signac job linked to an experiment. Always
+writes `job.doc["aexp"]` and `job.doc["status"] = "created"`. `--sp` takes
 `KEY=VAL,KEY=VAL` — all values stay as strings; use the Python API when you
 need typed values (bools, ints, lists).
 
@@ -137,7 +137,7 @@ if bound.
 
 ### `aexp show-run`
 
-Print the full state point + doc + linked Limina frame for one run.
+Print the full state point + doc + linked research frame for one run.
 
 ### `aexp new-sandbox`
 
@@ -179,14 +179,14 @@ Change the grouping via the Python API: `list_batches(selector_keys=("condition"
 
 ### `aexp link`
 
-Retroactively stamp `doc["limina"]` onto an existing job. Used when a job
+Retroactively stamp `doc["aexp"]` onto an existing job. Used when a job
 was created outside `create_run` (e.g. from a notebook directly calling
 signac) and you want to link it to an experiment after the fact.
 
 ### `aexp bind-tracker`
 
 Start a tracker run and wire it to the job: group = `hypothesis/experiment/condition`,
-tags auto-derived, config includes the full Limina chain + `job.sp` + a
+tags auto-derived, config includes the full run-link chain + `job.sp` + a
 curated frame (hypothesis statement, local hypothesis, success criteria).
 `job.doc["tracker"]` stores the handle.
 

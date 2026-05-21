@@ -1,4 +1,4 @@
-"""Install the vendored Limina harness into a consumer repo.
+"""Install the vendored research harness into a consumer repo.
 
 ``install_scaffold`` walks the vendored snapshot at
 ``src/aexp/vendor/limina/`` and applies it to a target repo:
@@ -70,7 +70,7 @@ def _find_aexp_source_tree(start: Path) -> Path | None:
     No legitimate consumer would set this name in their pyproject, so a
     match is unambiguous evidence that the caller is pointing
     ``install`` at the dev repo itself — almost always a mistake (the
-    install would materialize a Limina/signac consumer scaffold inside
+    install would materialize a signac consumer scaffold inside
     the package source tree).
     """
     cur = start.resolve()
@@ -776,7 +776,7 @@ def install_scaffold(
     allow_self_install: bool = False,
     with_jupyter: bool = False,
 ) -> list[InstallAction]:
-    """Install the vendored Limina harness into ``repo_root``.
+    """Install the vendored research harness into ``repo_root``.
 
     Parameters
     ----------
@@ -864,7 +864,7 @@ def install_scaffold(
                 f"`aexp install` materializes a consumer-side scaffold "
                 f"(kb/, templates/, .claude/, .runs/, etc.) — running it "
                 f"inside the package's own source tree pollutes the dev "
-                f"repo with non-package files and creates a Limina/signac "
+                f"repo with non-package files and creates a signac "
                 f"project layered on top of itself.\n\n"
                 f"You almost certainly meant to install into a separate "
                 f"consumer repo. `cd` there and re-run.\n\n"
@@ -988,7 +988,7 @@ def install_scaffold(
         )
     )
 
-    # 3b. Install Limina's Claude Code skills into <repo>/.claude/skills/.
+    # 3b. Install the vendored Claude Code skills into <repo>/.claude/skills/.
     # AGENTS.md references skills like $experiment-rigor; without this step
     # those references are broken for every consumer repo.
     actions.extend(_install_skills(root, force=force, dry_run=dry_run))

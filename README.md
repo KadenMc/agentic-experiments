@@ -45,7 +45,7 @@
 
 - **Hypothesis-first, not metric-first** — you can't start a run without a live hypothesis; you can't ship a finding without cited runs
 - **Git is the source of truth** — every run carries its commit SHA; the knowledge base lives in git; nothing load-bearing is ephemeral
-- **Integrate, don't reinvent** — [signac](https://signac.readthedocs.io) for run state, [W&B](https://wandb.ai/) for observability, [Limina](https://github.com/KadenMc/limina) for the research-graph primitives (the H→E→F artifact model, templates, and methodology skills this project builds on). `aexp` is the glue and the discipline
+- **Integrate, don't reinvent** — [signac](https://signac.readthedocs.io) for run state, [W&B](https://wandb.ai/) for observability, and a vendored research harness for the H→E→F artifact model, templates, and methodology skills. `aexp` is the glue and the discipline
 - **Portable by default** — the MCP server runs via `uvx` from PyPI; `.mcp.json` is identical on every machine and committable to git
 
 ---
@@ -260,7 +260,7 @@ src/aexp/
   install.py            # apply the harness into a consumer repo
   runs.py               # signac wrappers: create_run, open_run, find_runs, run_lifecycle
   linking.py            # batch queries + retroactive run-to-experiment linking
-  limina_io.py          # typed read wrappers for H/E/F/L/CR/SR artifacts
+  kb_io.py              # typed read wrappers for H/E/F/L/CR/SR artifacts
   validate.py           # composes KB structural + run-link + citation integrity
   kb_validate.py        # KB structural validator (frontmatter, aliases, chain)
   schema.py             # pydantic + dataclass types
@@ -328,6 +328,12 @@ Every edit to `src/aexp/*.py` is now live in:
 > `--dev` bakes your machine's Python path into `.mcp.json`. **Do not commit that form** — gitignore it while iterating, or re-run `aexp install --force` (without `--dev`) to regenerate the portable `uvx` form before committing.
 
 ---
+
+## Acknowledgements
+
+The vendored research harness — the H→E→F artifact model, the `kb/` layout,
+artifact templates, and methodology skills — was adapted from
+[limina](https://github.com/KadenMc/limina).
 
 ## License
 

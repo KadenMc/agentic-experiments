@@ -1,4 +1,4 @@
-"""Typed read wrappers over Limina ``kb/`` artifacts.
+"""Typed read wrappers over the ``kb/`` research artifacts.
 
 Reads parse the YAML frontmatter with ``python-frontmatter`` and return a
 :class:`~aexp.schema.ArtifactRef`. Everything here is read-only;
@@ -93,7 +93,7 @@ def find_artifact_path(artifact_id: str, *, kb_root: Path) -> Path:
             f"no artifact file matching {artifact_id}-*.md under {directory}"
         )
     if len(matches) > 1:
-        # Limina requires one file per id; kb_validate flags duplicates. Be
+        # The kb/ layout requires one file per id; kb_validate flags duplicates. Be
         # conservative here and raise rather than pick silently.
         raise ArtifactReadError(
             f"multiple files match {artifact_id}-*.md under {directory}: "
@@ -113,7 +113,7 @@ def _extract_title(body: str, fallback: str) -> str:
     if not m:
         return fallback
     raw = m.group(1).strip()
-    # Limina uses "{ID} — {Title}"; strip the leading id if present.
+    # Artifact H1s use "{ID} — {Title}"; strip the leading id if present.
     for sep in (" — ", " - ", "— ", "- "):
         if sep in raw:
             _id, _, rest = raw.partition(sep)
@@ -123,7 +123,7 @@ def _extract_title(body: str, fallback: str) -> str:
 
 
 def _load_artifact(path: Path, kb_root: Path) -> ArtifactRef:
-    """Parse a Limina markdown artifact file into a typed reference."""
+    """Parse a kb/ markdown artifact file into a typed reference."""
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
