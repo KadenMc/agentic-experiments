@@ -17,7 +17,7 @@ from typing import Any
 
 import signac
 
-from aexp.limina_io import (
+from aexp.kb_io import (
     load_experiment,
     load_hypothesis,
 )

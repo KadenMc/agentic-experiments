@@ -46,7 +46,7 @@ DEFAULT_HEARTBEAT_S: float = 30.0
 class RunStoreNotInitialized(RuntimeError):
     """Raised when we cannot find an initialized signac project for this repo.
 
-    Usually means ``install_limina`` hasn't been run yet.
+    Usually means ``install_scaffold`` hasn't been run yet.
     """
 
 

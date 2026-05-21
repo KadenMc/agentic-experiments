@@ -25,8 +25,8 @@ from aexp.artifacts import (
     new_hypothesis,
     new_thread,
 )
-from aexp.install import InstallRefused, install_limina
-from aexp.limina_io import (
+from aexp.install import InstallRefused, install_scaffold
+from aexp.kb_io import (
     ArtifactNotFoundError,
     list_kb_artifacts,
     load_thread,
@@ -285,7 +285,7 @@ def install(
     if dry_run:
         console.print(_INSTALL_HEADS_UP)
         try:
-            actions = install_limina(
+            actions = install_scaffold(
                 cwd,
                 run_store=run_store,
                 force=force,
@@ -313,7 +313,7 @@ def install(
             raise typer.Exit(code=1)
 
     try:
-        actions = install_limina(
+        actions = install_scaffold(
             cwd,
             run_store=run_store,
             force=force,

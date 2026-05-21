@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from aexp.install import install_limina
+from aexp.install import install_scaffold
 from aexp.runs import create_run
 from aexp.validate import VALID_STATUSES, validate_repo
 
@@ -83,7 +83,7 @@ def installed_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
     _git_commit(repo)
-    install_limina(repo)
+    install_scaffold(repo)
     return repo
 
 

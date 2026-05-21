@@ -8,7 +8,7 @@ import pytest
 from typer.testing import CliRunner
 
 from aexp.cli import app
-from aexp.install import install_limina
+from aexp.install import install_scaffold
 
 
 def _git_commit(repo: Path) -> None:
@@ -39,7 +39,7 @@ def installed_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
     _git_commit(repo)
-    install_limina(repo)
+    install_scaffold(repo)
     monkeypatch.chdir(repo)
     return repo
 
@@ -472,7 +472,7 @@ def _seed_hypothesis_and_experiment(
     if runner_command is not None:
         import frontmatter  # type: ignore[import-not-found]
 
-        from aexp.limina_io import find_artifact_path
+        from aexp.kb_io import find_artifact_path
 
         exp_path = find_artifact_path("E001", kb_root=repo / "kb")
         post = frontmatter.load(str(exp_path))

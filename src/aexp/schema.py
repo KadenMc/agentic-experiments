@@ -9,7 +9,7 @@ Conventions
 - ``RunLink``: the canonical shape of ``job.doc["aexp"]``.
 - ``SupportingRun`` / ``BatchSelector``: entries in a Finding's
   ``supporting_runs:`` frontmatter list (see plan §2, §8).
-- ``LiminaArtifactRef``: typed handle returned by ``limina_io`` readers.
+- ``ArtifactRef``: typed handle returned by ``kb_io`` readers.
 - ``RunSummary``: flat summary row for CLI ``list-runs`` / ``list-batches``.
 - ``Issue``: an actionable validator finding; the CLI prints these.
 """
@@ -172,15 +172,15 @@ SupportingRun = SupportingJobRun | BatchSelector
 
 
 # ---------------------------------------------------------------------------
-# Limina artifact reference (read-only handle returned by limina_io)
+# Limina artifact reference (read-only handle returned by kb_io)
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
-class LiminaArtifactRef:
+class ArtifactRef:
     """A typed pointer to one Limina artifact on disk.
 
-    Returned by ``limina_io.load_*`` helpers. The raw frontmatter dict is
+    Returned by ``kb_io.load_*`` helpers. The raw frontmatter dict is
     exposed as ``metadata`` so callers can read fields we don't model.
     """
 
@@ -316,7 +316,7 @@ __all__ = [
     "BatchSummary",
     "Issue",
     "IssueSeverity",
-    "LiminaArtifactRef",
+    "ArtifactRef",
     "MaterializeResult",
     "RUN_LINK_KEY",
     "QueueEntry",

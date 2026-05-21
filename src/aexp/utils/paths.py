@@ -26,7 +26,7 @@ class InstalledMarker(TypedDict, total=False):
     installed_at: str
     run_store_path: str
     vendor_sha: str
-    python_exe: str           # absolute path to the Python that ran install_limina
+    python_exe: str           # absolute path to the Python that ran install_scaffold
     conda_env_name: str       # CONDA_DEFAULT_ENV at install time, or "" for venv/system Python
     jupyter_enabled: bool     # True if any prior install used --with-jupyter; sticky once set
 

@@ -1,7 +1,7 @@
 """Claude Code hooks — shipped inside the ``aexp`` package.
 
 Each hook is a small ``python -m aexp.hooks.<name>`` entry point referenced
-from the ``.claude/settings.json`` that :func:`aexp.install.install_limina`
+from the ``.claude/settings.json`` that :func:`aexp.install.install_scaffold`
 writes into a consumer repo. The hook scripts **do not** get copied into the
 repo — they live here and upgrade with ``pip install -U agentic-experiments``.
 

@@ -15,7 +15,7 @@ import pytest
 
 pytest.importorskip("mcp")
 
-from aexp.install import install_limina  # noqa: E402
+from aexp.install import install_scaffold  # noqa: E402
 
 
 def _git_commit(repo: Path) -> None:
@@ -37,7 +37,7 @@ def installed_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
     _git_commit(repo)
-    install_limina(repo)
+    install_scaffold(repo)
     monkeypatch.chdir(repo)
     return repo
 

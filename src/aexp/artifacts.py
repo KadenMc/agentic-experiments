@@ -1,6 +1,6 @@
 """Create Limina ``kb/`` artifacts (H/E/F) with bidirectional backlinks.
 
-This is the v1.1 surface flagged as planned in ``aexp.limina_io``: rather
+This is the v1.1 surface flagged as planned in ``aexp.kb_io``: rather
 than hand-rolling markdown from templates per slash-command invocation,
 agents call :func:`new_hypothesis` / :func:`new_experiment` /
 :func:`new_finding` and get a validator-clean file on disk plus every
@@ -29,7 +29,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from aexp.backlinks import add_backlink
-from aexp.limina_io import (
+from aexp.kb_io import (
     ArtifactNotFoundError,
     find_artifact_path,
     kind_dir,

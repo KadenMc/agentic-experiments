@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from aexp.install import install_limina
+from aexp.install import install_scaffold
 from aexp.queue import (
     DuplicatePendingJobWarning,
     RunnerCommandMissing,
@@ -67,7 +67,7 @@ def installed_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
     _git_commit(repo)
-    install_limina(repo)
+    install_scaffold(repo)
     return repo
 
 
@@ -123,7 +123,7 @@ def _patch_experiment_frontmatter(
     """Rewrite only the specified fields in an existing E###'s frontmatter."""
     import frontmatter  # type: ignore[import-not-found]
 
-    from aexp.limina_io import find_artifact_path
+    from aexp.kb_io import find_artifact_path
 
     exp_path = find_artifact_path(experiment_id, kb_root=repo / "kb")
     post = frontmatter.load(str(exp_path))

@@ -18,7 +18,7 @@ from aexp.artifacts import (
     slugify,
 )
 from aexp.backlinks import add_backlink
-from aexp.install import install_limina
+from aexp.install import install_scaffold
 from aexp.kb_validate import validate_kb
 
 
@@ -41,7 +41,7 @@ def installed_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
     _git_commit(repo)
-    install_limina(repo)
+    install_scaffold(repo)
     return repo
 
 

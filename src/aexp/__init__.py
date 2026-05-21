@@ -33,12 +33,12 @@ from aexp.install import (
     InstallAction,
     InstallRefused,
     compute_vendor_sha,
-    install_limina,
-    is_limina_installed,
+    install_scaffold,
+    is_scaffold_installed,
 )
 
 # Limina readers ------------------------------------------------------------
-from aexp.limina_io import (
+from aexp.kb_io import (
     ArtifactNotFoundError,
     ArtifactReadError,
     list_kb_artifacts,
@@ -94,10 +94,10 @@ from aexp.runs import (
 
 # Schema / types ------------------------------------------------------------
 from aexp.schema import (
+    ArtifactRef,
     BatchSelector,
     BatchSummary,
     Issue,
-    LiminaArtifactRef,
     MaterializeResult,
     QueueEntry,
     RunLink,
@@ -145,8 +145,8 @@ __all__ = [
     "InstallAction",
     "InstallRefused",
     "compute_vendor_sha",
-    "install_limina",
-    "is_limina_installed",
+    "install_scaffold",
+    "is_scaffold_installed",
     # artifacts (H/E/F/T creation + backlink patching + thread lifecycle)
     "ArtifactCreateError",
     "ArtifactCreateResult",
@@ -191,7 +191,7 @@ __all__ = [
     "run_queue",
     "run_queued",
     "stop_queued",
-    # limina_io
+    # kb_io
     "ArtifactNotFoundError",
     "ArtifactReadError",
     "list_kb_artifacts",
@@ -204,7 +204,7 @@ __all__ = [
     "BatchSelector",
     "BatchSummary",
     "Issue",
-    "LiminaArtifactRef",
+    "ArtifactRef",
     "MaterializeResult",
     "QueueEntry",
     "RunLink",

@@ -44,13 +44,13 @@ from aexp.artifacts import (
 from aexp.artifacts import (
     new_thread as _new_thread,
 )
-from aexp.limina_io import (
+from aexp.kb_io import (
     ArtifactNotFoundError as _ArtifactNotFoundError,
 )
-from aexp.limina_io import (
+from aexp.kb_io import (
     list_kb_artifacts as _list_kb_artifacts,
 )
-from aexp.limina_io import (
+from aexp.kb_io import (
     load_thread as _load_thread,
 )
 from aexp.linking import (

@@ -5,9 +5,9 @@ import pytest
 from pydantic import ValidationError
 
 from aexp.schema import (
+    ArtifactRef,
     BatchSelector,
     Issue,
-    LiminaArtifactRef,
     RunLink,
     RunSummary,
     SupportingJobRun,
@@ -89,8 +89,8 @@ def test_tracker_binding_minimal() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_limina_artifact_ref_is_frozen() -> None:
-    ref = LiminaArtifactRef(
+def test_artifact_ref_is_frozen() -> None:
+    ref = ArtifactRef(
         kind="E",
         id="E001",
         path="kb/research/experiments/E001-foo.md",

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from aexp.install import install_limina
+from aexp.install import install_scaffold
 from aexp.runs import (
     RunNotFound,
     RunStoreNotInitialized,
@@ -54,7 +54,7 @@ def installed_repo(tmp_path: Path) -> Path:
         check=True,
         capture_output=True,
     )
-    install_limina(repo)
+    install_scaffold(repo)
     return repo
 
 
@@ -110,7 +110,7 @@ def test_create_run_adds_commit_by_default(installed_repo: Path) -> None:
     )
     assert "code_commit" in job.sp
     assert len(job.sp["code_commit"]) == 40
-    # After install_limina, the fresh repo's working tree is dirty (we just
+    # After install_scaffold, the fresh repo's working tree is dirty (we just
     # wrote kb/, scripts/, etc.) — ensure the flag is present as a bool.
     assert isinstance(job.sp["code_dirty"], bool)
 

@@ -1,6 +1,6 @@
 """Install the vendored Limina harness into a consumer repo.
 
-``install_limina`` walks the vendored snapshot at
+``install_scaffold`` walks the vendored snapshot at
 ``src/aexp/vendor/limina/`` and applies it to a target repo:
 
 - ``kb/``, ``templates/``, ``scripts/`` -> copied verbatim (skipped if the
@@ -37,7 +37,7 @@ from aexp.utils.paths import (
 
 
 class InstallRefused(RuntimeError):
-    """Raised by :func:`install_limina` when install must not proceed.
+    """Raised by :func:`install_scaffold` when install must not proceed.
 
     Currently only raised by the source-tree-self-install guard (refusing
     to install a consumer-side scaffold inside the agentic-experiments
@@ -87,7 +87,7 @@ def _find_aexp_source_tree(start: Path) -> Path | None:
             return None
         cur = cur.parent
 
-VENDOR_LIMINA = Path(__file__).resolve().parent / "vendor" / "limina"
+VENDOR_ROOT = Path(__file__).resolve().parent / "vendor" / "limina"
 
 # Subdirectories of the vendor tree that get copied verbatim into the consumer repo.
 #
@@ -124,7 +124,7 @@ ActionKind = Literal[
 
 @dataclass(frozen=True)
 class InstallAction:
-    """A single side-effect recorded by ``install_limina``."""
+    """A single side-effect recorded by ``install_scaffold``."""
 
     kind: ActionKind
     path: str  # relative to repo root
@@ -136,7 +136,7 @@ class InstallAction:
 # ---------------------------------------------------------------------------
 
 
-def compute_vendor_sha(vendor_root: Path = VENDOR_LIMINA) -> str:
+def compute_vendor_sha(vendor_root: Path = VENDOR_ROOT) -> str:
     """Compute a deterministic hash of every file under ``vendor_root``.
 
     Files are sorted by POSIX-style relative path, then hashed as
@@ -686,7 +686,7 @@ def _install_skills(root: Path, *, force: bool, dry_run: bool = False) -> list[I
     actions: list[InstallAction] = []
     dst_skills = root / ".claude" / "skills"
 
-    skills_src = VENDOR_LIMINA / "skills"
+    skills_src = VENDOR_ROOT / "skills"
     if skills_src.is_dir():
         for skill_dir in sorted(p for p in skills_src.iterdir() if p.is_dir()):
             dst = dst_skills / skill_dir.name
@@ -765,7 +765,7 @@ def _copy_tree(
 # ---------------------------------------------------------------------------
 
 
-def install_limina(
+def install_scaffold(
     repo_root: str | Path,
     *,
     run_store: str = ".runs",
@@ -920,7 +920,7 @@ def install_limina(
     for name in _TREES_VERBATIM:
         actions.extend(
             _copy_tree(
-                VENDOR_LIMINA / name,
+                VENDOR_ROOT / name,
                 root / name,
                 force=force,
                 dry_run=dry_run,
@@ -930,7 +930,7 @@ def install_limina(
 
     # 2. Copy / block-merge top-level Markdown docs.
     for name in _MERGE_FILES:
-        src = VENDOR_LIMINA / name
+        src = VENDOR_ROOT / name
         if not src.is_file():
             continue
         actions.append(_merge_or_copy_markdown(src, root / name, dry_run=dry_run))
@@ -946,7 +946,7 @@ def install_limina(
     #     Copied unconditionally (not gated on --with-jupyter): the doc is
     #     small, harmless, and lets a consumer read about the integration
     #     before deciding to opt in.
-    jupyter_doc_src = VENDOR_LIMINA / "docs" / "setup" / "jupyter-mcp.md"
+    jupyter_doc_src = VENDOR_ROOT / "docs" / "setup" / "jupyter-mcp.md"
     if jupyter_doc_src.is_file():
         actions.append(
             _copy_file(
@@ -1033,7 +1033,7 @@ def _ensure_signac_project(path: Path) -> signac.Project:
         return signac.init_project(path=str(path))
 
 
-def is_limina_installed(repo_root: str | Path) -> bool:
+def is_scaffold_installed(repo_root: str | Path) -> bool:
     """True if ``repo_root`` has an install marker AND the expected tree shape.
 
     We check for ``kb/`` and ``.claude/settings.json`` — the two consumer-repo

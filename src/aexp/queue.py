@@ -42,7 +42,7 @@ from typing import Any, Literal
 
 import signac
 
-from aexp.limina_io import ArtifactNotFoundError, load_experiment
+from aexp.kb_io import ArtifactNotFoundError, load_experiment
 from aexp.runs import (
     create_run,
     find_runs,

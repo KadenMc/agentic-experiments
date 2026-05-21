@@ -22,13 +22,13 @@ import re
 from pathlib import Path
 from typing import Any, Literal
 
-from aexp.kb_validate import format_text as _kb_format_text
-from aexp.kb_validate import validate_kb
-from aexp.limina_io import (
+from aexp.kb_io import (
     ArtifactNotFoundError,
     find_artifact_path,
     list_kb_artifacts,
 )
+from aexp.kb_validate import format_text as _kb_format_text
+from aexp.kb_validate import validate_kb
 from aexp.linking import list_batches
 from aexp.runs import get_run_store
 from aexp.schema import Issue, RunStatus, read_run_link

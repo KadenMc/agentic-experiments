@@ -1,12 +1,12 @@
-"""Tests for ``limina_io`` artifact readers."""
+"""Tests for ``kb_io`` artifact readers."""
 from __future__ import annotations
 
 from pathlib import Path
 
 import pytest
 
-from aexp.install import install_limina
-from aexp.limina_io import (
+from aexp.install import install_scaffold
+from aexp.kb_io import (
     ArtifactNotFoundError,
     ArtifactReadError,
     find_artifact_path,
@@ -50,7 +50,7 @@ def _write_artifact(
 @pytest.fixture
 def populated_kb(tmp_path: Path) -> Path:
     """A fresh kb/ with one artifact of each kind for read-side tests."""
-    install_limina(tmp_path, assert_git=False)
+    install_scaffold(tmp_path, assert_git=False)
     kb = tmp_path / "kb"
 
     _write_artifact(
@@ -195,7 +195,7 @@ def test_load_artifact_path_is_repo_relative_posix(populated_kb: Path) -> None:
 
 def test_load_artifact_recovers_id_from_filename(tmp_path: Path) -> None:
     """Frontmatter without an ``id`` field: we fall back to the filename."""
-    install_limina(tmp_path, assert_git=False)
+    install_scaffold(tmp_path, assert_git=False)
     kb = tmp_path / "kb"
     p = kb / "research" / "hypotheses" / "H042-nofm-id.md"
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -226,7 +226,7 @@ def test_list_kb_artifacts_by_kind(populated_kb: Path) -> None:
 
 
 def test_list_kb_artifacts_skips_malformed(tmp_path: Path) -> None:
-    install_limina(tmp_path, assert_git=False)
+    install_scaffold(tmp_path, assert_git=False)
     kb = tmp_path / "kb"
     # Drop a broken file that can't be parsed or lacks a recoverable id.
     (kb / "research" / "hypotheses" / "H999-broken.md").write_text(

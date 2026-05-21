@@ -13,7 +13,7 @@ import pytest
 
 wandb = pytest.importorskip("wandb")
 
-from aexp.install import install_limina  # noqa: E402
+from aexp.install import install_scaffold  # noqa: E402
 from aexp.runs import create_run  # noqa: E402
 from aexp.trackers import (  # noqa: E402
     TrackerInitError,
@@ -128,7 +128,7 @@ def installed_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
     _git_commit(repo)
-    install_limina(repo)
+    install_scaffold(repo)
     return repo
 
 

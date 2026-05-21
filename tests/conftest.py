@@ -8,26 +8,26 @@ from pathlib import Path
 import pytest
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
-VENDOR_LIMINA = PACKAGE_ROOT / "src" / "aexp" / "vendor" / "limina"
+VENDOR_ROOT = PACKAGE_ROOT / "src" / "aexp" / "vendor" / "limina"
 
 
 @pytest.fixture
-def vendored_limina_tree() -> Path:
+def vendored_tree() -> Path:
     """Absolute path to the vendored Limina snapshot in this repo."""
-    assert VENDOR_LIMINA.is_dir(), f"vendored Limina missing at {VENDOR_LIMINA}"
-    return VENDOR_LIMINA
+    assert VENDOR_ROOT.is_dir(), f"vendored Limina missing at {VENDOR_ROOT}"
+    return VENDOR_ROOT
 
 
 @pytest.fixture
-def limina_project(tmp_path: Path) -> Path:
+def scaffold_project(tmp_path: Path) -> Path:
     """Copy the vendored Limina snapshot into a tmp dir.
 
     Gives each test an isolated ``PROJECT_ROOT`` — the ported hooks derive
     their root from ``Path(__file__).resolve().parents[2]``, so running a
     copied hook sets ``PROJECT_ROOT`` to this tmp dir.
     """
-    dest = tmp_path / "limina_project"
-    shutil.copytree(VENDOR_LIMINA, dest)
+    dest = tmp_path / "scaffold_project"
+    shutil.copytree(VENDOR_ROOT, dest)
     return dest
 
 
