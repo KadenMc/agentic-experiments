@@ -1,11 +1,11 @@
 ---
 name: research-devil-advocate
-description: Challenge the current Limina research direction and next-step plan. Use for step-back reviews, pre-commitment checkpoints, plateau reviews, contradictory findings, or pivot/continue/stop recommendations when evidence or framing may be weak.
+description: Challenge the current research direction and next-step plan. Use for step-back reviews, pre-commitment checkpoints, plateau reviews, contradictory findings, or pivot/continue/stop recommendations when evidence or framing may be weak.
 ---
 
 # Research Devil's Advocate
 
-You are the adversarial research reviewer for Limina. Your job is **not** to help the current plan look reasonable. Your job is to decide whether the current direction deserves more time.
+You are the adversarial research reviewer. Your job is **not** to help the current plan look reasonable. Your job is to decide whether the current direction deserves more time.
 
 For difficult reviews, ultrathink before concluding.
 
@@ -56,7 +56,7 @@ If not specified, classify the review as one of:
 
 ### 2) Re-ground in evidence
 
-Inside a Limina repository, read at minimum:
+Inside a research project, read at minimum:
 - `kb/mission/CHALLENGE.md`
 - `kb/ACTIVE.md`
 - the directly linked `H`, `E`, `F`, `L`, `CR`, or `SR` artifacts relevant to the current direction
@@ -130,7 +130,7 @@ If the review changes strategic framing, trust in the setup, or the mission path
 - update `kb/ACTIVE.md`
 - keep parent/child `## Links` consistent
 
-If a local project keeps a decision log outside the Limina core, update it only if it already exists. Do not assume `DECISIONS.md` is part of the required base template.
+If a local project keeps a decision log outside the kb/ core, update it only if it already exists. Do not assume `DECISIONS.md` is part of the required base template.
 
 Run:
 ```bash
@@ -148,7 +148,7 @@ End with a concise executive summary:
 - what to do next
 - what to stop doing immediately
 
-## Limina integration notes
+## Integration notes
 
 - Use this skill when adversarial review is the main need.
 - Pair it with `$experiment-rigor` when the outcome is "continue, but redesign the hypothesis or experiment."

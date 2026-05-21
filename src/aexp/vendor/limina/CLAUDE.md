@@ -1,4 +1,4 @@
-# Limina — Claude Adapter
+# Agentic Experiments — Claude Adapter
 
 Follow what `AGENTS.md` says.
 

@@ -1,11 +1,11 @@
 ---
 name: experiment-rigor
-description: Design, review, and conclude rigorous research experiments for Limina's H→E→F workflow. Use when creating or revising hypotheses, experiments, or findings; defining baselines, datasets, metrics, or stopping rules; comparing candidate methods; deciding whether a result is conclusive; or when a negative result may be caused by an invalid setup rather than a true method failure.
+description: Design, review, and conclude rigorous research experiments for the H→E→F workflow. Use when creating or revising hypotheses, experiments, or findings; defining baselines, datasets, metrics, or stopping rules; comparing candidate methods; deciding whether a result is conclusive; or when a negative result may be caused by an invalid setup rather than a true method failure.
 ---
 
 # Experiment Rigor
 
-Use this skill to turn Limina research into decision-grade evidence.
+Use this skill to turn research into decision-grade evidence.
 
 ## When to use it
 

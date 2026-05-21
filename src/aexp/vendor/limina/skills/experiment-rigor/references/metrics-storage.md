@@ -2,7 +2,7 @@
 
 ## Principle
 
-Keep Limina's narrative and decisions in `kb/`.
+Keep the project's narrative and decisions in `kb/`.
 Keep raw metrics in machine-readable files under `kb/research/data/`.
 If you also use an external tracker, treat `kb/` as the canonical cross-session memory and store the external run IDs there.
 
@@ -197,7 +197,7 @@ Record at minimum:
 - URL
 - model or artifact ID if available
 
-Mirror the decisive summary back into `summary.json` and the experiment file so Limina can reason about it in later sessions without depending on the external UI.
+Mirror the decisive summary back into `summary.json` and the experiment file so the agent can reason about it in later sessions without depending on the external UI.
 
 ## What belongs in `E` vs raw files
 

@@ -1,6 +1,6 @@
-# Limina — Shared Runtime Contract
+# Agentic Experiments — Shared Runtime Contract
 
-Limina is a research-first contract for autonomous technical investigation.
+This is a research-first contract for autonomous technical investigation.
 
 This file is the shared machine-facing instruction surface. Keep it short, specific, and stable. Runtime-specific details belong in adapters, skills, or scoped rules.
 
@@ -209,4 +209,4 @@ narrate.
    `/aexp-finding-from-batch`, or `/aexp-finding-placeholder`. The
    H/E/F chain closes when the finding cites real tracked runs.
 
-Implementation work can happen, but it is not a parallel core artifact graph in Limina. Research drives the contract; delivery details belong to the local project, not the shared template.
+Implementation work can happen, but it is not a parallel core artifact graph here. Research drives the contract; delivery details belong to the local project, not the shared template.

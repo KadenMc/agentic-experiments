@@ -107,16 +107,6 @@ _MERGE_FILES: tuple[str, ...] = ("AGENTS.md", "CLAUDE.md")
 _BEGIN_MARKER = "<!-- agentic-experiments:begin -->"
 _END_MARKER = "<!-- agentic-experiments:end -->"
 
-# Limina's Claude Code skills get copied into <repo>/.claude/skills/<name>/ so
-# they travel with the repo. AGENTS.md references them as $<name>; without
-# this step those references would be broken.
-#
-# The vendored ``skill/`` (singular) is the top-level "limina" skill; the
-# vendored ``skills/*`` (plural) are the four research-methodology skills
-# (experiment-rigor, exploratory-sota-research, research-devil-advocate,
-# build-maintainable-software).
-_SKILL_TOPLEVEL_NAME = "limina"
-
 
 ActionKind = Literal[
     "copied",
@@ -686,33 +676,15 @@ def _merge_or_copy_markdown(src: Path, dst: Path, *, dry_run: bool = False) -> I
 
 
 def _install_skills(root: Path, *, force: bool, dry_run: bool = False) -> list[InstallAction]:
-    """Copy vendored Limina skills into ``<root>/.claude/skills/``.
+    """Copy the vendored research-methodology skills into ``<root>/.claude/skills/``.
 
-    - ``vendor/limina/skill/`` (singular, the top-level "limina" skill) →
-      ``<root>/.claude/skills/limina/``
-    - ``vendor/limina/skills/<name>/`` (each research skill) →
-      ``<root>/.claude/skills/<name>/``
-
-    Each installed skill emits one ``installed_skill`` action. File-level
-    conflicts (existing skill files differing from vendor) are handled per
-    the same rules as ``_copy_tree``.
+    Each ``vendor/limina/skills/<name>/`` directory is copied to
+    ``<root>/.claude/skills/<name>/`` and emits one ``installed_skill``
+    action. File-level conflicts (existing skill files differing from
+    vendor) are handled per the same rules as ``_copy_tree``.
     """
     actions: list[InstallAction] = []
     dst_skills = root / ".claude" / "skills"
-
-    top_src = VENDOR_LIMINA / "skill"
-    if top_src.is_dir():
-        dst = dst_skills / _SKILL_TOPLEVEL_NAME
-        tree_actions = _copy_tree(top_src, dst, force=force, dry_run=dry_run)
-        actions.extend(tree_actions)
-        if any(a.kind == "copied" for a in tree_actions):
-            actions.append(
-                InstallAction(
-                    "installed_skill",
-                    _display_relpath(dst),
-                    f"copied vendor/limina/skill -> {_display_relpath(dst)}",
-                )
-            )
 
     skills_src = VENDOR_LIMINA / "skills"
     if skills_src.is_dir():

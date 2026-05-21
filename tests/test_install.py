@@ -435,8 +435,8 @@ def test_install_action_kinds_are_expected(fresh_git_repo: Path) -> None:
         assert a.path, a
 
 
-def test_install_copies_limina_skills_to_claude_skills(fresh_git_repo: Path) -> None:
-    """All vendored Limina skills must land under <repo>/.claude/skills/.
+def test_install_copies_skills_to_claude_skills(fresh_git_repo: Path) -> None:
+    """All vendored research skills must land under <repo>/.claude/skills/.
 
     Without these, the AGENTS.md references like $experiment-rigor are broken
     on every consumer repo.
@@ -444,8 +444,6 @@ def test_install_copies_limina_skills_to_claude_skills(fresh_git_repo: Path) -> 
     install_limina(fresh_git_repo)
     skills_root = fresh_git_repo / ".claude" / "skills"
     assert skills_root.is_dir()
-    # Top-level "limina" skill (from vendor/limina/skill/)
-    assert (skills_root / "limina" / "SKILL.md").is_file()
     # Research-methodology skills (from vendor/limina/skills/)
     expected = {
         "experiment-rigor",
@@ -462,10 +460,10 @@ def test_install_copies_limina_skills_to_claude_skills(fresh_git_repo: Path) -> 
 def test_install_skills_emits_installed_skill_actions(fresh_git_repo: Path) -> None:
     actions = install_limina(fresh_git_repo)
     skill_actions = [a for a in actions if a.kind == "installed_skill"]
-    # 4 research skills + 1 top-level "limina" skill = 5 installed_skill entries.
-    assert len(skill_actions) == 5, [a.path for a in skill_actions]
+    # 4 research-methodology skills = 4 installed_skill entries.
+    assert len(skill_actions) == 4, [a.path for a in skill_actions]
     paths = {Path(a.path).name for a in skill_actions}
-    assert "limina" in paths
+    assert "experiment-rigor" in paths
     assert "experiment-rigor" in paths
 
 

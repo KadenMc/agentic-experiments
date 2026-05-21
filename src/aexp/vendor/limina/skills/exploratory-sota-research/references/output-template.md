@@ -74,7 +74,7 @@ List the unknowns that prevent a stronger recommendation.
 ## 10. Suggested next searches or experiments
 Give the next 3-7 concrete research or validation moves.
 
-## 11. Persistent updates in Limina
+## 11. Persistent updates in kb/
 - Which `L` notes were created or updated?
 - Did the search open or revise any `H`, `CR`, or `SR` artifacts?
 - How should `kb/ACTIVE.md` change?
@@ -107,7 +107,7 @@ Use this card for each serious paper, benchmark, artifact, or review.
 - Main assumptions:
 - Main limitations / risks:
 - Recommendation:
-- Limina note:
+- kb/ note:
 
 ---
 

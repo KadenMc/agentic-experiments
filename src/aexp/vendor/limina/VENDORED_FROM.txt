@@ -1,24 +1,16 @@
-Limina source snapshot vendored into agentic-experiments.
+Vendored snapshot of "limina" (https://github.com/KadenMc/limina), v0.1.0,
+forked into agentic-experiments on 2026-04-20. One-time fork; not resynced.
 
-Upstream version:          0.1.0  (see ./VERSION)
-Vendored on:               2026-04-20
-Vendored from archive at:  C:\Vaults\SecondBrain\repos\agentic-experiments\reference\limina\
-Vendor policy:             One-time fork. Not resynced from upstream.
+The H->E->F artifact model, the kb/ layout, the templates/, and the
+methodology skills under this directory originate from that project and
+have since been adapted as agentic-experiments' own research scaffold.
 
-Files under this directory are the forked copy; the pristine snapshot is
-preserved at ``reference/limina/`` at the repo root for diff provenance.
-
-Changes applied during vendoring:
-- Replaced the 4 shell hooks with cross-platform Python ports:
-    scripts/hooks/session_start.sh       -> session_start.py
-    scripts/hooks/enforce_hef_chain.sh   -> enforce_hef_chain.py
-    scripts/hooks/kb_write_guard.sh      -> kb_write_guard.py
-    scripts/hooks/stop_validate.sh       -> stop_validate.py
-- Refactored scripts/hooks/_parse_hook_input.py into an importable module
-  (preserved CLI fallback for backward compatibility).
-- Translated .claude/settings.json into ./claude_settings.json with the
-  hook commands rewritten from `bash ...sh` to `python ...py`.
-- Dropped upstream setup.sh (its clone-and-reinit flow is replaced by
-  aexp.install.install_limina).
-- Dropped upstream requirements.txt (the sole entry, python-frontmatter,
-  is now a first-class dependency in agentic-experiments' pyproject.toml).
+Adaptations applied during vendoring:
+- The 4 shell hooks were replaced with cross-platform Python ports; they
+  now live in the aexp package (aexp.hooks.*) and are wired up by
+  `aexp install`.
+- The upstream .claude/settings.json was folded into the settings merge
+  that `aexp install` performs.
+- The upstream setup.sh and requirements.txt were dropped: project setup
+  is `aexp install`, and dependencies live in agentic-experiments'
+  pyproject.toml.

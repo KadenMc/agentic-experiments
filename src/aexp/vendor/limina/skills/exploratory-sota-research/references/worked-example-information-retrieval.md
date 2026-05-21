@@ -149,7 +149,7 @@ It should say something like:
 - Narrow heuristic patches that only fix one query subtype unless they are being used as a short-term stopgap.
 - Tiny leaderboard gains with large serving cost and no sign of transfer.
 
-## How to persist this in Limina
+## How to persist this in kb/
 
 After the landscape pass:
 - write the serious external sources as `L` notes

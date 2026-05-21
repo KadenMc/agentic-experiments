@@ -5,7 +5,7 @@ description: Map the AI/ML state of the art for a concrete technical problem. Us
 
 # Exploratory SOTA Research
 
-Use this skill to map the external mechanism landscape for a hard AI/ML research problem and turn that map into concrete Limina artifacts.
+Use this skill to map the external mechanism landscape for a hard AI/ML research problem and turn that map into concrete research artifacts.
 
 ## When to use it
 
@@ -25,9 +25,9 @@ Do not use this skill for:
 - implementation-only requests
 - questions where the user clearly wants a direct answer rather than an exploratory research process
 
-## Limina adapter
+## kb/ adapter
 
-When you use this skill inside a Limina repo:
+When you use this skill inside a research project:
 
 1. Read `kb/mission/CHALLENGE.md`.
 2. Read `kb/ACTIVE.md`.
@@ -191,7 +191,7 @@ For every serious candidate or source cluster, record at minimum:
 - limitations
 - recommendation
 
-Inside Limina:
+Inside a research project:
 - create or update `L` notes for serious sources, not just ad-hoc notes in chat
 - update `ACTIVE.md` when the working set changes
 - if the search materially changes the research direction, create or update `H`, `CR`, or `SR`
@@ -244,7 +244,7 @@ Unless the user asked for a different format, return:
 8. Generalizable insights
 9. Open questions
 10. Suggested next searches or experiments
-11. Persistent updates in Limina
+11. Persistent updates in kb/
 
 ## Output quality bar
 
@@ -262,7 +262,7 @@ A poor answer:
 - treats citations or venue prestige as enough
 - ignores cost and reproducibility
 - recommends mechanisms without saying where they fail
-- leaves decisive conclusions only in chat when Limina artifacts should change
+- leaves decisive conclusions only in chat when kb/ artifacts should change
 
 ## Additional resources
 
@@ -274,4 +274,4 @@ Load these only when helpful:
 
 ## Final instruction
 
-Be an exploratory researcher, not a keyword search engine. Inside Limina, leave behind durable notes and next moves, not just a polished survey.
+Be an exploratory researcher, not a keyword search engine. Inside a research project, leave behind durable notes and next moves, not just a polished survey.

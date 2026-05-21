@@ -3,7 +3,7 @@ aliases: ["DASHBOARD"]
 type: dashboard
 ---
 
-# Limina Dashboard
+# Research Dashboard
 
 ## Entry Points
 

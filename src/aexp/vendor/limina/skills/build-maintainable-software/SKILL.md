@@ -62,8 +62,8 @@ When trade-offs are ambiguous, prefer:
 - Open [references/design-principles.md](references/design-principles.md) for new features, major refactors, architecture changes, module boundaries, API design, naming, state management, error handling, or dependency direction.
 - Open [references/review-checklist.md](references/review-checklist.md) for code review, cleanup, simplification, test strategy, risk checks, or the final maintainability pass.
 - If the repository has local guidance (`AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md`, architecture docs, or test/lint scripts), follow those specifics first and use this skill as the cross-project default.
-- In Limina projects, use this skill for implementation, refactor, and review work that supports the mission. Do not use it to replace the research loop or to justify direction changes without evidence.
-- In Limina projects, pair this skill with:
+- In a research project, use this skill for implementation, refactor, and review work that supports the mission. Do not use it to replace the research loop or to justify direction changes without evidence.
+- In a research project, pair this skill with:
   - `$experiment-rigor` when the code change is part of experiment design, execution, or interpretation
   - `$exploratory-sota-research` when the missing piece is external research rather than code quality or design
 
@@ -79,5 +79,5 @@ When trade-offs are ambiguous, prefer:
 - When touching legacy code, leave the surrounding area clearer than you found it, but keep the behavioral delta tight.
 - When reviewing, distinguish correctness risks, maintainability risks, and optional polish. Prioritize the first two.
 - When comments are needed, explain why, invariants, or non-obvious trade-offs. Do not narrate obvious code.
-- If the work changes a mission-critical behavior, evaluation surface, or system assumption in Limina, persist the relevant rationale or follow-up evidence in the repository's `kb/` flow.
+- If the work changes a mission-critical behavior, evaluation surface, or system assumption in the project, persist the relevant rationale or follow-up evidence in the repository's `kb/` flow.
 - If a requested design conflicts with these rules, explain the trade-off briefly and follow the user's explicit intent.
