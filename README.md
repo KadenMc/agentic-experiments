@@ -15,6 +15,7 @@
     <a href="https://pypi.org/project/agentic-experiments/"><img src="https://img.shields.io/pypi/v/agentic-experiments.svg" alt="PyPI"></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License"></a>
     <a href="https://github.com/sponsors/KadenMc"><img src="https://img.shields.io/badge/sponsor-%E2%9D%A4-ea4aaa" alt="Sponsor"></a>
+[![SafeSkill 60/100](https://img.shields.io/badge/SafeSkill-60%2F100_Use%20with%20Caution-orange)](https://safeskill.dev/scan/kadenmc-agentic-experiments)
 </p>
 
 <p align="center">
