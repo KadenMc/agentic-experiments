@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The Jupyter MCP integration is now a single MCP server.** `aexp
+  install --with-jupyter` writes only the `jupyter` server entry to
+  `.mcp.json` (laptop-side `uvx jupyter-mcp-server` in MCP_SERVER mode,
+  runtime-retargetable to any node via `connect_to_jupyter`). The second
+  `jupyter-compute` server — an `npx mcp-remote` proxy to a cluster
+  `/mcp` endpoint (JUPYTER_SERVER mode) — is no longer emitted. It was a
+  near-duplicate of `jupyter`, could not retarget to a different node
+  without a `.mcp.json` edit + MCP restart, and was a standing
+  "which server do I use?" confusion surface.
+  - The `/aexp-jupyter-iterate` and `/aexp-promote-nb` slash commands,
+    `AGENTS.md`, and `docs/setup/jupyter-mcp.md` are updated to the
+    single-server tool family (`mcp__jupyter__*`).
+  - **Lost capability:** the two `jupyter-mcp-tools` UI-delegated tools.
+    `notebook_run-all-cells` was already 404-broken upstream;
+    `notebook_get-selected-cell` ("which cell is the user looking at")
+    is genuinely gone — the affected slash commands now ask the user for
+    the notebook/cell or use `aexp.jupyter.init().attached_notebooks`.
+  - A consumer `.mcp.json` written by an earlier `--with-jupyter`
+    install keeps its `jupyter-compute` entry (the merge is
+    additive-only and never deletes servers); remove it by hand for the
+    cleanup. The cluster-side `[jupyter]` extra and `aexp jupyter setup`
+    extension recipe are unchanged.
+
 ## [0.4.0] - 2026-05-20
 
 ### Added

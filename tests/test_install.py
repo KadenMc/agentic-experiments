@@ -762,22 +762,20 @@ def test_install_dry_run_also_refuses_source_tree(fresh_git_repo: Path) -> None:
 
 
 def test_install_with_jupyter_writes_mcp_entries(fresh_git_repo: Path) -> None:
-    """--with-jupyter writes both jupyter and jupyter-compute entries to .mcp.json
-    alongside the existing aexp entry."""
+    """--with-jupyter writes the jupyter entry to .mcp.json alongside the
+    existing aexp entry. The legacy jupyter-compute server is not emitted."""
     install_limina(fresh_git_repo, with_jupyter=True, dev=True)
     mcp_json = json.loads((fresh_git_repo / ".mcp.json").read_text(encoding="utf-8"))
     servers = mcp_json["mcpServers"]
     assert "aexp" in servers
     assert "jupyter" in servers
-    assert "jupyter-compute" in servers
     assert servers["jupyter"]["command"] == "uvx"
     assert "jupyter-mcp-server" in servers["jupyter"]["args"]
-    assert servers["jupyter-compute"]["command"] == "npx"
-    assert "mcp-remote" in servers["jupyter-compute"]["args"]
+    assert "jupyter-compute" not in servers
 
 
 def test_install_without_jupyter_omits_mcp_entries(fresh_git_repo: Path) -> None:
-    """Default install (no --with-jupyter) does NOT write jupyter entries."""
+    """Default install (no --with-jupyter) does NOT write the jupyter entry."""
     install_limina(fresh_git_repo, dev=True)
     mcp_json = json.loads((fresh_git_repo / ".mcp.json").read_text(encoding="utf-8"))
     servers = mcp_json["mcpServers"]
@@ -847,25 +845,19 @@ def test_install_with_jupyter_preserves_user_entries(fresh_git_repo: Path) -> No
     assert servers["my_custom"]["command"] == "echo"
     assert "aexp" in servers
     assert "jupyter" in servers
-    assert "jupyter-compute" in servers
 
 
 def test_install_with_jupyter_preserves_existing_jupyter_entry(fresh_git_repo: Path) -> None:
-    """If the user has hardcoded a Windows-stable token in jupyter-compute,
-    re-running --with-jupyter must not clobber it.
+    """If the user has customized their `jupyter` entry, re-running
+    --with-jupyter must not clobber it: the install only ever ADDS the
+    entry, never overwrites an existing one.
     """
     custom = {
         "mcpServers": {
-            "jupyter-compute": {
-                "command": "npx",
-                "args": [
-                    "-y",
-                    "mcp-remote",
-                    "http://127.0.0.1:3618/mcp",
-                    "--allow-http",
-                    "--header",
-                    "Authorization:token MY_HARDCODED_LITERAL_TOKEN",
-                ],
+            "jupyter": {
+                "command": "uvx",
+                "args": ["jupyter-mcp-server"],
+                "env": {"MY_CUSTOM_MARKER": "kept"},
             }
         }
     }
@@ -874,12 +866,11 @@ def test_install_with_jupyter_preserves_existing_jupyter_entry(fresh_git_repo: P
     servers = json.loads(
         (fresh_git_repo / ".mcp.json").read_text(encoding="utf-8")
     )["mcpServers"]
-    # The user's hardcoded token survives — install only ADDS, never overwrites
-    # an existing jupyter-compute entry.
-    args = servers["jupyter-compute"]["args"]
-    assert any("MY_HARDCODED_LITERAL_TOKEN" in a for a in args)
-    # And the missing jupyter entry was added.
-    assert "jupyter" in servers
+    # The user's customized jupyter entry survives untouched — our generated
+    # entry has no `env` block, so its presence proves we did not overwrite.
+    assert servers["jupyter"].get("env") == {"MY_CUSTOM_MARKER": "kept"}
+    # And the aexp entry was still written.
+    assert "aexp" in servers
 
 
 def test_install_with_jupyter_slash_command_always_present(fresh_git_repo: Path) -> None:
@@ -893,7 +884,7 @@ def test_install_with_jupyter_slash_command_always_present(fresh_git_repo: Path)
 def test_install_writes_promote_nb_slash_command(fresh_git_repo: Path) -> None:
     """The /aexp-promote-nb slash command is installed during default install,
     and its body contains the load-bearing guardrails (refuses without an
-    experiment ID, references the jupyter-compute MCP family, refuses to
+    experiment ID, references the jupyter MCP family, refuses to
     invent a tracked_notebook_run API)."""
     install_limina(fresh_git_repo, dev=True)
     slash_cmd = fresh_git_repo / ".claude" / "commands" / "aexp-promote-nb.md"
@@ -903,7 +894,7 @@ def test_install_writes_promote_nb_slash_command(fresh_git_repo: Path) -> None:
     assert body.startswith("---\n")
     assert "description:" in body.split("---", 2)[1]
     # Self-check guidance for tool availability — degrades gracefully without MCP.
-    assert "mcp__jupyter-compute__" in body
+    assert "mcp__jupyter__" in body
     # The experiment-required guardrail (without it, promotion lands code in
     # experiments/ that has no H/E chain — the failure mode this command
     # exists to prevent).
