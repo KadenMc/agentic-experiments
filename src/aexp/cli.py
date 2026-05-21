@@ -154,7 +154,7 @@ _INSTALL_HEADS_UP = """\
   - [cyan].mcp.json[/cyan]               JSON-merge: our `aexp` MCP server added, your other servers preserved
   - [cyan]AGENTS.md[/cyan], [cyan]CLAUDE.md[/cyan]       block-merge: your content outside our `<!-- agentic-experiments:begin/end -->` markers is preserved
   - [cyan].runs/[/cyan]                  signac project (idempotent; initialised if missing)
-  - [cyan].aexp/installed.json[/cyan]   install marker with interpreter path + vendor sha
+  - [cyan].aexp/installed.json[/cyan]   install marker with interpreter path + scaffold sha
 
 By default, conflicting existing files are [yellow]skipped with a warning[/yellow] — pass [bold]--force[/bold] to overwrite.
 [bold]User-authored scaffold content under `kb/` and `templates/` is preserved even under --force[/bold] (see `preserved_user_modified` in the summary); only tooling files (slash commands, skills, hooks, `.mcp.json`) are refreshed.
@@ -252,7 +252,7 @@ def install(
             "Opt into the Jupyter MCP integration: writes the `jupyter` "
             "server entry to `.mcp.json`, sets "
             "`jupyter_enabled: true` (sticky) in the install marker, and "
-            "ensures `docs/setup/jupyter-mcp.md` is vendored. Requires "
+            "ensures `docs/setup/jupyter-mcp.md` is copied in. Requires "
             "`pip install agentic-experiments[jupyter]` for the Python "
             "deps (jupyter-collaboration, jupyter-mcp-server, "
             "jupyter-mcp-tools). After install, follow the cluster-side "

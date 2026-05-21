@@ -1,4 +1,4 @@
-"""Tests for the aexp hooks (ported from the vendored harness scripts).
+"""Tests for the aexp hooks (ported from the upstream harness scripts).
 
 Covers:
 
@@ -281,7 +281,7 @@ def test_kb_write_guard_blocks_invalid_md(
 def test_stop_validate_passes_on_clean_kb(
     scaffold_project: Path, python_exe: str
 ) -> None:
-    """The vendored shipped kb/ template validates cleanly out of the box."""
+    """The bundled kb/ template validates cleanly out of the box."""
     r = _run_hook(scaffold_project, "stop_validate", None, python_exe, timeout=30)
     assert r.returncode == 0, (r.returncode, r.stdout, r.stderr)
 

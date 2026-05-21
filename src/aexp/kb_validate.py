@@ -1,6 +1,6 @@
 """KB structural validator — frontmatter, aliases, wikilinks, H->E->F chain.
 
-Ported from the vendored ``kb_validate.py`` into the package. Callable
+Ported from the upstream ``kb_validate.py`` into the package. Callable
 in-process via :func:`validate_kb`; :func:`main` preserves a ``python -m
 aexp.kb_validate`` CLI for parity with the old script invocation.
 
@@ -496,14 +496,14 @@ _TEMPLATE_FILENAMES_FOR_HEADER_CHECK: dict[str, str] = {
     "F": "finding.md",
     "T": "thread.md",
 }
-_VENDOR_TEMPLATES_DIR = (
-    Path(__file__).resolve().parent / "vendor" / "limina" / "templates"
+_SCAFFOLD_TEMPLATES_DIR = (
+    Path(__file__).resolve().parent / "scaffold" / "templates"
 )
 
 
 @functools.cache
 def _required_headers_for_kind(kind: str) -> tuple[str, ...]:
-    """Extract ordered ``## ``-level headers from the vendored template for ``kind``.
+    """Extract ordered ``## ``-level headers from the bundled template for ``kind``.
 
     Returns the headers an artifact of this kind is expected to contain.
     Excludes ``## Links`` (already comprehensively validated by
@@ -514,7 +514,7 @@ def _required_headers_for_kind(kind: str) -> tuple[str, ...]:
     filename = _TEMPLATE_FILENAMES_FOR_HEADER_CHECK.get(kind)
     if filename is None:
         return ()
-    template_path = _VENDOR_TEMPLATES_DIR / filename
+    template_path = _SCAFFOLD_TEMPLATES_DIR / filename
     if not template_path.is_file():
         return ()
     headers: list[str] = []

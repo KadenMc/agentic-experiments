@@ -130,7 +130,7 @@ def setup_sandbox_notebook(name: str, *, start: Path | str | None = None) -> dic
 # Templates are inline strings rather than separate files. v0 trade-off:
 # inline = easier to ship + reason about; cost = users can't override
 # without monkey-patching. If override needs surface, extract to
-# vendor/limina/templates/sandbox/ and add a precedence rule similar to
+# scaffold/templates/sandbox/ and add a precedence rule similar to
 # artifacts._load_template.
 
 _SANDBOX_ROOT_README = """# notebooks/_sandbox/

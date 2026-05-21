@@ -239,7 +239,7 @@ def test_full_chain_validates_clean(installed_repo: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Single source of truth: artifact creation reads vendored templates only
+# Single source of truth: artifact creation reads the bundled templates only
 # ---------------------------------------------------------------------------
 
 
@@ -250,7 +250,7 @@ def test_new_hypothesis_ignores_local_template_override(
 
     When a consumer's local ``templates/<kind>.md`` is stale (or
     customised), the artifact-creation API must still read from the
-    vendored template — same source the validator uses. Otherwise
+    bundled template — same source the validator uses. Otherwise
     creation produces a skeleton that immediately fails validation.
 
     The 2026-04-24 electricrag report described exactly this failure:
@@ -259,7 +259,7 @@ def test_new_hypothesis_ignores_local_template_override(
     expected the new one.
     """
     # Stuff the local hypothesis template with bogus content that has
-    # none of the headers the vendored template ships.
+    # none of the headers the bundled template ships.
     local = installed_repo / "templates" / "hypothesis.md"
     local.write_text(
         '---\nid: "{ARTIFACT_ID}"\naliases: ["{ARTIFACT_ID}"]\n'
@@ -274,7 +274,7 @@ def test_new_hypothesis_ignores_local_template_override(
     rendered = (
         installed_repo / "kb" / "research" / "hypotheses" / "H001-t.md"
     ).read_text(encoding="utf-8")
-    # Vendored template's headers must be present.
+    # The bundled template's headers must be present.
     assert "## Statement" in rendered
     assert "## Test Plan" in rendered
     assert "## Conclusion" in rendered

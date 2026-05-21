@@ -9,7 +9,7 @@ Reference: [Datalayer jupyter-mcp-server](https://github.com/datalayer/jupyter-m
 Their docs assume a clean pip install on a single machine; this guide is
 the cluster-specific extension.
 
-> **Local overlay note.** This file is the canonical, vendor-managed
+> **Local overlay note.** This file is the canonical, package-managed
 > version that ships with `agentic-experiments`. It will be overwritten
 > on `aexp install --force` to pick up upstream fixes. If you need
 > project-specific overlay info (your cluster hostname, your conda env

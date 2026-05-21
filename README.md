@@ -45,7 +45,7 @@
 
 - **Hypothesis-first, not metric-first** — you can't start a run without a live hypothesis; you can't ship a finding without cited runs
 - **Git is the source of truth** — every run carries its commit SHA; the knowledge base lives in git; nothing load-bearing is ephemeral
-- **Integrate, don't reinvent** — [signac](https://signac.readthedocs.io) for run state, [W&B](https://wandb.ai/) for observability, and a vendored research harness for the H→E→F artifact model, templates, and methodology skills. `aexp` is the glue and the discipline
+- **Integrate, don't reinvent** — [signac](https://signac.readthedocs.io) for run state, [W&B](https://wandb.ai/) for observability, and a bundled research harness for the H→E→F artifact model, templates, and methodology skills. `aexp` is the glue and the discipline
 - **Portable by default** — the MCP server runs via `uvx` from PyPI; `.mcp.json` is identical on every machine and committable to git
 
 ---
@@ -271,7 +271,7 @@ src/aexp/
   slash_commands/       # /aexp-* templates
   trackers/             # TrackerAdapter ABC + noop + wandb adapters
   utils/                # paths, git, atomic writes
-  vendor/               # forked research-graph templates, skills, and kb/ scaffold
+  scaffold/             # research-graph scaffold: kb/, templates, skills, agent contracts
 tests/                  # pytest suite; CI on Ubuntu + Windows × Py 3.11/3.12/3.13
 docs/                   # concepts, quickstart, cli, mcp, mapping, tracker-adapters, queue, threads, sandbox, airgapped
 ```
@@ -331,7 +331,7 @@ Every edit to `src/aexp/*.py` is now live in:
 
 ## Acknowledgements
 
-The vendored research harness — the H→E→F artifact model, the `kb/` layout,
+The research harness — the H→E→F artifact model, the `kb/` layout,
 artifact templates, and methodology skills — was adapted from
 [limina](https://github.com/KadenMc/limina).
 

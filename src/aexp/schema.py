@@ -27,7 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field
 # ---------------------------------------------------------------------------
 
 ArtifactKind = Literal["H", "E", "F", "L", "CR", "SR", "T"]
-"""The seven research artifact kinds validated by vendored ``kb_validate.py``.
+"""The seven research artifact kinds validated by the bundled ``kb_validate.py``.
 
 ``H``=Hypothesis, ``E``=Experiment, ``F``=Finding, ``L``=Literature,
 ``CR``=Challenge Review, ``SR``=Strategic Review,

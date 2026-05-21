@@ -11,7 +11,7 @@ from aexp.install import (
     InstallAction,
     InstallRefused,
     block_merge_markdown,
-    compute_vendor_sha,
+    compute_scaffold_sha,
     install_scaffold,
     is_scaffold_installed,
     merge_claude_settings,
@@ -45,13 +45,13 @@ def fresh_git_repo(tmp_path: Path) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# compute_vendor_sha
+# compute_scaffold_sha
 # ---------------------------------------------------------------------------
 
 
-def test_vendor_sha_is_deterministic() -> None:
-    s1 = compute_vendor_sha()
-    s2 = compute_vendor_sha()
+def test_scaffold_sha_is_deterministic() -> None:
+    s1 = compute_scaffold_sha()
+    s2 = compute_scaffold_sha()
     assert s1 == s2
     assert len(s1) == 64  # SHA-256 hex digest
 
@@ -62,7 +62,7 @@ def test_vendor_sha_is_deterministic() -> None:
 
 
 def test_merge_claude_settings_into_empty_user() -> None:
-    vendor = {
+    shipped = {
         "hooks": {
             "SessionStart": [
                 {
@@ -72,7 +72,7 @@ def test_merge_claude_settings_into_empty_user() -> None:
             ]
         }
     }
-    merged = merge_claude_settings(vendor, {})
+    merged = merge_claude_settings(shipped, {})
     assert merged["hooks"]["SessionStart"][0]["hooks"][0]["command"] == "python x.py"
 
 
@@ -82,9 +82,9 @@ def test_merge_claude_settings_dedupes_identical_hook() -> None:
         "hooks": [{"type": "command", "command": "python x.py", "timeout": 5}],
     }
     existing = {"hooks": {"SessionStart": [entry]}}
-    vendor = {"hooks": {"SessionStart": [entry]}}
+    shipped = {"hooks": {"SessionStart": [entry]}}
 
-    merged = merge_claude_settings(vendor, existing)
+    merged = merge_claude_settings(shipped, existing)
     assert len(merged["hooks"]["SessionStart"]) == 1
 
 
@@ -93,14 +93,14 @@ def test_merge_claude_settings_preserves_user_hooks_and_appends_ours() -> None:
         "matcher": "Read",
         "hooks": [{"type": "command", "command": "user.sh", "timeout": 5}],
     }
-    vendor_hook = {
+    shipped_hook = {
         "matcher": "Write|Edit",
         "hooks": [{"type": "command", "command": "python guard.py", "timeout": 5}],
     }
     existing = {"hooks": {"PostToolUse": [user_hook]}, "permissions": {"allow": []}}
-    vendor = {"hooks": {"PostToolUse": [vendor_hook]}}
+    shipped = {"hooks": {"PostToolUse": [shipped_hook]}}
 
-    merged = merge_claude_settings(vendor, existing)
+    merged = merge_claude_settings(shipped, existing)
     matchers = [group["matcher"] for group in merged["hooks"]["PostToolUse"]]
     assert matchers == ["Read", "Write|Edit"]
     # User's permissions key untouched
@@ -109,8 +109,8 @@ def test_merge_claude_settings_preserves_user_hooks_and_appends_ours() -> None:
 
 def test_merge_claude_settings_preserves_user_top_level_keys() -> None:
     existing = {"theme": "dark", "other": {"nested": True}}
-    vendor = {"hooks": {"Stop": [{"matcher": "", "hooks": []}]}}
-    merged = merge_claude_settings(vendor, existing)
+    shipped = {"hooks": {"Stop": [{"matcher": "", "hooks": []}]}}
+    merged = merge_claude_settings(shipped, existing)
     assert merged["theme"] == "dark"
     assert merged["other"] == {"nested": True}
 
@@ -122,22 +122,22 @@ def test_merge_claude_settings_preserves_user_top_level_keys() -> None:
 
 def test_block_merge_appends_when_markers_absent() -> None:
     existing = "# User doc\n\nuser content\n"
-    merged = block_merge_markdown(existing, "vendor content")
+    merged = block_merge_markdown(existing, "shipped content")
     assert "user content" in merged
     assert "<!-- agentic-experiments:begin -->" in merged
-    assert "vendor content" in merged
+    assert "shipped content" in merged
     assert "<!-- agentic-experiments:end -->" in merged
 
 
 def test_block_merge_replaces_existing_block() -> None:
     existing = (
         "# User doc\n\n"
-        "<!-- agentic-experiments:begin -->\nold vendor\n<!-- agentic-experiments:end -->\n"
+        "<!-- agentic-experiments:begin -->\nold block\n<!-- agentic-experiments:end -->\n"
         "\nmore user content\n"
     )
-    merged = block_merge_markdown(existing, "new vendor")
-    assert "old vendor" not in merged
-    assert "new vendor" in merged
+    merged = block_merge_markdown(existing, "new block")
+    assert "old block" not in merged
+    assert "new block" in merged
     assert "more user content" in merged
 
 
@@ -222,7 +222,7 @@ def test_install_writes_valid_marker(fresh_git_repo: Path) -> None:
     assert marker is not None
     assert marker["version"]
     assert marker["run_store_path"] == ".runs"
-    assert len(marker["vendor_sha"]) == 64
+    assert len(marker["scaffold_sha"]) == 64
     # Cross-platform invocation fields written by default.
     assert "python_exe" in marker
     assert Path(marker["python_exe"]).exists()
@@ -234,7 +234,7 @@ def test_install_writes_valid_marker(fresh_git_repo: Path) -> None:
 def test_install_is_idempotent(fresh_git_repo: Path) -> None:
     install_scaffold(fresh_git_repo)
     # Second run: every action should be either already_installed (short-circuit)
-    # or a no-op kind. Because the marker matches the vendor sha, we short-circuit.
+    # or a no-op kind. Because the marker matches the scaffold sha, we short-circuit.
     actions = install_scaffold(fresh_git_repo)
     assert any(a.kind == "already_installed" for a in actions)
     # Critically: nothing got copied again
@@ -383,7 +383,7 @@ def test_install_json_merges_existing_claude_settings(fresh_git_repo: Path) -> N
     post_tool = merged["hooks"]["PostToolUse"]
     commands = [h["command"] for group in post_tool for h in group["hooks"]]
     assert "user-bash.sh" in commands
-    # Vendor's hook got appended
+    # The shipped hook got appended
     assert any("aexp.hooks.kb_write_guard" in c for c in commands)
     # User's unrelated key survived
     assert merged["theme"] == "dark"
@@ -436,7 +436,7 @@ def test_install_action_kinds_are_expected(fresh_git_repo: Path) -> None:
 
 
 def test_install_copies_skills_to_claude_skills(fresh_git_repo: Path) -> None:
-    """All vendored research skills must land under <repo>/.claude/skills/.
+    """All bundled research skills must land under <repo>/.claude/skills/.
 
     Without these, the AGENTS.md references like $experiment-rigor are broken
     on every consumer repo.
@@ -444,7 +444,7 @@ def test_install_copies_skills_to_claude_skills(fresh_git_repo: Path) -> None:
     install_scaffold(fresh_git_repo)
     skills_root = fresh_git_repo / ".claude" / "skills"
     assert skills_root.is_dir()
-    # Research-methodology skills (from vendor/limina/skills/)
+    # Research-methodology skills (from scaffold/skills/)
     expected = {
         "experiment-rigor",
         "exploratory-sota-research",
@@ -810,13 +810,13 @@ def test_install_jupyter_marker_is_sticky_true(fresh_git_repo: Path) -> None:
     assert marker.get("jupyter_enabled") is True
 
 
-def test_install_with_jupyter_vendors_setup_doc(fresh_git_repo: Path) -> None:
-    """docs/setup/jupyter-mcp.md is copied verbatim from vendor when --with-jupyter."""
+def test_install_with_jupyter_copies_setup_doc(fresh_git_repo: Path) -> None:
+    """docs/setup/jupyter-mcp.md is copied verbatim from the scaffold when --with-jupyter."""
     install_scaffold(fresh_git_repo, with_jupyter=True, dev=True)
     setup_doc = fresh_git_repo / "docs" / "setup" / "jupyter-mcp.md"
     assert setup_doc.is_file()
     body = setup_doc.read_text(encoding="utf-8")
-    # A few load-bearing strings from the vendored doc.
+    # A few load-bearing strings from the bundled doc.
     assert "Adapting this guide to your cluster" in body
     assert "Investigation log" in body
 
@@ -1006,7 +1006,7 @@ def test_repo_root_gitattributes_forces_lf_for_text() -> None:
     assert ga.is_file(), f"missing .gitattributes at {ga}"
     body = ga.read_text(encoding="utf-8")
     # Each of these extensions ships in the package data (slash commands,
-    # vendored docs, scaffold JSON). If any drift off, the install symptom
+    # bundled docs, scaffold JSON). If any drift off, the install symptom
     # comes back.
     for ext in (".md", ".json", ".py", ".toml"):
         # Match either `*<ext> text eol=lf` or equivalent.

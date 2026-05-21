@@ -60,10 +60,10 @@ _ALWAYS_LINK = ("ACTIVE", "CHALLENGE")
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 _ID_FROM_FILENAME_RE = re.compile(r"^(H|E|F|L|CR|SR)(\d{3})-")
 
-# Where vendored templates live (fall-back if the consumer repo has no
+# Where the bundled templates live (fall-back if the consumer repo has no
 # ``templates/`` directory yet). Mirrors the layout install.py copies from.
-_VENDOR_TEMPLATES = (
-    Path(__file__).resolve().parent / "vendor" / "limina" / "templates"
+_SCAFFOLD_TEMPLATES = (
+    Path(__file__).resolve().parent / "scaffold" / "templates"
 )
 
 
@@ -128,7 +128,7 @@ def _load_template(kind: ArtifactKind, *, repo_root: Path) -> str:
     """Return the canonical template text for an artifact kind.
 
     Always reads from the package-shipped templates at
-    ``src/aexp/vendor/limina/templates/`` — the same source the
+    ``src/aexp/scaffold/templates/`` — the same source the
     validator's ``missing_template_header`` check uses
     (:mod:`aexp.kb_validate`). Single source of truth means creation
     and validation can never disagree about "what the template is."
@@ -151,7 +151,7 @@ def _load_template(kind: ArtifactKind, *, repo_root: Path) -> str:
     intentionally unused.
     """
     filename = _TEMPLATE_FILENAMES[kind]
-    return (_VENDOR_TEMPLATES / filename).read_text(encoding="utf-8")
+    return (_SCAFFOLD_TEMPLATES / filename).read_text(encoding="utf-8")
 
 
 def _render_template(tpl: str, substitutions: dict[str, str]) -> str:

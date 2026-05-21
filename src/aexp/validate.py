@@ -91,7 +91,7 @@ def _run_kb_validate(repo_root: Path) -> list[Issue]:
     case — callers decide whether that's worth flagging separately).
 
     No subprocess, no env manipulation, no telemetry concerns — all three
-    were required back when this shelled out to the vendored
+    were required back when this shelled out to the bundled
     ``scripts/kb_validate.py``. That script is now importable as
     ``aexp.kb_validate``.
     """

@@ -2,7 +2,7 @@
 
 `agentic-experiments` is a **fusion layer**, not a new framework. It pairs a
 research-graph harness (the H→E→F artifact model, templates, and methodology
-skills — vendored from [limina](https://github.com/KadenMc/limina)) with
+skills — adapted from [limina](https://github.com/KadenMc/limina)) with
 [signac](https://signac.readthedocs.io) for local execution and run state,
 and bridges to W&B for optional remote observability.
 
@@ -74,7 +74,7 @@ consumer-repo/
     .signac/
     workspace/<job_id>/
   .aexp/
-    installed.json               # version + run_store_path + python_exe + vendor sha
+    installed.json               # version + run_store_path + python_exe + scaffold sha
 ```
 
 Hook scripts and validator code live inside the installed `aexp`
@@ -95,13 +95,13 @@ passes) while still containing broken `supporting_runs` citations. The
 Stop hook does not catch them. Run `python -m aexp validate`
 explicitly before considering a session "complete."
 
-## Why vendor the research harness
+## Why bundle the research harness
 
-The upstream [limina](https://github.com/KadenMc/limina) project ships a template-clone flow (`clone + rm .git + re-init`) that doesn't compose with *applying* a harness to an existing repo. So `aexp` vendors the pieces it needs:
+The upstream [limina](https://github.com/KadenMc/limina) project ships a template-clone flow (`clone + rm .git + re-init`) that doesn't compose with *applying* a harness to an existing repo. So `aexp` bundles the pieces it needs:
 
 - Hook behavior has been ported into `aexp.hooks.*` and is invoked as Python modules from the installed package.
 - The KB structural validator lives at `aexp.kb_validate` — in-process, no subprocess dance.
-- `src/aexp/vendor/` retains the research-graph data assets that *do* belong in every consumer repo: the `kb/` scaffold, artifact `templates/`, and the four methodology skills (`experiment-rigor`, `exploratory-sota-research`, `research-devil-advocate`, `build-maintainable-software`). These are the parts the agent actually reads and writes; keeping them checked into `aexp` lets `aexp install` drop them in verbatim, with merge policies that preserve user customizations.
+- `src/aexp/scaffold/` holds the research-graph data assets that *do* belong in every consumer repo: the `kb/` scaffold, artifact `templates/`, and the four methodology skills (`experiment-rigor`, `exploratory-sota-research`, `research-devil-advocate`, `build-maintainable-software`). These are the parts the agent actually reads and writes; keeping them checked into `aexp` lets `aexp install` drop them in verbatim, with merge policies that preserve user customizations.
 
 One-time fork — no resync.
 

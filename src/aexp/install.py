@@ -1,7 +1,7 @@
-"""Install the vendored research harness into a consumer repo.
+"""Install the bundled research-harness scaffold into a consumer repo.
 
-``install_scaffold`` walks the vendored snapshot at
-``src/aexp/vendor/limina/`` and applies it to a target repo:
+``install_scaffold`` walks the bundled scaffold at
+``src/aexp/scaffold/`` and applies it to a target repo:
 
 - ``kb/``, ``templates/``, ``scripts/`` -> copied verbatim (skipped if the
   target already has identical content; conflicting target files are skipped
@@ -87,9 +87,9 @@ def _find_aexp_source_tree(start: Path) -> Path | None:
             return None
         cur = cur.parent
 
-VENDOR_ROOT = Path(__file__).resolve().parent / "vendor" / "limina"
+SCAFFOLD_ROOT = Path(__file__).resolve().parent / "scaffold"
 
-# Subdirectories of the vendor tree that get copied verbatim into the consumer repo.
+# Subdirectories of the scaffold tree that get copied verbatim into the consumer repo.
 #
 # Intentionally does NOT include ``scripts/``. Hook scripts, kb_validate, and
 # other package code live inside ``aexp.*`` and are invoked via
@@ -132,21 +132,21 @@ class InstallAction:
 
 
 # ---------------------------------------------------------------------------
-# Vendor-tree fingerprinting
+# Scaffold-tree fingerprinting
 # ---------------------------------------------------------------------------
 
 
-def compute_vendor_sha(vendor_root: Path = VENDOR_ROOT) -> str:
-    """Compute a deterministic hash of every file under ``vendor_root``.
+def compute_scaffold_sha(scaffold_root: Path = SCAFFOLD_ROOT) -> str:
+    """Compute a deterministic hash of every file under ``scaffold_root``.
 
     Files are sorted by POSIX-style relative path, then hashed as
     ``<relpath>\\0<bytes>\\0`` into a SHA-256. Two installations with the
-    same vendor tree produce identical hashes regardless of OS.
+    same scaffold tree produce identical hashes regardless of OS.
     """
     h = hashlib.sha256()
-    files = sorted(p for p in vendor_root.rglob("*") if p.is_file())
+    files = sorted(p for p in scaffold_root.rglob("*") if p.is_file())
     for p in files:
-        rel = p.relative_to(vendor_root).as_posix().encode("utf-8")
+        rel = p.relative_to(scaffold_root).as_posix().encode("utf-8")
         h.update(rel)
         h.update(b"\x00")
         h.update(p.read_bytes())
@@ -172,7 +172,7 @@ def _is_text_file(path: Path) -> bool:
     """True if ``path`` should be treated as text for EOL normalization.
 
     We key on file extension rather than content sniffing because the source
-    side of every install copy is a known set of vendored package files —
+    side of every install copy is a known set of bundled package files —
     we already know which are text.
     """
     return path.suffix.lower() in _TEXT_SUFFIXES or path.name in {".gitignore", ".gitattributes"}
@@ -284,15 +284,15 @@ def _display_relpath(path: Path) -> str:
 
 
 def merge_claude_settings(
-    vendor_settings: dict[str, Any],
+    shipped_settings: dict[str, Any],
     existing_settings: dict[str, Any],
 ) -> dict[str, Any]:
     """Merge our hook block into an existing Claude Code settings dict.
 
     - If a top-level key (e.g. ``"hooks"``, ``"permissions"``) is absent in the
-      existing settings, it is copied from the vendor settings.
+      existing settings, it is copied from the shipped settings.
     - Within ``hooks`` (the only block we care about today), matchers from the
-      vendor are appended to matchers from the user; identical (matcher,
+      shipped block are appended to matchers from the user; identical (matcher,
       command) pairs are deduplicated.
     - Non-``hooks`` user keys are preserved untouched.
     """
@@ -300,10 +300,10 @@ def merge_claude_settings(
     # relies on the original ``existing_settings`` remaining intact for the
     # post-merge "did anything change?" equality check.
     merged: dict[str, Any] = copy.deepcopy(existing_settings)
-    vendor_hooks = copy.deepcopy(vendor_settings.get("hooks", {}))
+    shipped_hooks = copy.deepcopy(shipped_settings.get("hooks", {}))
     existing_hooks = merged.get("hooks", {})
 
-    for event, vendor_matchers in vendor_hooks.items():
+    for event, shipped_matchers in shipped_hooks.items():
         existing_matchers = existing_hooks.get(event, [])
         # Build a set of (matcher, command) pairs already present to dedupe.
         seen: set[tuple[str, str]] = set()
@@ -313,7 +313,7 @@ def merge_claude_settings(
                 seen.add((matcher, h.get("command", "")))
 
         combined = list(existing_matchers)
-        for vgroup in vendor_matchers:
+        for vgroup in shipped_matchers:
             matcher = vgroup.get("matcher", "")
             new_hooks = [
                 h
@@ -331,9 +331,9 @@ def merge_claude_settings(
     if existing_hooks:
         merged["hooks"] = existing_hooks
 
-    # Any other top-level keys from the vendor that the user does not have get copied.
+    # Any other top-level keys we ship that the user does not have get copied.
     # Note: we never write mcpServers to this file — that belongs in .mcp.json.
-    for k, v in vendor_settings.items():
+    for k, v in shipped_settings.items():
         if k == "hooks":
             continue
         if k not in merged:
@@ -428,12 +428,12 @@ def _merge_or_write_claude_settings(
     only appends our hook matchers (deduplicating on ``(matcher, command)``).
     """
     rel = _display_relpath(dst)
-    vendor = _build_claude_settings(python_exe, jupyter_enabled=jupyter_enabled)
+    shipped = _build_claude_settings(python_exe, jupyter_enabled=jupyter_enabled)
 
     if not dst.exists():
         if not dry_run:
             dst.parent.mkdir(parents=True, exist_ok=True)
-            atomic_write(dst, json.dumps(vendor, indent=2) + "\n")
+            atomic_write(dst, json.dumps(shipped, indent=2) + "\n")
         return InstallAction("copied", rel)
 
     try:
@@ -445,7 +445,7 @@ def _merge_or_write_claude_settings(
             f"existing {dst.name} is not valid JSON ({exc}); leaving untouched",
         )
 
-    merged = merge_claude_settings(vendor, existing)
+    merged = merge_claude_settings(shipped, existing)
 
     if merged == existing:
         return InstallAction("skipped_identical", rel)
@@ -631,15 +631,15 @@ def _jupyter_mcp_entries() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def block_merge_markdown(existing: str, vendor: str) -> str:
-    """Append (or refresh) a vendor-managed block inside ``existing``.
+def block_merge_markdown(existing: str, shipped: str) -> str:
+    """Append (or refresh) a package-managed block inside ``existing``.
 
     If the begin/end markers are already present, replace whatever is between
-    them. Otherwise, append the vendor content wrapped in markers.
+    them. Otherwise, append the shipped content wrapped in markers.
     """
     begin = _BEGIN_MARKER
     end = _END_MARKER
-    block = f"{begin}\n{vendor.rstrip()}\n{end}\n"
+    block = f"{begin}\n{shipped.rstrip()}\n{end}\n"
 
     if begin in existing and end in existing:
         before, rest = existing.split(begin, 1)
@@ -653,15 +653,15 @@ def block_merge_markdown(existing: str, vendor: str) -> str:
 def _merge_or_copy_markdown(src: Path, dst: Path, *, dry_run: bool = False) -> InstallAction:
     """Copy or block-merge a Markdown file based on whether target exists."""
     rel = _display_relpath(dst)
-    vendor_text = src.read_text(encoding="utf-8")
+    shipped_text = src.read_text(encoding="utf-8")
 
     if not dst.exists():
         if not dry_run:
-            atomic_write(dst, vendor_text)
+            atomic_write(dst, shipped_text)
         return InstallAction("copied", rel)
 
     existing_text = dst.read_text(encoding="utf-8")
-    merged = block_merge_markdown(existing_text, vendor_text)
+    merged = block_merge_markdown(existing_text, shipped_text)
     if merged == existing_text:
         return InstallAction("skipped_identical", rel)
 
@@ -676,17 +676,17 @@ def _merge_or_copy_markdown(src: Path, dst: Path, *, dry_run: bool = False) -> I
 
 
 def _install_skills(root: Path, *, force: bool, dry_run: bool = False) -> list[InstallAction]:
-    """Copy the vendored research-methodology skills into ``<root>/.claude/skills/``.
+    """Copy the bundled research-methodology skills into ``<root>/.claude/skills/``.
 
-    Each ``vendor/limina/skills/<name>/`` directory is copied to
+    Each ``scaffold/skills/<name>/`` directory is copied to
     ``<root>/.claude/skills/<name>/`` and emits one ``installed_skill``
     action. File-level conflicts (existing skill files differing from
-    vendor) are handled per the same rules as ``_copy_tree``.
+    the shipped copy) are handled per the same rules as ``_copy_tree``.
     """
     actions: list[InstallAction] = []
     dst_skills = root / ".claude" / "skills"
 
-    skills_src = VENDOR_ROOT / "skills"
+    skills_src = SCAFFOLD_ROOT / "skills"
     if skills_src.is_dir():
         for skill_dir in sorted(p for p in skills_src.iterdir() if p.is_dir()):
             dst = dst_skills / skill_dir.name
@@ -697,7 +697,7 @@ def _install_skills(root: Path, *, force: bool, dry_run: bool = False) -> list[I
                     InstallAction(
                         "installed_skill",
                         _display_relpath(dst),
-                        f"copied vendor/limina/skills/{skill_dir.name} -> {_display_relpath(dst)}",
+                        f"copied scaffold/skills/{skill_dir.name} -> {_display_relpath(dst)}",
                     )
                 )
 
@@ -776,7 +776,7 @@ def install_scaffold(
     allow_self_install: bool = False,
     with_jupyter: bool = False,
 ) -> list[InstallAction]:
-    """Install the vendored research harness into ``repo_root``.
+    """Install the bundled research-harness scaffold into ``repo_root``.
 
     Parameters
     ----------
@@ -816,7 +816,7 @@ def install_scaffold(
         dev repo on purpose).
     with_jupyter : bool, optional
         If ``True``, also write the ``jupyter`` MCP server entry into
-        ``.mcp.json``, vendor ``docs/setup/jupyter-mcp.md`` into the
+        ``.mcp.json``, copy ``docs/setup/jupyter-mcp.md`` into the
         consumer repo, and set ``jupyter_enabled: true`` in the install
         marker. The marker bit is sticky — once set, subsequent installs
         preserve it even if ``with_jupyter=False``. The ``.mcp.json``
@@ -882,8 +882,8 @@ def install_scaffold(
 
     actions: list[InstallAction] = []
 
-    # Short-circuit if already installed at the same vendor sha.
-    vendor_sha = compute_vendor_sha()
+    # Short-circuit if already installed at the same scaffold sha.
+    scaffold_sha = compute_scaffold_sha()
     existing_marker = read_installed_marker(root)
     # The `jupyter_enabled` marker bit is sticky: a user who once opted in
     # should keep getting the Jupyter PostToolUse hook on subsequent installs
@@ -896,15 +896,15 @@ def install_scaffold(
         # Dual-read: markers written before the de-brand carry the legacy
         # `limina_vendor_sha` key. Fall back to it so an old marker still
         # short-circuits cleanly instead of forcing a spurious re-install.
-        marker_sha = existing_marker.get("vendor_sha") or existing_marker.get(
+        marker_sha = existing_marker.get("scaffold_sha") or existing_marker.get(
             "limina_vendor_sha"
         )
-        if marker_sha == vendor_sha:
+        if marker_sha == scaffold_sha:
             actions.append(
                 InstallAction(
                     "already_installed",
                     str(INSTALLED_MARKER_REL.as_posix()),
-                    f"vendor sha {vendor_sha[:12]} already applied at "
+                    f"scaffold sha {scaffold_sha[:12]} already applied at "
                     f"{existing_marker.get('installed_at', 'unknown')}",
                 )
             )
@@ -920,7 +920,7 @@ def install_scaffold(
     for name in _TREES_VERBATIM:
         actions.extend(
             _copy_tree(
-                VENDOR_ROOT / name,
+                SCAFFOLD_ROOT / name,
                 root / name,
                 force=force,
                 dry_run=dry_run,
@@ -930,12 +930,12 @@ def install_scaffold(
 
     # 2. Copy / block-merge top-level Markdown docs.
     for name in _MERGE_FILES:
-        src = VENDOR_ROOT / name
+        src = SCAFFOLD_ROOT / name
         if not src.is_file():
             continue
         actions.append(_merge_or_copy_markdown(src, root / name, dry_run=dry_run))
 
-    # 2a. Vendor the Jupyter MCP setup doc to docs/setup/jupyter-mcp.md.
+    # 2a. Copy the Jupyter MCP setup doc to docs/setup/jupyter-mcp.md.
     #     Unlike kb/ + templates/ (editable scaffold), this is a canonical
     #     reference doc that ships fixes via `pip install -U`. We use the
     #     standard tooling-file rules (overwrite under --force, skip
@@ -946,7 +946,7 @@ def install_scaffold(
     #     Copied unconditionally (not gated on --with-jupyter): the doc is
     #     small, harmless, and lets a consumer read about the integration
     #     before deciding to opt in.
-    jupyter_doc_src = VENDOR_ROOT / "docs" / "setup" / "jupyter-mcp.md"
+    jupyter_doc_src = SCAFFOLD_ROOT / "docs" / "setup" / "jupyter-mcp.md"
     if jupyter_doc_src.is_file():
         actions.append(
             _copy_file(
@@ -988,7 +988,7 @@ def install_scaffold(
         )
     )
 
-    # 3b. Install the vendored Claude Code skills into <repo>/.claude/skills/.
+    # 3b. Install the bundled Claude Code skills into <repo>/.claude/skills/.
     # AGENTS.md references skills like $experiment-rigor; without this step
     # those references are broken for every consumer repo.
     actions.extend(_install_skills(root, force=force, dry_run=dry_run))
@@ -1016,7 +1016,7 @@ def install_scaffold(
         root,
         version=__version__,
         run_store_path=run_store,
-        vendor_sha=vendor_sha,
+        scaffold_sha=scaffold_sha,
         jupyter_enabled=with_jupyter,
     )
     actions.append(InstallAction("wrote_marker", _display_relpath(marker_path)))

@@ -143,13 +143,13 @@ def test_write_then_read_installed_marker(tmp_path: Path) -> None:
         tmp_path,
         version="0.1.0",
         run_store_path=".runs",
-        vendor_sha="deadbeef",
+        scaffold_sha="deadbeef",
     )
     marker = read_installed_marker(tmp_path)
     assert marker is not None
     assert marker["version"] == "0.1.0"
     assert marker["run_store_path"] == ".runs"
-    assert marker["vendor_sha"] == "deadbeef"
+    assert marker["scaffold_sha"] == "deadbeef"
     assert "installed_at" in marker
     # Cross-platform invocation fields captured by default.
     assert "python_exe" in marker
@@ -162,7 +162,7 @@ def test_write_installed_marker_honors_explicit_python_exe(tmp_path: Path) -> No
         tmp_path,
         version="0.1.0",
         run_store_path=".runs",
-        vendor_sha="x",
+        scaffold_sha="x",
         python_exe="/custom/python",
         conda_env_name="custom-env",
     )
@@ -177,7 +177,7 @@ def test_resolve_invocation_uses_conda_run_when_env_name_present(tmp_path: Path)
         tmp_path,
         version="0.1.0",
         run_store_path=".runs",
-        vendor_sha="x",
+        scaffold_sha="x",
         python_exe="/opt/miniforge3/envs/agentic-exp/bin/python",
         conda_env_name="agentic-exp",
     )
@@ -191,7 +191,7 @@ def test_resolve_invocation_falls_back_to_python_exe_when_venv(tmp_path: Path) -
         tmp_path,
         version="0.1.0",
         run_store_path=".runs",
-        vendor_sha="x",
+        scaffold_sha="x",
         python_exe="/home/u/.venv/bin/python",
         conda_env_name="",  # venv, not conda
     )
@@ -259,7 +259,7 @@ def test_resolve_run_store_path_uses_marker(tmp_path: Path) -> None:
         tmp_path,
         version="0.1.0",
         run_store_path="custom/runs",
-        vendor_sha="x",
+        scaffold_sha="x",
     )
     assert resolve_run_store_path(tmp_path) == (tmp_path / "custom" / "runs").resolve()
 
@@ -271,7 +271,7 @@ def test_resolve_run_store_path_defaults(tmp_path: Path) -> None:
 
 def test_installed_marker_is_valid_json_with_trailing_newline(tmp_path: Path) -> None:
     write_installed_marker(
-        tmp_path, version="0.1.0", run_store_path=".runs", vendor_sha="x"
+        tmp_path, version="0.1.0", run_store_path=".runs", scaffold_sha="x"
     )
     raw = (tmp_path / INSTALLED_MARKER_REL).read_text(encoding="utf-8")
     assert raw.endswith("\n")

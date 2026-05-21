@@ -114,7 +114,7 @@ supporting_runs:
 
 | Code | Meaning | Fix |
 |---|---|---|
-| `aexp.validation_failed` | Vendored `kb_validate.py` reported errors | Read the details; usually missing `## Links`, missing frontmatter field, broken wikilink |
+| `aexp.validation_failed` | The bundled `kb_validate.py` reported errors | Read the details; usually missing `## Links`, missing frontmatter field, broken wikilink |
 | `run.orphan` | A signac job has no `doc["aexp"]` | `aexp link <job_id> --experiment E###` |
 | `run.broken_experiment_link` | Run references an E### with no file on disk | Fix the link, or create the experiment via `kb_new_artifact.py` |
 | `run.hypothesis_mismatch` | Run's `hypothesis_id` isn't the experiment's primary or a sub | Fix the run or add the hypothesis to the experiment's `sub_hypotheses:` |

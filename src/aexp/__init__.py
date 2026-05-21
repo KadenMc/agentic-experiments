@@ -32,7 +32,7 @@ from aexp.backlinks import add_backlink
 from aexp.install import (
     InstallAction,
     InstallRefused,
-    compute_vendor_sha,
+    compute_scaffold_sha,
     install_scaffold,
     is_scaffold_installed,
 )
@@ -144,7 +144,7 @@ __all__ = [
     # install
     "InstallAction",
     "InstallRefused",
-    "compute_vendor_sha",
+    "compute_scaffold_sha",
     "install_scaffold",
     "is_scaffold_installed",
     # artifacts (H/E/F/T creation + backlink patching + thread lifecycle)
