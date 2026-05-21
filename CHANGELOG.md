@@ -32,6 +32,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     cleanup. The cluster-side `[jupyter]` extra and `aexp jupyter setup`
     extension recipe are unchanged.
 
+### Fixed
+
+- **`aexp install --with-jupyter` now pins the `.mcp.json` `jupyter`
+  entry to `jupyter-mcp-server==0.23.0`.** The entry was unpinned, so
+  `uvx` resolved it to "latest" — currently the v1.0.x line, which
+  (since v1.0.0, 2026-04-03) makes server-startup auth mandatory:
+  `jupyter-mcp-server` reads `JUPYTER_URL` / `JUPYTER_TOKEN` /
+  `MCP_TOKEN` from the environment when the process starts. Claude Code
+  spawns the server over stdio with no such env block, so on v1.0.x the
+  process comes up but never completes the MCP handshake — the
+  `jupyter` server hangs at "connecting" and exposes no tools. 0.23.0 is
+  the last pre-auth release and supports the runtime
+  `connect_to_jupyter(jupyter_url, jupyter_token)` call this integration
+  is built on (the cluster URL/token rotate per session, so a
+  startup-env model does not fit). An unpinned entry therefore shipped
+  broken-by-default. Existing consumer `.mcp.json` files keep whatever
+  `jupyter` entry they already have (the merge is additive) — if yours
+  predates this fix, add `==0.23.0` to that entry's `args` by hand.
+
 ## [0.4.0] - 2026-05-20
 
 ### Added

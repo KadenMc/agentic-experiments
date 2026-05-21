@@ -174,7 +174,7 @@ pip install uv
 
 # Verify uvx can fetch jupyter-mcp-server (does NOT support --help cleanly,
 # but a non-error exit means it's installed)
-uvx jupyter-mcp-server --help   # may exit with usage; that's fine
+uvx jupyter-mcp-server==0.23.0 --help   # may exit with usage; that's fine
 ```
 
 After `aexp install --with-jupyter` your `.mcp.json` will include the
@@ -185,7 +185,7 @@ After `aexp install --with-jupyter` your `.mcp.json` will include the
   "mcpServers": {
     "jupyter": {
       "command": "uvx",
-      "args": ["jupyter-mcp-server"]
+      "args": ["jupyter-mcp-server==0.23.0"]
     }
   }
 }
@@ -194,6 +194,20 @@ After `aexp install --with-jupyter` your `.mcp.json` will include the
 No token or URL is baked into the entry — the agent supplies them at
 runtime via `connect_to_jupyter` (see "Per-session: connect from the
 laptop" below).
+
+> **Why the `==0.23.0` pin?** `jupyter-mcp-server` v1.0.0 (2026-04-03)
+> made server-startup auth mandatory — the process reads `JUPYTER_URL` /
+> `JUPYTER_TOKEN` / `MCP_TOKEN` from the environment *when it starts*.
+> Claude Code spawns this server over stdio with no such env block, so
+> on v1.0.x the process comes up but never completes the MCP handshake:
+> the `jupyter` server hangs at "connecting" and exposes no tools.
+> 0.23.0 is the last pre-auth release, and it supports the runtime
+> `connect_to_jupyter(jupyter_url, jupyter_token)` call this whole
+> integration is built around (the cluster URL/token rotate per
+> session, so a startup-env model is the wrong fit). The pin is
+> load-bearing — an *unpinned* entry resolves to latest = v1.0.x =
+> broken. `aexp install --with-jupyter` writes the pin for you; don't
+> drop it without re-verifying the handshake against a newer release.
 
 ## Per-session: launch JupyterLab on the cluster
 
@@ -349,6 +363,7 @@ additive follow-up — open an issue.
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
+| The `jupyter` MCP server hangs at "connecting" in Claude Code and never exposes any tools | `jupyter-mcp-server` resolved to v1.0.x, which requires startup-env auth (`JUPYTER_URL`/`JUPYTER_TOKEN`/`MCP_TOKEN`) that a stdio spawn can't supply — the MCP handshake never completes | Pin the `.mcp.json` `jupyter` entry to `jupyter-mcp-server==0.23.0` (the last pre-auth release). `aexp install --with-jupyter` writes this pin by default — seeing this symptom means the pin was removed, or the `.mcp.json` predates it. |
 | **"File ID error: ... cannot be opened because its file ID could not be retrieved"** when opening any notebook in JupyterLab UI. Server log shows `404 POST /api/fileid/index` and `404 GET /jupyter-server-documents/get-example` | Frontend labextension `@jupyter-ai-contrib/server-documents` is calling Datalayer-private routes that no longer exist after we disabled the server-side `jupyter_server_documents` | `jupyter labextension disable @jupyter-ai-contrib/server-documents`, then restart the lab process |
 | `execute_cell` returns `jupyter_server_nbmodel extension not found. Please install it.` | `jupyter_server_nbmodel` is disabled (you may have over-corrected if you were following an older draft of this doc) | `jupyter server extension enable jupyter_server_nbmodel`, then restart the lab process |
 | `404 Not Found for url: http://.../api/collaboration/session/...` | `jupyter_server_ydoc` extension disabled | `jupyter server extension enable jupyter_server_ydoc`, then restart the lab process |
@@ -536,7 +551,7 @@ snapshot.
 | Tool | Version | Notes |
 |---|---|---|
 | `uv` | latest | Used by `uvx jupyter-mcp-server` for the laptop-side MCP server |
-| `jupyter-mcp-server` | 1.0.2+ | fetched ephemerally by `uvx`; not permanently installed |
+| `jupyter-mcp-server` | 0.23.0 (pinned) | fetched ephemerally by `uvx`; pinned in `.mcp.json` — v1.0.x's mandatory startup-env auth hangs the MCP stdio handshake |
 
 ### Cluster server endpoint (when Jupyter is running)
 
