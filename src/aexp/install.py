@@ -481,11 +481,11 @@ def _merge_or_write_mcp_json(
     current interpreter instead — lets editable installs take effect on
     the MCP side (at the cost of a machine-specific ``.mcp.json``).
 
-    When ``with_jupyter=True``, also writes the ``jupyter`` and
-    ``jupyter-compute`` entries used by the Jupyter MCP integration. The
-    entries are *additive*: once written, subsequent installs without the
-    flag leave them in place (matching the "never delete user-defined
-    servers" pattern). To back out, the user edits ``.mcp.json`` by hand.
+    When ``with_jupyter=True``, also writes the ``jupyter`` entry used by
+    the Jupyter MCP integration. The entry is *additive*: once written,
+    subsequent installs without the flag leave it in place (matching the
+    "never delete user-defined servers" pattern). To back out, the user
+    edits ``.mcp.json`` by hand.
     """
     rel = _display_relpath(dst)
     our_entries: dict[str, Any] = {"aexp": _build_mcp_server_entry(repo_root, dev=dev)}
@@ -517,14 +517,12 @@ def _merge_or_write_mcp_json(
     merged.setdefault("mcpServers", {})
     # Always refresh our own ``aexp`` entry; preserve any user-defined servers.
     merged["mcpServers"]["aexp"] = our_entries["aexp"]
-    # Jupyter entries: only ever ADD. If the user already has a `jupyter` /
-    # `jupyter-compute` block (either from a prior --with-jupyter install or
-    # from a manual setup) leave it alone — they may have hardcoded the
-    # Windows-stable token there, which we must not clobber.
-    if with_jupyter:
-        for key in ("jupyter", "jupyter-compute"):
-            if key not in merged["mcpServers"]:
-                merged["mcpServers"][key] = our_entries[key]
+    # Jupyter entry: only ever ADD. If the user already has a `jupyter`
+    # block (from a prior --with-jupyter install or a manual setup) leave
+    # it alone — they may have customized the URL/port or pinned a
+    # version, which we must not clobber.
+    if with_jupyter and "jupyter" not in merged["mcpServers"]:
+        merged["mcpServers"]["jupyter"] = our_entries["jupyter"]
 
     if merged == existing:
         return InstallAction("skipped_identical", rel)
@@ -588,48 +586,24 @@ def _build_mcp_server_entry(repo_root: Path, *, dev: bool = False) -> dict[str, 
 
 
 def _jupyter_mcp_entries() -> dict[str, Any]:
-    """MCP server entries for the Jupyter MCP integration.
+    """MCP server entry for the Jupyter MCP integration.
 
-    Two side-by-side servers, both reaching the same JupyterLab through the
-    user's existing SSH tunnel:
+    A single laptop-side server:
 
     - ``jupyter`` — laptop-side ``uvx jupyter-mcp-server`` running in
-      MCP_SERVER mode (stdio to Claude, HTTP+WS to remote Jupyter). The
-      token is provided per-session at runtime via the ``connect_to_jupyter``
-      tool, so no token lives in this entry.
-    - ``jupyter-compute`` — laptop-side ``npx mcp-remote`` proxy bridging
-      Claude's stdio to the cluster's ``/mcp`` SSE endpoint, where
-      ``jupyter-mcp-server`` runs as a Jupyter Server extension
-      (JUPYTER_SERVER mode). Token is interpolated from the
-      ``JUPYTER_TOKEN`` env var by default.
-
-    Default port is ``3618`` (matches the verified electricrag deployment).
-    Consumers using a different port edit ``.mcp.json`` post-install.
-
-    On Windows, ``${JUPYTER_TOKEN}`` interpolation is fragile because
-    ``setx`` does not propagate to already-running processes (notably
-    Explorer, which spawns Start-Menu apps including Claude Desktop). The
-    documented fix is to hardcode the literal token in ``.mcp.json`` and
-    set the matching value in ``~/.jupyter/jupyter_server_config.py`` on
-    the cluster — see ``docs/setup/jupyter-mcp.md`` "Investigation log §4".
-    The install never auto-rewrites the literal token: token management
-    stays the consumer's responsibility.
+      MCP_SERVER mode (stdio to Claude, HTTP+WS to the remote Jupyter).
+      The target Jupyter URL + token are supplied per-session at runtime
+      via the ``connect_to_jupyter`` tool, so no token lives in this
+      entry and the *same* entry retargets to any node — open a tunnel on
+      a new local port, call ``connect_to_jupyter`` at the new URL, done.
+      No ``.mcp.json`` edit, no MCP restart. That runtime retargeting is
+      what makes the multi-node workflow (``/aexp-jupyter-connect`` /
+      ``/aexp-jupyter-discover``) work.
     """
     return {
         "jupyter": {
             "command": "uvx",
             "args": ["jupyter-mcp-server"],
-        },
-        "jupyter-compute": {
-            "command": "npx",
-            "args": [
-                "-y",
-                "mcp-remote",
-                "http://127.0.0.1:3618/mcp",
-                "--allow-http",
-                "--header",
-                "Authorization:token ${JUPYTER_TOKEN}",
-            ],
         },
     }
 
@@ -841,14 +815,13 @@ def install_limina(
         override (e.g. dogfooding the consumer scaffold against the
         dev repo on purpose).
     with_jupyter : bool, optional
-        If ``True``, also write the ``jupyter`` and ``jupyter-compute``
-        MCP server entries into ``.mcp.json``, vendor
-        ``docs/setup/jupyter-mcp.md`` into the consumer repo, and set
-        ``jupyter_enabled: true`` in the install marker. The marker bit
-        is sticky — once set, subsequent installs preserve it even if
-        ``with_jupyter=False``. The ``.mcp.json`` entries are additive:
-        existing user-defined ``jupyter`` / ``jupyter-compute`` blocks
-        are preserved (so a hardcoded Windows-stable token survives).
+        If ``True``, also write the ``jupyter`` MCP server entry into
+        ``.mcp.json``, vendor ``docs/setup/jupyter-mcp.md`` into the
+        consumer repo, and set ``jupyter_enabled: true`` in the install
+        marker. The marker bit is sticky — once set, subsequent installs
+        preserve it even if ``with_jupyter=False``. The ``.mcp.json``
+        entry is additive: an existing user-defined ``jupyter`` block is
+        preserved (so a customized URL/port survives).
         See ``docs/setup/jupyter-mcp.md`` for the full setup recipe.
 
     Returns

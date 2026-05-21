@@ -32,22 +32,19 @@ Fill in your values once and refer back to them in the rest of the doc:
 
 ## TL;DR
 
-Two MCP servers run side-by-side on the laptop, both reaching the same
-cluster JupyterLab through your SSH-tunneled port:
+One MCP server runs on the laptop, reaching the cluster JupyterLab
+through your SSH-tunneled port:
 
 - **`jupyter`** — laptop-side `uvx jupyter-mcp-server` (stdio transport,
-  MCP_SERVER mode). Per-session token via `connect_to_jupyter` runtime
-  call.
-- **`jupyter-compute`** — laptop-side `npx mcp-remote` proxy talking to
-  the cluster's `/mcp` HTTP endpoint (JUPYTER_SERVER mode,
-  `jupyter-mcp-server` running as a Jupyter Server extension). Token via
-  `${JUPYTER_TOKEN}` env var (or hardcoded literal — recommended on
-  Windows; see "Stable token setup").
+  MCP_SERVER mode). The target Jupyter URL + token are supplied
+  per-session at runtime via the `connect_to_jupyter` tool — nothing is
+  baked into `.mcp.json`, so the *same* entry retargets to any node:
+  open a tunnel on a free local port, call `connect_to_jupyter` at the
+  new URL, done — no config edit, no MCP restart. That runtime
+  retargeting is what makes the multi-node workflow
+  (`/aexp-jupyter-connect`, `/aexp-jupyter-discover`) work.
 
-Both expose the same 17 core tools (read/edit/execute cells, etc.).
-`jupyter-compute` adds 2 JupyterLab-UI-delegated tools
-(`notebook_run-all-cells`, `notebook_get-selected-cell`) that work when
-a JupyterLab browser tab is open.
+It exposes ~17 core tools (read/edit/execute cells, kernel ops, etc.).
 
 ## ⚠️ The Datalayer extension disable list
 
@@ -97,24 +94,21 @@ re-enable if needed.
 ```
 laptop (has internet)
     │
-    ├─ Claude  ──stdio──→  uvx jupyter-mcp-server  (MCP_SERVER mode, "jupyter")
-    │                            │
-    │                            │  HTTP+WS via tunnel
-    │                            ▼
-    │     ssh -N -L <port>:<compute-node>:<port> ── login node ── compute node (no internet)
-    │                                                                  │
-    │                                                                  │  jupyter lab
-    │                                                                  │  with jupyter-mcp-server as Jupyter extension
-    │                                                                  ▼
-    │                                                          <repo-root-on-cluster>
-    │                                                          (--ServerApp.root_dir confines content manager)
-    │
-    └─ Claude  ──stdio──→  npx mcp-remote  ──HTTP──→  /mcp endpoint (JUPYTER_SERVER mode, "jupyter-compute")
-                                            (same SSH tunnel, port <port>)
+    └─ Claude  ──stdio──→  uvx jupyter-mcp-server  (MCP_SERVER mode, "jupyter")
+                                 │
+                                 │  HTTP+WS via tunnel
+                                 ▼
+          ssh -N -L <port>:<compute-node>:<port> ── login node ── compute node (no internet)
+                                                                       │
+                                                                       │  jupyter lab
+                                                                       ▼
+                                                               <repo-root-on-cluster>
+                                                               (--ServerApp.root_dir confines content manager)
 ```
 
-Both modes ride the same SSH tunnel. Only the laptop has internet. The
-compute node never reaches outside.
+The MCP server runs on the laptop and reaches the remote Jupyter over
+standard HTTP + kernel-WebSocket through the SSH tunnel. Only the laptop
+has internet; the compute node never reaches outside.
 
 ## One-time cluster setup
 
@@ -169,12 +163,10 @@ Expected (the canonical working configuration):
 
 ## One-time laptop setup
 
-You need three things on the laptop:
+You need two things on the laptop:
 
-1. **`uv`** (for `uvx`) — runs the laptop-side MCP_SERVER mode entry
-2. **Node.js** (for `npx`) — runs the `mcp-remote` proxy for
-   JUPYTER_SERVER mode
-3. **`.mcp.json` entries** — written by `aexp install --with-jupyter`
+1. **`uv`** (for `uvx`) — runs the laptop-side MCP server
+2. **`.mcp.json` entry** — written by `aexp install --with-jupyter`
 
 ```powershell
 # Install uv if not already there
@@ -183,18 +175,10 @@ pip install uv
 # Verify uvx can fetch jupyter-mcp-server (does NOT support --help cleanly,
 # but a non-error exit means it's installed)
 uvx jupyter-mcp-server --help   # may exit with usage; that's fine
-
-# Install Node.js LTS from https://nodejs.org/ if you don't have it
-node --version
-
-# Verify mcp-remote installs and runs (will error on the fake URL — that's expected)
-npx -y mcp-remote http://nonexistent.local/mcp 2>&1 | Select-Object -First 5
-# Look for: "Non-HTTPS URLs are only allowed for localhost or when --allow-http"
-# That confirms mcp-remote is functional.
 ```
 
-After `aexp install --with-jupyter` your `.mcp.json` will include both
-servers:
+After `aexp install --with-jupyter` your `.mcp.json` will include the
+`jupyter` server:
 
 ```json
 {
@@ -202,23 +186,14 @@ servers:
     "jupyter": {
       "command": "uvx",
       "args": ["jupyter-mcp-server"]
-    },
-    "jupyter-compute": {
-      "command": "npx",
-      "args": [
-        "-y", "mcp-remote",
-        "http://127.0.0.1:3618/mcp",
-        "--allow-http",
-        "--header", "Authorization:token ${JUPYTER_TOKEN}"
-      ]
     }
   }
 }
 ```
 
-The `${JUPYTER_TOKEN}` interpolation reads from your shell environment
-when Claude Desktop spawns the proxy. **On Windows this is fragile** —
-see "Stable token setup" below.
+No token or URL is baked into the entry — the agent supplies them at
+runtime via `connect_to_jupyter` (see "Per-session: connect from the
+laptop" below).
 
 ## Per-session: launch JupyterLab on the cluster
 
@@ -234,10 +209,6 @@ of line 1 changes per job; lines 2 and 3 are the same every time.
 
 ## Per-session: connect from the laptop
 
-If you've done the **stable token setup** below, this is just two steps:
-open the SSH tunnel and (if Claude Desktop isn't already running) launch
-it. The token is hardcoded in `.mcp.json` and stable across all jobs.
-
 ```powershell
 # Open the SSH tunnel
 ssh -N -L <port>:<your-compute-node-fqdn>:<port> <your-username>@<your-cluster-login-host>
@@ -246,13 +217,26 @@ ssh -N -L <port>:<your-compute-node-fqdn>:<port> <your-username>@<your-cluster-l
 # JupyterLab should open with <repo-root-on-cluster> as the file root.
 ```
 
-That's it. Open a fresh Claude Desktop session; both `mcp__jupyter__*`
-and `mcp__jupyter-compute__*` tool families should appear.
+Open a fresh Claude session; the `mcp__jupyter__*` tool family should
+appear. Then point it at the running Jupyter — paste line 3 of the
+launcher log, or just tell the agent:
 
-### Stable token setup (one-time, do this!)
+```
+Connect to jupyter at http://127.0.0.1:<port> with token <your-token>.
+```
 
-If you don't want to setx + restart Claude Desktop every time the batch
-launcher generates a new random token, set up a stable token once:
+The agent calls `connect_to_jupyter(jupyter_url, jupyter_token)`; a
+PostToolUse hook then surfaces a re-introspection directive it follows
+to confirm the session landed where intended. To switch to a different
+Jupyter mid-session, use `/aexp-jupyter-connect`.
+
+### Stable token setup (one-time, recommended)
+
+The MCP server takes the token at runtime via `connect_to_jupyter`, so
+there is no token in `.mcp.json` to keep in sync. But a *stable* token
+still helps: it means the connect prompt (line 3 of the launcher log) is
+identical for every job, so you paste the same string each time instead
+of copying a fresh random token.
 
 **On the cluster** (one-time):
 
@@ -263,38 +247,18 @@ mkdir -p ~/.jupyter
 TOKEN=$(openssl rand -hex 32)
 echo "c.IdentityProvider.token = '$TOKEN'" > ~/.jupyter/jupyter_server_config.py
 chmod 600 ~/.jupyter/jupyter_server_config.py
-echo "JUPYTER_TOKEN=$TOKEN"  # copy this for the .mcp.json edit
+echo "JUPYTER_TOKEN=$TOKEN"  # this is the token you paste into the connect prompt
 ```
 
 Then update your batch launcher script:
 - **Remove** any `JUPYTER_TOKEN="${JUPYTER_TOKEN:-$(openssl rand -hex 32)}"` line (no longer needed)
 - **Remove** `--IdentityProvider.token="$JUPYTER_TOKEN"` from the `jupyter lab` invocation (the config file provides it)
 
-**On the laptop** (one-time):
-
-Edit `.mcp.json`'s `jupyter-compute` entry — replace `${JUPYTER_TOKEN}`
-with the literal token from the cluster step. The hardcoded form is
-**required on Windows** because `setx` doesn't propagate to
-already-running processes (see "Investigation log §4"); on Linux/Mac
-the env-var form works fine if you prefer.
-
-After this: every launcher job uses the same token. Hardcoded
-`.mcp.json` matches. No `setx`, no Claude Desktop restarts for token
-changes ever again. The token is only valid against your SSH-tunneled
-localhost endpoint, so committing it is acceptable for private repos
-(it requires your SSH key to actually exploit).
-
-In a fresh Claude Desktop session you can:
-
-- **For `jupyter` (MCP_SERVER mode):** paste line 3 verbatim — Claude
-  calls `connect_to_jupyter(jupyter_url, jupyter_token)` then can
-  read/edit cells.
-- **For `jupyter-compute` (JUPYTER_SERVER mode):** the proxy
-  auto-authenticates; just call `mcp__jupyter-compute__list_files`
-  directly. No `connect_to_jupyter` needed.
-
-Both servers expose the same core tools. `jupyter-compute` adds the UI
-tools (only meaningful with a JupyterLab browser tab open).
+After this, every launcher job uses the same token, so the connect
+prompt never changes — only the tunnel's compute-node host varies per
+job. The token is only valid against your SSH-tunneled localhost
+endpoint (exploiting it requires your SSH key), so a private repo can
+keep the connect prompt in its launcher log.
 
 ## Smoke test
 
@@ -394,9 +358,6 @@ additive follow-up — open an issue.
 | Manual notebook edits in browser tab stop persisting after Claude has edited cells | [datalayer/jupyter-mcp-server#146](https://github.com/datalayer/jupyter-mcp-server/issues/146) — Y.js sync corruption | Stop using MCP on that notebook; reload the tab. If this becomes recurrent, consider building a narrower custom Jupyter Server extension exposing only the four tools you actually need. |
 | `poetry add` hangs / silently bails / `Resolving dependencies... (0.0s)` | Broken `file://` path dep in pyproject.toml getting parsed before markers are evaluated ([poetry#9679](https://github.com/python-poetry/poetry/issues/9679)) | Don't add `file://` path deps with `sys_platform` markers. Move sibling editable installs to `poetry run pip install -e ...` outside pyproject.toml |
 | Claude tries to use `list_notebooks` before opening any | The tool only lists *opened* notebooks, not files | Tell it to use `list_files` to enumerate `.ipynb` files |
-| Only `mcp__jupyter-compute__*` tools visible (laptop-side `mcp__jupyter__*` missing) | Probably `uvx jupyter-mcp-server` startup race in Claude Desktop | Restart Claude Desktop. Check Claude Desktop's MCP status panel for the `jupyter` server connection state. If persistently broken, drop the `jupyter` entry — `jupyter-compute` is functionally a superset. |
-| Only `mcp__jupyter__*` visible (cluster-side `mcp__jupyter-compute__*` missing) | `mcp-remote` proxy failed to authenticate. Most likely cause: stale `JUPYTER_TOKEN` env var on Windows from a previous job. Confirm by running `npx -y mcp-remote http://127.0.0.1:<port>/mcp --allow-http --header "Authorization:token $env:JUPYTER_TOKEN"` directly — if it returns HTTP 403, the token is stale. | `setx JUPYTER_TOKEN "<token-from-current-job-log>"`, fresh PowerShell, restart Claude Desktop. Or migrate to a stable token via `~/.jupyter/jupyter_server_config.py` to avoid this entirely. |
-| `notebook_run-all-cells` returns `404 Not Found`, but `notebook_get-selected-cell` works | Asymmetric route registration in `jupyter-mcp-tools` frontend bridge. Only `get-selected-cell` is reachable; `run-all-cells` 404s even though it's in the default `--allowed-jupyter-mcp-tools` list. | Workaround: loop `execute_cell(cell_index=i)` over indices, or trigger Run-All manually from the JupyterLab toolbar. The `get-selected-cell` UI bridge remains usable for "what's the user looking at?" workflows. |
 
 ## Investigation log — how we arrived at this configuration
 
@@ -496,45 +457,11 @@ labextension was the only real culprit.
 **disable one at a time and re-test**, instead of disabling everything
 that *might* be at fault.
 
-### Round 4: token rotation pain (Windows env-var propagation through Claude Desktop)
-
-**Symptom:** After every job-resubmit, the new job's random token is
-different. Per-session ritual was: copy token → `setx JUPYTER_TOKEN`
-→ close PowerShell → open fresh one → restart Claude Desktop. The "only
-`mcp__jupyter__*` tools visible, no `mcp__jupyter-compute__*`" failure
-mode hit three times. Direct `npx mcp-remote` test against the cluster
-returned HTTP 403, confirming the env var was stale in Claude Desktop's
-process.
-
-**Root cause:** Windows `setx` updates the persistent user environment
-but already-running processes (notably Explorer, which spawns Start
-Menu apps) retain their old environment until restarted. Claude Desktop
-launched from the Start Menu inherits Explorer's stale env, not the
-freshly-set value.
-
-**Fix:** Pin a single stable token. Hardcode in `.mcp.json` (replace
-`${JUPYTER_TOKEN}` with literal value) AND hardcode the same value in
-the launcher script. Now every job uses the same token, hardcoded
-`.mcp.json` matches, no `setx` ever needed. The token's only attack
-surface is the SSH-tunneled localhost endpoint, which requires the
-user's SSH key — committing it to a private repo is acceptable.
-
-### Round 5: asymmetric UI bridge (`notebook_run-all-cells` 404s, `notebook_get-selected-cell` works)
-
-**Symptom:** Both tools are nominally JupyterLab-frontend-delegated and
-both should be in the default `--allowed-jupyter-mcp-tools` list. But
-`notebook_get-selected-cell` reaches the live frontend and returns the
-actual selected cell, while `notebook_run-all-cells` returns HTTP 404
-from the server.
-
-**Status:** Unresolved upstream. Documented as a known quirk. Workaround:
-loop `execute_cell(cell_index=i)` over indices for the same effect.
-
 ### What this means for first-time setup
 
 If you're setting this up fresh on a new env and following the recipe at
 the top of this document (or running `aexp jupyter-setup`), you should
-never see Rounds 1-4 — the recipe disables/enables the right things
+never see Rounds 1-3 — the recipe disables/enables the right things
 from the start. But if you ever:
 
 - Hit the kernel-WS-hangs-silently symptom → Round 1
@@ -543,8 +470,6 @@ from the start. But if you ever:
   `@jupyter-ai-contrib/server-documents`), NOT `nbmodel`
 - Hit `execute_cell returns "nbmodel not found"` → Round 3 (re-enable
   `jupyter_server_nbmodel`)
-- Hit token mismatches that survive `setx` + Claude Desktop restart →
-  Round 4 (hardcode the token)
 
 The matching troubleshooting-table entries above link to these rounds.
 
@@ -610,9 +535,7 @@ snapshot.
 
 | Tool | Version | Notes |
 |---|---|---|
-| `uv` | latest | Used by `uvx jupyter-mcp-server` for laptop-side MCP_SERVER mode |
-| `node` | LTS | Required for `npx mcp-remote` (JUPYTER_SERVER mode proxy) |
-| `mcp-remote` | (npx-fetched) | stdio↔HTTP proxy bridging Claude Desktop to the cluster `/mcp` endpoint |
+| `uv` | latest | Used by `uvx jupyter-mcp-server` for the laptop-side MCP server |
 | `jupyter-mcp-server` | 1.0.2+ | fetched ephemerally by `uvx`; not permanently installed |
 
 ### Cluster server endpoint (when Jupyter is running)
@@ -624,9 +547,6 @@ snapshot.
 | `ws://127.0.0.1:<port>/api/kernels/<id>/channels` | Kernel WebSocket (used by MCP_SERVER mode kernel-client) |
 | `http://127.0.0.1:<port>/api/collaboration/session/<path>` | Y.js doc room session (PUT to register; required for cell-document ops) |
 | `http://127.0.0.1:<port>/api/fileid/id` and `.../path` | Standard file-ID lookup (jupyter-server-fileid) |
-| `http://127.0.0.1:<port>/mcp` | JUPYTER_SERVER mode MCP SSE endpoint (used by `mcp-remote` proxy) |
-| `http://127.0.0.1:<port>/mcp/healthz` | MCP server health check |
-| `http://127.0.0.1:<port>/mcp/tools/list` | MCP tools list |
 
 ### Re-capture this snapshot later
 

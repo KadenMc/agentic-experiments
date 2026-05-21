@@ -155,14 +155,14 @@ The active session is the default transport for updates.
 
 ## Working with Jupyter MCP (when configured)
 
-If `mcp__jupyter-compute__*` tools are available, the user has set up
-the Claude ↔ JupyterLab integration via `aexp install --with-jupyter`
-plus a running JupyterLab on a remote node (SSH-tunneled). Prefer these
-tools over git-based round-trips for notebook work:
+If `mcp__jupyter__*` tools are available, the user has set up the
+Claude ↔ JupyterLab integration via `aexp install --with-jupyter` plus a
+running JupyterLab on a remote node (SSH-tunneled). Prefer these tools
+over git-based round-trips for notebook work:
 
-- **"What am I looking at?"** → `notebook_get-selected-cell` returns the
-  user's live UI selection (cell index + type + source). Use this when
-  the user says "this cell" or "what I have open."
+- **Opening a notebook** → `use_notebook` before reading or executing
+  its cells. Ask the user which notebook and cell to work on — this
+  single-server setup has no live "what is the user looking at" tool.
 - **Reading context** → `read_cell` / `read_notebook` (brief or detailed
   mode) before proposing edits.
 - **Editing** → `edit_cell_source` for surgical find-and-replace within
@@ -170,10 +170,8 @@ tools over git-based round-trips for notebook work:
   for additions.
 - **Executing** → `execute_cell` to run a cell and persist outputs to
   the notebook; `execute_code` to run kernel-direct Python without
-  saving (good for sanity checks).
-- **DO NOT** use `notebook_run-all-cells` — exposed but currently
-  returns 404 (asymmetric upstream bug). Loop `execute_cell` over
-  indices for multi-cell runs.
+  saving (good for sanity checks). Loop `execute_cell` over indices for
+  multi-cell runs.
 - **`read_cell` / `read_notebook` outputs lag live state.** After an
   `execute_cell`, the cached output (and execution count) returned by
   `read_cell` may still reflect the *prior* run. Trust `execute_cell`'s

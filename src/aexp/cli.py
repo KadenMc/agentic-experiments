@@ -249,8 +249,8 @@ def install(
         False,
         "--with-jupyter",
         help=(
-            "Opt into the Jupyter MCP integration: writes `jupyter` and "
-            "`jupyter-compute` server entries to `.mcp.json`, sets "
+            "Opt into the Jupyter MCP integration: writes the `jupyter` "
+            "server entry to `.mcp.json`, sets "
             "`jupyter_enabled: true` (sticky) in the install marker, and "
             "ensures `docs/setup/jupyter-mcp.md` is vendored. Requires "
             "`pip install agentic-experiments[jupyter]` for the Python "

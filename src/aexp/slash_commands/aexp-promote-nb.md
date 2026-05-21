@@ -13,11 +13,10 @@ committed experiment.
 > The notebook stays as the smoke-test record — it's not edited, only
 > read. Outputs land at `<repo_root>/experiments/E<id>-<slug>.py`.
 
-> **Prerequisite.** Best with `mcp__jupyter-compute__*` tools available
+> **Prerequisite.** Best with the `mcp__jupyter__*` tools available
 > (from `aexp install --with-jupyter`). If they're not, you can still
 > promote cells from a `.ipynb` file on disk via the standard Read tool;
-> you'll lose the live cell-selection convenience but everything else
-> works.
+> everything in this command works either way.
 
 > **Invocation note.** The examples below use `python -m aexp` directly.
 > If running from a Claude Code session where `python` does not resolve
@@ -33,25 +32,26 @@ committed experiment.
 
 Run through these steps:
 
-1. **Tool availability check.** Verify whether
-   `mcp__jupyter-compute__notebook_get-selected-cell` and
-   `mcp__jupyter-compute__read_cell` are present. If yes, use them in
-   the steps below. If not, ask the user for the path to the `.ipynb`
-   file on disk and read it via the standard Read tool — JupyterLab
-   notebooks are JSON; you can extract `cells[i].source` directly.
+1. **Tool availability check.** Verify whether the `mcp__jupyter__*`
+   tools (`read_cell`, `read_notebook`, `use_notebook`) are present. If
+   yes, use them in the steps below. If not, ask the user for the path
+   to the `.ipynb` file on disk and read it via the standard Read tool —
+   JupyterLab notebooks are JSON; you can extract `cells[i].source`
+   directly.
 
-2. **Identify the source notebook.** With the MCP bridge: call
-   `mcp__jupyter-compute__notebook_get-selected-cell` to anchor on the
-   user's current focus and report the notebook path back to them. Without
-   the bridge: ask the user for the notebook path explicitly.
+2. **Identify the source notebook.** Ask the user for the notebook path
+   explicitly. With the MCP bridge, cross-check it against the open
+   notebooks (`aexp.jupyter.init().attached_notebooks`) and open it with
+   `use_notebook` if it isn't already open. Without the bridge, take the
+   path the user gives you.
 
 3. **Identify the cell range to promote.** Ask:
-   "promote just the currently-selected cell, or a range? if a range,
-   give me indices (e.g., `4-12`) or describe the cells (e.g., 'from the
-   model definition through the training loop')." Read each target cell
-   (`read_cell(cell_index=N)` via MCP, or by indexing into
-   `cells[]` from the on-disk JSON). Quote the source verbatim back to
-   the user and confirm the selection before going further.
+   "which cells should I promote — give me indices (e.g., `4-12`) or
+   describe the cells (e.g., 'from the model definition through the
+   training loop')." Read each target cell (`read_cell(cell_index=N)`
+   via MCP, or by indexing into `cells[]` from the on-disk JSON). Quote
+   the source verbatim back to the user and confirm the selection before
+   going further.
 
 4. **Identify the experiment.** Ask which `E###` this script is being
    promoted under. If the user is unsure, suggest checking
