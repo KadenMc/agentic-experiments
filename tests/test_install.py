@@ -770,7 +770,9 @@ def test_install_with_jupyter_writes_mcp_entries(fresh_git_repo: Path) -> None:
     assert "aexp" in servers
     assert "jupyter" in servers
     assert servers["jupyter"]["command"] == "uvx"
-    assert "jupyter-mcp-server" in servers["jupyter"]["args"]
+    # jupyter-mcp-server is pinned: v1.0.x's mandatory startup-env auth
+    # hangs the MCP stdio handshake (see _jupyter_mcp_entries docstring).
+    assert servers["jupyter"]["args"] == ["jupyter-mcp-server==0.23.0"]
     assert "jupyter-compute" not in servers
 
 

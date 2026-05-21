@@ -599,11 +599,39 @@ def _jupyter_mcp_entries() -> dict[str, Any]:
       No ``.mcp.json`` edit, no MCP restart. That runtime retargeting is
       what makes the multi-node workflow (``/aexp-jupyter-connect`` /
       ``/aexp-jupyter-discover``) work.
+
+    **Why ``jupyter-mcp-server`` is pinned to ``==0.23.0``.**
+    ``jupyter-mcp-server`` v1.0.0 (released 2026-04-03) made
+    server-startup auth mandatory: it reads ``JUPYTER_URL`` /
+    ``JUPYTER_TOKEN`` / ``MCP_TOKEN`` from the *environment when the
+    process starts*. Claude Code spawns this server over stdio with no
+    such env block, so on v1.0.x the process comes up but never
+    completes the MCP handshake — Claude Code shows the ``jupyter``
+    server stuck "connecting" forever, exposing no tools.
+
+    Moving *forward* to v1.0.x is not a fix here: the cluster JupyterLab
+    URL + token rotate every compute-node session, so baking them into
+    ``.mcp.json`` as static startup env vars is the wrong model. This
+    integration is built on the *runtime* ``connect_to_jupyter(
+    jupyter_url, jupyter_token)`` call, which the pre-auth 0.23.0 line
+    supports cleanly. 0.23.0 is the last release before the
+    mandatory-auth change and is the version verified against the
+    electricrag deployment (2026-05-15).
+
+    The pin is load-bearing: an *unpinned* ``jupyter-mcp-server``
+    resolves to "latest" via ``uvx`` — currently v1.0.x — so an unpinned
+    entry ships broken. Revisit the pin only when v1.0.x grows a
+    runtime-retarget path (or stdio-spawn stops requiring startup env);
+    if you bump it, also update the ``.mcp.json`` example and
+    "Environment reference" in ``docs/setup/jupyter-mcp.md``.
     """
     return {
         "jupyter": {
             "command": "uvx",
-            "args": ["jupyter-mcp-server"],
+            # Pinned deliberately -- v1.0.x's mandatory startup-env auth
+            # hangs the MCP stdio handshake. Full rationale in the
+            # docstring above; do not unpin without re-verifying.
+            "args": ["jupyter-mcp-server==0.23.0"],
         },
     }
 
