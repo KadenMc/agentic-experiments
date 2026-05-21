@@ -45,7 +45,7 @@
 
 - **Hypothesis-first, not metric-first** — you can't start a run without a live hypothesis; you can't ship a finding without cited runs
 - **Git is the source of truth** — every run carries its commit SHA; the knowledge base lives in git; nothing load-bearing is ephemeral
-- **Integrate, don't reinvent** — [signac](https://signac.readthedocs.io) for run state, [W&B](https://wandb.ai/) for observability, [Limina](https://github.com/KadenMc/limina) for the research-graph primitives (the H→E→F artifact model, templates, and methodology skills this project builds on). `aexp` is the glue and the discipline
+- **Integrate, don't reinvent** — [signac](https://signac.readthedocs.io) for run state, [W&B](https://wandb.ai/) for observability, and a bundled research harness for the H→E→F artifact model, templates, and methodology skills. `aexp` is the glue and the discipline
 - **Portable by default** — the MCP server runs via `uvx` from PyPI; `.mcp.json` is identical on every machine and committable to git
 
 ---
@@ -66,7 +66,7 @@ The missing layer is not another tracker. It's a **grammar** — a structure the
 
 | Layer | What lives here |
 |---|---|
-| **Research grammar** | `kb/` artifact graph — Hypothesis → Experiment → Finding plus Literature / Challenge Review / Strategic Review. Claude Code hooks enforce the H→E→F chain at write time. Four research-methodology skills (`experiment-rigor`, `exploratory-sota-research`, `research-devil-advocate`, `build-maintainable-software`) install into `.claude/skills/` |
+| **Research grammar** | `kb/` artifact graph — Hypothesis → Experiment → Finding plus Literature / Challenge Review / Strategic Review. Claude Code hooks enforce the H→E→F chain at write time. Research-methodology skills (`experiment-rigor`, `exploratory-sota-research`, `research-devil-advocate`, `build-maintainable-software`) install into `.claude/skills/` |
 | **Local run state** ([signac](https://signac.readthedocs.io)) | `.runs/.signac/` plus one `.runs/workspace/<job_id>/` directory per run. `job.sp` carries identity params; `job.doc` carries the artifact link, tracker IDs, status, and summary metrics |
 | **Observability** (**W&B**, optional `[wandb]` extra) | Remote runs grouped by a deterministic slug derived from `(hypothesis_id, experiment_id, condition)`. Offline-by-default on HPC — `aexp sync-offline` walks the run store and syncs every pending run in one call from a login node |
 
@@ -104,7 +104,7 @@ The design bet: agents already know how to run experiments. What they need is a 
 |---|---|
 | **H→E→F artifact graph** | Every run descends from an Experiment, which descends from a Hypothesis. Findings cite runs with strong references (either specific job IDs or batch selectors). |
 | **Hook-enforced discipline** | SessionStart, PreToolUse, PostToolUse, and Stop hooks inject active context, block chain violations, and validate KB integrity at turn end. Hooks ship inside the installed package and upgrade via `pip install -U`. |
-| **Research methodology skills** | Four SKILL.md files install into `.claude/skills/` — experiment rigor, exploratory SOTA research, devil's advocate review, and build-maintainable-software. Trigger with `$experiment-rigor` etc. |
+| **Research methodology skills** | SKILL.md files install into `.claude/skills/` — experiment rigor, exploratory SOTA research, devil's advocate review, and build-maintainable-software. Trigger with `$experiment-rigor` etc. |
 
 ### Run state + observability
 
@@ -120,9 +120,9 @@ The design bet: agents already know how to run experiments. What they need is a 
 
 | | |
 |---|---|
-| **MCP server** | FastMCP with 22 tools covering artifact creation (H/E/F/T), run lifecycle, batch queries, queue management (incl. `queue_stop` for live-job interruption), tracker binding, and validation. Runs via `uvx --from agentic-experiments[mcp] aexp-mcp-server` — no absolute paths, no per-machine config, `.mcp.json` committable to git. |
-| **Slash commands** | Artifact creation: `/aexp-new-hypothesis`, `/aexp-new-experiment`, `/aexp-new-run`. Threads (forward-looking research concerns broader than a hypothesis): `/aexp-new-thread`, `/aexp-list-threads`, `/aexp-show-thread`, `/aexp-close-thread`. Finding creation (pick by what the finding cites): `/aexp-finding-from-run`, `/aexp-finding-from-batch`, `/aexp-finding-placeholder`. Read / inspect: `/aexp-show-run`, `/aexp-show-batch`, `/aexp-list-runs`, `/aexp-status`, `/aexp-validate`. Queue: `/aexp-queue-add`, `/aexp-queue-list`, `/aexp-queue-materialize`, `/aexp-queue-stop`. Notebook lifecycle (when `--with-jupyter` is configured): `/aexp-jupyter-iterate` (test loop), `/aexp-promote-nb` (promote working cells into a tracked-run script). Sandbox scaffolding: `/aexp-new-sandbox` (create an exploratory notebook subdir under `notebooks/_sandbox/`). 22 total. |
-| **CLI** | 22 verbs covering install, artifact creation (H/E/F/T + thread lifecycle), run lifecycle, batch queries, tracker binding, validation, offline sync, optional `jupyter-setup`, the `queue` subcommand group (add/list/remove/stop/clear/materialize/run) + `run-queued`, and sandbox scaffolding (`new-sandbox`). See `aexp --help` for the full list. Python API is a one-line `from aexp import ...`. |
+| **MCP server** | FastMCP covering artifact creation (H/E/F/T), run lifecycle, batch queries, queue management (incl. `queue_stop` for live-job interruption), tracker binding, and validation. Runs via `uvx --from agentic-experiments[mcp] aexp-mcp-server` — no absolute paths, no per-machine config, `.mcp.json` committable to git. |
+| **Slash commands** | Artifact creation: `/aexp-new-hypothesis`, `/aexp-new-experiment`, `/aexp-new-run`. Threads (forward-looking research concerns broader than a hypothesis): `/aexp-new-thread`, `/aexp-list-threads`, `/aexp-show-thread`, `/aexp-close-thread`. Finding creation (pick by what the finding cites): `/aexp-finding-from-run`, `/aexp-finding-from-batch`, `/aexp-finding-placeholder`. Read / inspect: `/aexp-show-run`, `/aexp-show-batch`, `/aexp-list-runs`, `/aexp-status`, `/aexp-validate`. Queue: `/aexp-queue-add`, `/aexp-queue-list`, `/aexp-queue-materialize`, `/aexp-queue-stop`. Notebook lifecycle (when `--with-jupyter` is configured): `/aexp-jupyter-iterate` (test loop), `/aexp-promote-nb` (promote working cells into a tracked-run script). Sandbox scaffolding: `/aexp-new-sandbox` (create an exploratory notebook subdir under `notebooks/_sandbox/`). |
+| **CLI** | Verbs covering install, artifact creation (H/E/F/T + thread lifecycle), run lifecycle, batch queries, tracker binding, validation, offline sync, optional `jupyter-setup`, the `queue` subcommand group (add/list/remove/stop/clear/materialize/run) + `run-queued`, and sandbox scaffolding (`new-sandbox`). See `aexp --help` for the full list. Python API is a one-line `from aexp import ...`. |
 | **Typed JSON contracts** | Pydantic models (`RunLink`, `BatchSelector`, `Issue`, …) back the schema; MCP tools and CLI return the same shapes. |
 | **Jupyter MCP integration** (optional, `[jupyter]` extra) | `aexp install --with-jupyter` adds the `jupyter` MCP server to `.mcp.json` so Claude can read/edit/execute cells in a remote JupyterLab through an existing SSH tunnel — no agent SSH required. The target Jupyter is set per-session at runtime via `connect_to_jupyter`, so one entry retargets to any node. `aexp jupyter-setup` applies the verified Jupyter Server extension state on the cluster (disable Datalayer experiments that conflict with the mainstream stack). After install, see `docs/setup/jupyter-mcp.md` for cluster-side recipe + investigation log. The `/aexp-jupyter-iterate` slash command guides the read → propose → execute loop. |
 
@@ -146,8 +146,8 @@ graph TB
     end
 
     subgraph "aexp (Python package)"
-        MCP[MCP Server<br/>FastMCP, 22 tools]
-        CLI[CLI — typer<br/>21 verbs]
+        MCP[MCP Server<br/>FastMCP]
+        CLI[CLI — typer]
         API[Python API<br/>aexp.*]
     end
 
@@ -198,7 +198,7 @@ aexp install
 aexp --help
 ```
 
-> **Heads up — `aexp install` will modify your repo.** It creates `.mcp.json`, **merges into** any existing `.claude/settings.json` (hooks + permissions are additive; yours are preserved), adds `.claude/skills/` with four research-methodology skills, copies a `kb/` scaffold plus `templates/` into the repo root, initializes `.runs/` as a signac project, and records the interpreter path in `.aexp/installed.json`. It prints the plan and asks for confirmation before writing — pass `--yes` to skip the prompt or `--dry-run` to preview only. **No Python code you didn't write lands in your repo**: hook scripts and validator logic live inside the installed `aexp` package and upgrade via `pip install -U`.
+> **Heads up — `aexp install` will modify your repo.** It creates `.mcp.json`, **merges into** any existing `.claude/settings.json` (hooks + permissions are additive; yours are preserved), adds `.claude/skills/` with the research-methodology skills, copies a `kb/` scaffold plus `templates/` into the repo root, initializes `.runs/` as a signac project, and records the interpreter path in `.aexp/installed.json`. It prints the plan and asks for confirmation before writing — pass `--yes` to skip the prompt or `--dry-run` to preview only. **No Python code you didn't write lands in your repo**: hook scripts and validator logic live inside the installed `aexp` package and upgrade via `pip install -U`.
 
 See [docs/quickstart.md](docs/quickstart.md) for a full worked example — hypothesis → experiment → runs → finding.
 
@@ -260,7 +260,7 @@ src/aexp/
   install.py            # apply the harness into a consumer repo
   runs.py               # signac wrappers: create_run, open_run, find_runs, run_lifecycle
   linking.py            # batch queries + retroactive run-to-experiment linking
-  limina_io.py          # typed read wrappers for H/E/F/L/CR/SR artifacts
+  kb_io.py              # typed read wrappers for H/E/F/L/CR/SR artifacts
   validate.py           # composes KB structural + run-link + citation integrity
   kb_validate.py        # KB structural validator (frontmatter, aliases, chain)
   schema.py             # pydantic + dataclass types
@@ -271,7 +271,7 @@ src/aexp/
   slash_commands/       # /aexp-* templates
   trackers/             # TrackerAdapter ABC + noop + wandb adapters
   utils/                # paths, git, atomic writes
-  vendor/               # forked research-graph templates, skills, and kb/ scaffold
+  scaffold/             # research-graph scaffold: kb/, templates, skills, agent contracts
 tests/                  # pytest suite; CI on Ubuntu + Windows × Py 3.11/3.12/3.13
 docs/                   # concepts, quickstart, cli, mcp, mapping, tracker-adapters, queue, threads, sandbox, airgapped
 ```
@@ -280,11 +280,8 @@ docs/                   # concepts, quickstart, cli, mcp, mapping, tracker-adapt
 
 ## Status
 
-**Pre-release (v0.2.x).** Actively developed by one person and the agents they direct; used in the author's own ML research workflow. The API surface is not yet stable — see [CHANGELOG.md](CHANGELOG.md) for what has shipped.
-
 - **Developed and primarily tested on Windows 11 / Python 3.12.** Supports Python 3.11+. CI runs the full suite on Ubuntu + Windows × Py 3.11/3.12/3.13. macOS hasn't been exercised — issues welcome.
 - **MCP server is the only PyPI-gated surface** — the CLI and Python API run from a local checkout without any PyPI round-trip.
-- **v0.3 backlog:** `aexp index` dashboard, MLflow / Aim / DVC tracker adapters, OpenTelemetry extra. (Artifact-creation CLI verbs, the three-mode wandb surface, the queue + runner-materialization layer, threads as a new artifact kind, and template/validator strictness all shipped in 0.2.0 — see CHANGELOG for the full breakdown.)
 
 If you run ML experiments with Claude Code and find yourself wanting a harness that holds your agent to scientific discipline, this is built for you. Feedback, bug reports, and PRs all welcome.
 
@@ -328,6 +325,12 @@ Every edit to `src/aexp/*.py` is now live in:
 > `--dev` bakes your machine's Python path into `.mcp.json`. **Do not commit that form** — gitignore it while iterating, or re-run `aexp install --force` (without `--dev`) to regenerate the portable `uvx` form before committing.
 
 ---
+
+## Acknowledgements
+
+The research harness — the H→E→F artifact model, the `kb/` layout,
+artifact templates, and methodology skills — was adapted from
+[limina](https://github.com/KadenMc/limina).
 
 ## License
 

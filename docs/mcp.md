@@ -89,12 +89,12 @@ teammates get the MCP server on clone.
 
 | Tool | Purpose | Required args |
 |---|---|---|
-| `new_run` | Create a signac job linked to a Limina experiment | `experiment_id` |
+| `new_run` | Create a signac job linked to an experiment | `experiment_id` |
 | `list_runs` | Filter runs by experiment / hypothesis / status | — |
 | `list_batches` | Group runs into `(experiment_id, condition)` slices | — |
 | `show_run` | Full state point + doc + workspace for one run | `job_id` |
 | `show_batch` | Runs matching a batch selector | `experiment_id` |
-| `link_run` | Retroactively stamp `doc["limina"]` onto a job | `job_id`, `experiment_id` |
+| `link_run` | Retroactively stamp `doc["aexp"]` onto a job | `job_id`, `experiment_id` |
 | `bind_tracker` | Attach a noop or wandb tracker to a run | `job_id` |
 | `validate` | Compose KB + run-link + finding-citation checks | — |
 | `sync_offline` | `wandb sync` every offline run in the store | — |

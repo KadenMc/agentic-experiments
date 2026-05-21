@@ -1,8 +1,8 @@
 ---
-description: "Create a new signac run linked to a Limina experiment."
+description: "Create a new signac run linked to an experiment."
 ---
 
-Create a tracked run for an existing Limina experiment.
+Create a tracked run for an existing experiment.
 
 > **Invocation note.** The examples below use `python -m aexp`
 > directly. If running from a Claude Code session where `python` does not

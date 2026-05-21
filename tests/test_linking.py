@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from aexp.install import install_limina
+from aexp.install import install_scaffold
 from aexp.linking import (
     link_to_experiment,
     list_batches,
@@ -37,7 +37,7 @@ def installed_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
     _git_commit(repo)
-    install_limina(repo)
+    install_scaffold(repo)
     return repo
 
 
@@ -185,9 +185,9 @@ def test_link_to_experiment_overwrites_doc(installed_repo: Path) -> None:
     )
     from aexp.runs import open_run
     reopened = open_run(job.id, repo_root=installed_repo)
-    assert reopened.doc["limina"]["experiment_id"] == "E099"
-    assert reopened.doc["limina"]["hypothesis_id"] == "H099"
-    assert reopened.doc["limina"]["experiment_path"].endswith("E099-repointed.md")
+    assert reopened.doc["aexp"]["experiment_id"] == "E099"
+    assert reopened.doc["aexp"]["hypothesis_id"] == "H099"
+    assert reopened.doc["aexp"]["experiment_path"].endswith("E099-repointed.md")
 
 
 def test_link_to_experiment_rejects_bad_id(installed_repo: Path) -> None:

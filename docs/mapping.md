@@ -1,4 +1,4 @@
-# Limina IDs ↔ signac jobs ↔ W&B runs
+# Artifact IDs ↔ signac jobs ↔ W&B runs
 
 The single most important doc. If you read one file, read this one.
 
@@ -13,11 +13,11 @@ Experiment (E###)           ── in kb/research/experiments/
      ▼
 signac Job                  ── in .runs/workspace/<job_id>/
      │  sp:   experiment_id, hypothesis_id, condition, model, seed, code_commit, ...
-     │  doc:  limina={...}, status, tracker={...}, summary_metrics, ...
+     │  doc:  aexp={...}, status, tracker={...}, summary_metrics, ...
      ▼
 W&B Run                     ── project=<user-supplied>
         group=<hypothesis_id>/<experiment_id>/<condition>
-        config={**sp, limina, frame, job_id}
+        config={**sp, aexp, frame, job_id}
      │
 Finding (F###)              ── in kb/research/findings/
    supporting_runs: [{type: job, id: <job_id>} | {type: batch, experiment_id, selector}]
@@ -30,7 +30,7 @@ directory → new run. These are the keys `create_run` knows about:
 
 | Key | Source | Meaning |
 |---|---|---|
-| `experiment_id` | always auto-added | Limina `E###` link (mirror of `doc["limina"]`) |
+| `experiment_id` | always auto-added | `E###` link (mirror of `doc["aexp"]`) |
 | `hypothesis_id` | if passed to `create_run` | Primary or sub-hypothesis link |
 | `sub_hypothesis_id` | if passed | Narrower framing within an experiment |
 | `code_commit`, `code_dirty` | `git rev-parse HEAD` at creation, unless `include_commit=False` | Reproducibility pin |
@@ -45,7 +45,7 @@ commit for replay by passing `code_commit="abc1234"` yourself.
 
 ```python
 {
-  "limina": {
+  "aexp": {
     "experiment_id":     "E018",
     "experiment_path":   "kb/research/experiments/E018-paired-ablation.md",
     "hypothesis_id":     "H012",
@@ -114,8 +114,8 @@ supporting_runs:
 
 | Code | Meaning | Fix |
 |---|---|---|
-| `limina.validation_failed` | Vendored `kb_validate.py` reported errors | Read the details; usually missing `## Links`, missing frontmatter field, broken wikilink |
-| `run.orphan` | A signac job has no `doc["limina"]` | `aexp link <job_id> --experiment E###` |
+| `aexp.validation_failed` | The bundled `kb_validate.py` reported errors | Read the details; usually missing `## Links`, missing frontmatter field, broken wikilink |
+| `run.orphan` | A signac job has no `doc["aexp"]` | `aexp link <job_id> --experiment E###` |
 | `run.broken_experiment_link` | Run references an E### with no file on disk | Fix the link, or create the experiment via `kb_new_artifact.py` |
 | `run.hypothesis_mismatch` | Run's `hypothesis_id` isn't the experiment's primary or a sub | Fix the run or add the hypothesis to the experiment's `sub_hypotheses:` |
 | `run.sub_hypothesis_unlisted` | Run claims a sub-hypothesis not in experiment's `sub_hypotheses:` | Same fix |

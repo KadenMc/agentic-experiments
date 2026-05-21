@@ -44,13 +44,13 @@ from aexp.artifacts import (
 from aexp.artifacts import (
     new_thread as _new_thread,
 )
-from aexp.limina_io import (
+from aexp.kb_io import (
     ArtifactNotFoundError as _ArtifactNotFoundError,
 )
-from aexp.limina_io import (
+from aexp.kb_io import (
     list_kb_artifacts as _list_kb_artifacts,
 )
-from aexp.limina_io import (
+from aexp.kb_io import (
     load_thread as _load_thread,
 )
 from aexp.linking import (
@@ -156,7 +156,7 @@ def new_hypothesis(
     extra_links: list[str] | None = None,
     thread_id: str | None = None,
 ) -> dict[str, Any]:
-    """Create a new Limina hypothesis (H###).
+    """Create a new hypothesis (H###).
 
     Writes ``kb/research/hypotheses/H###-<slug>.md`` with a validator-clean
     skeleton (frontmatter, blockquote metadata, ``## Links`` pre-populated
@@ -190,7 +190,7 @@ def new_experiment(
     artifact_id: str | None = None,
     extra_links: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Create a new Limina experiment (E###) under an existing hypothesis.
+    """Create a new experiment (E###) under an existing hypothesis.
 
     Writes the experiment skeleton and patches the parent H###'s ``## Links``
     section with ``- [[E###]]`` so ``kb_validate`` passes.
@@ -222,7 +222,7 @@ def new_finding(
     artifact_id: str | None = None,
     extra_links: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Create a new Limina finding (F###) citing a hypothesis + experiment.
+    """Create a new finding (F###) citing a hypothesis + experiment.
 
     Writes the finding skeleton and patches both parent files' ``## Links``
     sections. The ``supporting_runs:`` frontmatter list stays empty — add it
@@ -261,7 +261,7 @@ def new_thread(
     artifact_id: str | None = None,
     extra_links: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Create a new Limina thread (T###).
+    """Create a new thread (T###).
 
     A thread is a forward-looking research concern broader than a single
     hypothesis — it captures exploration that may spawn 2–5 hypotheses
@@ -392,10 +392,10 @@ def new_run(
     experiment_path: str | None = None,
     include_commit: bool = True,
 ) -> dict[str, Any]:
-    """Create (or reopen) a signac job linked to a Limina experiment.
+    """Create (or reopen) a signac job linked to an experiment.
 
     Args:
-        experiment_id: Limina E### id this run is testing.
+        experiment_id: The E### id this run is testing.
         statepoint: Identity-defining params (model, condition, seed, ...).
         hypothesis_id: Optional H### the run tests; defaults to the experiment's primary.
         sub_hypothesis_id: Optional narrower hypothesis within the experiment.
@@ -525,7 +525,7 @@ def link_run(
     sub_hypothesis_id: str | None = None,
     experiment_path: str | None = None,
 ) -> dict[str, Any]:
-    """Retroactively stamp ``doc['limina']`` onto an existing signac job."""
+    """Retroactively stamp ``doc['aexp']`` onto an existing signac job."""
     job = _link_to_experiment(
         job_id,
         experiment_id=experiment_id,
@@ -599,7 +599,7 @@ def bind_tracker(
 
 @mcp.tool()
 def validate(mode: str = "full") -> dict[str, Any]:
-    """Validate the Limina KB + signac run-link integrity.
+    """Validate the KB + signac run-link integrity.
 
     Args:
         mode: "full" (default), "kb-only", or "runs-only".
@@ -706,7 +706,7 @@ def queue_add(
     """Register one or more pending runs (``status="queued"``).
 
     Args:
-        experiment_id: Limina E### the runs test.
+        experiment_id: The E### the runs test.
         statepoint: Fixed sp values applied to every job.
         sweep: Optional Cartesian-sweep spec, e.g.
             ``"condition=full|classify_only, seed=0..3"``. Expanded and

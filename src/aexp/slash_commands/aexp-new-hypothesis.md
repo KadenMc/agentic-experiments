@@ -1,5 +1,5 @@
 ---
-description: "Create a new Limina hypothesis (H###) with a validator-clean skeleton."
+description: "Create a new hypothesis (H###) with a validator-clean skeleton."
 ---
 
 Create a new hypothesis artifact. `aexp` handles id allocation, template

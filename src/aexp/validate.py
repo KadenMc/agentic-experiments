@@ -3,9 +3,9 @@
 Plan §8 lays out the full set of checks:
 
 1. Call :func:`aexp.kb_validate.validate_kb` in-process and surface its
-   errors as ``Issue`` rows (code ``limina.validation_failed``).
+   errors as ``Issue`` rows (code ``aexp.validation_failed``).
 2. Walk ``.runs/workspace/*`` and for each job:
-   - ``run.orphan`` if ``doc["limina"]`` is missing.
+   - ``run.orphan`` if ``doc["aexp"]`` is missing.
    - ``run.broken_experiment_link`` if the referenced E### file doesn't exist.
    - ``run.hypothesis_mismatch`` if the run's hypothesis_id contradicts the
      experiment's Hypothesis frontmatter.
@@ -22,16 +22,16 @@ import re
 from pathlib import Path
 from typing import Any, Literal
 
-from aexp.kb_validate import format_text as _kb_format_text
-from aexp.kb_validate import validate_kb
-from aexp.limina_io import (
+from aexp.kb_io import (
     ArtifactNotFoundError,
     find_artifact_path,
     list_kb_artifacts,
 )
+from aexp.kb_validate import format_text as _kb_format_text
+from aexp.kb_validate import validate_kb
 from aexp.linking import list_batches
 from aexp.runs import get_run_store
-from aexp.schema import Issue, RunStatus
+from aexp.schema import Issue, RunStatus, read_run_link
 from aexp.utils.paths import find_repo_root
 
 VALID_STATUSES: set[RunStatus] = {
@@ -91,7 +91,7 @@ def _run_kb_validate(repo_root: Path) -> list[Issue]:
     case — callers decide whether that's worth flagging separately).
 
     No subprocess, no env manipulation, no telemetry concerns — all three
-    were required back when this shelled out to the vendored
+    were required back when this shelled out to the bundled
     ``scripts/kb_validate.py``. That script is now importable as
     ``aexp.kb_validate``.
     """
@@ -104,7 +104,7 @@ def _run_kb_validate(repo_root: Path) -> list[Issue]:
     except Exception as exc:
         return [
             Issue(
-                code="limina.validator_unavailable",
+                code="aexp.validator_unavailable",
                 message=f"kb_validate could not run: {exc}",
                 severity="error",
             )
@@ -116,7 +116,7 @@ def _run_kb_validate(repo_root: Path) -> list[Issue]:
     message = _kb_format_text(result)
     return [
         Issue(
-            code="limina.validation_failed",
+            code="aexp.validation_failed",
             message=message,
             severity="error",
         )
@@ -129,7 +129,7 @@ def _run_kb_validate(repo_root: Path) -> list[Issue]:
 
 
 def _check_run_links(repo_root: Path) -> list[Issue]:
-    """Validate ``job.doc["limina"]`` + ``doc["status"]`` for every run."""
+    """Validate ``job.doc["aexp"]`` + ``doc["status"]`` for every run."""
     issues: list[Issue] = []
     try:
         project = get_run_store(repo_root)
@@ -153,13 +153,13 @@ def _check_run_links(repo_root: Path) -> list[Issue]:
                 )
             )
 
-        link = job.doc.get("limina")
+        link = read_run_link(job.doc)
         if not link:
             issues.append(
                 Issue(
                     code="run.orphan",
                     message=(
-                        f"run {job.id[:8]} has no doc['limina'] — "
+                        f"run {job.id[:8]} has no doc['aexp'] — "
                         "link it with `aex link <id> --experiment E###`"
                     ),
                     path=rel,
@@ -172,7 +172,7 @@ def _check_run_links(repo_root: Path) -> list[Issue]:
             issues.append(
                 Issue(
                     code="run.broken_experiment_link",
-                    message=f"run {job.id[:8]} has doc['limina'] without experiment_id",
+                    message=f"run {job.id[:8]} has doc['aexp'] without experiment_id",
                     path=rel,
                 )
             )

@@ -13,7 +13,7 @@ import pytest
 
 wandb = pytest.importorskip("wandb")
 
-from aexp.install import install_limina  # noqa: E402
+from aexp.install import install_scaffold  # noqa: E402
 from aexp.runs import create_run  # noqa: E402
 from aexp.trackers import (  # noqa: E402
     TrackerInitError,
@@ -128,7 +128,7 @@ def installed_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
     _git_commit(repo)
-    install_limina(repo)
+    install_scaffold(repo)
     return repo
 
 
@@ -154,8 +154,8 @@ def test_wandb_adapter_init_passes_core_kwargs(fake_wandb, installed_repo: Path)
     assert kw["project"] == "proj-x"
     assert kw["group"] == "H012/E018/full"
     assert "E018" in kw["tags"] and "H012" in kw["tags"]
-    # Config carries the full Limina chain + sp
-    assert kw["config"]["limina"]["experiment_id"] == "E018"
+    # Config carries the full run-link chain + sp
+    assert kw["config"]["aexp"]["experiment_id"] == "E018"
     assert kw["config"]["condition"] == "full"
 
 

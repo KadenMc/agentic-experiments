@@ -3,7 +3,7 @@
 Covers the plan §12 checklist:
 
 1. ``aex install`` in a bare git repo produces the expected tree.
-2. Create an artifact via the vendored ``kb_new_artifact.py`` — KB remains valid.
+2. Create an artifact via the bundled ``kb_new_artifact.py`` — KB remains valid.
 3. ``aex new-run`` creates a signac job; ``aex list-runs`` finds it.
 4. ``aex bind-tracker --backend noop`` writes JSONL under the job workspace.
 5. Create several runs; ``aex list-batches`` rolls them up; ``aex show-batch`` filters.

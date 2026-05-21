@@ -1,5 +1,5 @@
 ---
-description: "Create a new Limina experiment (E###) under an existing hypothesis."
+description: "Create a new experiment (E###) under an existing hypothesis."
 ---
 
 Create a new experiment artifact under an existing hypothesis. ``aexp``

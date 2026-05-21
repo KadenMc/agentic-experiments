@@ -1,11 +1,11 @@
 """KB structural validator — frontmatter, aliases, wikilinks, H->E->F chain.
 
-Ported from the vendored Limina ``kb_validate.py`` into the package. Callable
+Ported from the upstream ``kb_validate.py`` into the package. Callable
 in-process via :func:`validate_kb`; :func:`main` preserves a ``python -m
 aexp.kb_validate`` CLI for parity with the old script invocation.
 
-Upstream Limina's optional telemetry hooks are intentionally dropped — ``aexp``
-does not emit to Limina's telemetry sink.
+The upstream validator's optional telemetry hooks are intentionally dropped
+— ``aexp`` does not emit to any external telemetry sink.
 """
 
 from __future__ import annotations
@@ -121,7 +121,7 @@ class ValidationResult:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Validate the Limina kb/ research graph.")
+    parser = argparse.ArgumentParser(description="Validate the kb/ research graph.")
     parser.add_argument("--kb-root", default="./kb", help="Path to kb/ (default: ./kb)")
     parser.add_argument("--check-file", default=None, help="Validate one file in isolation")
     parser.add_argument("--format", choices=("text", "json"), default="text")
@@ -496,14 +496,14 @@ _TEMPLATE_FILENAMES_FOR_HEADER_CHECK: dict[str, str] = {
     "F": "finding.md",
     "T": "thread.md",
 }
-_VENDOR_TEMPLATES_DIR = (
-    Path(__file__).resolve().parent / "vendor" / "limina" / "templates"
+_SCAFFOLD_TEMPLATES_DIR = (
+    Path(__file__).resolve().parent / "scaffold" / "templates"
 )
 
 
 @functools.cache
 def _required_headers_for_kind(kind: str) -> tuple[str, ...]:
-    """Extract ordered ``## ``-level headers from the vendored template for ``kind``.
+    """Extract ordered ``## ``-level headers from the bundled template for ``kind``.
 
     Returns the headers an artifact of this kind is expected to contain.
     Excludes ``## Links`` (already comprehensively validated by
@@ -514,7 +514,7 @@ def _required_headers_for_kind(kind: str) -> tuple[str, ...]:
     filename = _TEMPLATE_FILENAMES_FOR_HEADER_CHECK.get(kind)
     if filename is None:
         return ()
-    template_path = _VENDOR_TEMPLATES_DIR / filename
+    template_path = _SCAFFOLD_TEMPLATES_DIR / filename
     if not template_path.is_file():
         return ()
     headers: list[str] = []
@@ -752,7 +752,7 @@ def validate_kb(
     *,
     check_file: Path | str | None = None,
 ) -> ValidationResult:
-    """Validate a Limina ``kb/`` tree (or a single file inside it).
+    """Validate a ``kb/`` tree (or a single file inside it).
 
     Pure in-process entry point — no I/O beyond reading the KB tree, no CLI
     side effects. Hooks, ``aexp validate``, and tests all call this directly.

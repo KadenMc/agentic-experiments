@@ -1,5 +1,5 @@
 ---
-description: "Create a Limina finding (F###) with no run citations yet (synthesis / deferred)."
+description: "Create a finding (F###) with no run citations yet (synthesis / deferred)."
 ---
 
 Create a new finding skeleton that cites a hypothesis + experiment but has

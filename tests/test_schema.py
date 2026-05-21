@@ -5,15 +5,17 @@ import pytest
 from pydantic import ValidationError
 
 from aexp.schema import (
+    ArtifactRef,
     BatchSelector,
     Issue,
-    LiminaArtifactRef,
     RunLink,
     RunSummary,
     SupportingJobRun,
     TrackerBinding,
     batch_slug,
     iso_utc_now,
+    read_run_link,
+    write_run_link,
 )
 
 # ---------------------------------------------------------------------------
@@ -49,6 +51,38 @@ def test_runlink_is_frozen() -> None:
     link = RunLink(experiment_id="E001", experiment_path="kb/x.md")
     with pytest.raises(ValidationError):
         link.experiment_id = "E002"  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# read_run_link / write_run_link — run-link key with legacy fallback
+# ---------------------------------------------------------------------------
+
+
+def test_read_run_link_reads_current_key() -> None:
+    assert read_run_link({"aexp": {"experiment_id": "E001"}}) == {"experiment_id": "E001"}
+
+
+def test_read_run_link_falls_back_to_legacy_limina_key() -> None:
+    # Runs stamped before the de-brand used the "limina" key; they must
+    # still resolve so existing signac projects need no migration.
+    assert read_run_link({"limina": {"experiment_id": "E009"}}) == {"experiment_id": "E009"}
+
+
+def test_read_run_link_prefers_current_key_over_legacy() -> None:
+    doc = {"aexp": {"experiment_id": "E_new"}, "limina": {"experiment_id": "E_old"}}
+    assert read_run_link(doc)["experiment_id"] == "E_new"
+
+
+def test_read_run_link_empty_when_absent() -> None:
+    assert read_run_link({"status": "created"}) == {}
+
+
+def test_write_run_link_writes_current_and_clears_legacy() -> None:
+    doc = {"limina": {"experiment_id": "E_old"}}
+    write_run_link(doc, {"experiment_id": "E_new"})
+    assert doc["aexp"] == {"experiment_id": "E_new"}
+    # Legacy key is cleared so a re-stamped job self-heals to the new key.
+    assert "limina" not in doc
 
 
 # ---------------------------------------------------------------------------
@@ -89,8 +123,8 @@ def test_tracker_binding_minimal() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_limina_artifact_ref_is_frozen() -> None:
-    ref = LiminaArtifactRef(
+def test_artifact_ref_is_frozen() -> None:
+    ref = ArtifactRef(
         kind="E",
         id="E001",
         path="kb/research/experiments/E001-foo.md",

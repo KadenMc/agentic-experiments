@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from aexp.install import install_limina
+from aexp.install import install_scaffold
 from aexp.runs import create_run
 from aexp.validate import VALID_STATUSES, validate_repo
 
@@ -34,7 +34,7 @@ def _write_artifact(
     *,
     links: list[str] | None = None,
 ) -> Path:
-    """Write a minimally-conforming Limina artifact (aliases + Links section).
+    """Write a minimally-conforming kb/ artifact (aliases + Links section).
 
     kb_validate requires an ``aliases`` frontmatter entry matching the id and
     a ``## Links`` section listing wikilinks to related artifacts; without
@@ -83,7 +83,7 @@ def installed_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
     _git_commit(repo)
-    install_limina(repo)
+    install_scaffold(repo)
     return repo
 
 
@@ -144,7 +144,7 @@ def test_validate_flags_missing_template_header_on_experiment(
 
     Calls ``kb_validate.validate_kb`` directly because the per-check codes
     (``missing_template_header`` etc.) live there; ``validate_repo`` flattens
-    the inner kb-validate output into a single ``limina.validation_failed``
+    the inner kb-validate output into a single ``aexp.validation_failed``
     issue with the formatted text bundled into the message.
     """
     from aexp.kb_validate import validate_kb
@@ -205,7 +205,7 @@ def test_validate_repo_surfaces_missing_template_header_in_bundled_message(
     installed_repo: Path,
 ) -> None:
     """The outer ``validate_repo`` doesn't preserve per-check codes, but its
-    bundled ``limina.validation_failed`` message must still mention the
+    bundled ``aexp.validation_failed`` message must still mention the
     missing header so users see what to fix."""
     kb = installed_repo / "kb"
     _write_artifact(
@@ -248,7 +248,7 @@ def test_validate_repo_surfaces_missing_template_header_in_bundled_message(
     result = validate_repo(installed_repo)
     assert not result.ok
     bundled = next(
-        i for i in result.errors if i.code == "limina.validation_failed"
+        i for i in result.errors if i.code == "aexp.validation_failed"
     )
     assert "Caveats" in bundled.message
     assert "missing_template_header" in bundled.message
@@ -294,7 +294,7 @@ def test_validate_surfaces_kb_validate_errors(installed_repo: Path) -> None:
     bad.write_text("not a valid artifact\n", encoding="utf-8")
     result = validate_repo(installed_repo)
     codes = [i.code for i in result.errors]
-    assert "limina.validation_failed" in codes
+    assert "aexp.validation_failed" in codes
 
 
 # ---------------------------------------------------------------------------
@@ -303,13 +303,13 @@ def test_validate_surfaces_kb_validate_errors(installed_repo: Path) -> None:
 
 
 def test_validate_flags_orphan_run(installed_repo: Path) -> None:
-    # Create a job then wipe its Limina link so it becomes orphan.
+    # Create a job then wipe its run link so it becomes orphan.
     job = create_run(
         experiment_id="E001",
         statepoint={"c": "f"},
         repo_root=installed_repo,
     )
-    del job.doc["limina"]
+    del job.doc["aexp"]
 
     result = validate_repo(installed_repo, mode="runs-only")
     codes = [i.code for i in result.errors]
@@ -591,7 +591,7 @@ def test_mode_kb_only_skips_run_checks(installed_repo: Path) -> None:
     job = create_run(
         experiment_id="E001", statepoint={"c": "f"}, repo_root=installed_repo
     )
-    del job.doc["limina"]
+    del job.doc["aexp"]
     result = validate_repo(installed_repo, mode="kb-only")
     # Might still fail on kb_validate (e.g. if the orphan kb/ wasn't touched),
     # but no run.* codes should appear.
@@ -605,4 +605,4 @@ def test_mode_runs_only_skips_kb_validate(installed_repo: Path) -> None:
     bad.write_text("garbage\n", encoding="utf-8")
     result = validate_repo(installed_repo, mode="runs-only")
     codes = [i.code for i in result.issues]
-    assert "limina.validation_failed" not in codes
+    assert "aexp.validation_failed" not in codes

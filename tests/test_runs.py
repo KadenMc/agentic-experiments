@@ -1,4 +1,4 @@
-"""Tests for the signac-backed run store + Limina-aware run API."""
+"""Tests for the signac-backed run store + research-aware run API."""
 from __future__ import annotations
 
 import subprocess
@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from aexp.install import install_limina
+from aexp.install import install_scaffold
 from aexp.runs import (
     RunNotFound,
     RunStoreNotInitialized,
@@ -36,7 +36,7 @@ def _git_init(path: Path) -> None:
 
 @pytest.fixture
 def installed_repo(tmp_path: Path) -> Path:
-    """A tmp dir with a git repo + Limina installed + signac initialized."""
+    """A tmp dir with a git repo + aexp scaffold installed + signac initialized."""
     repo = tmp_path / "repo"
     repo.mkdir()
     _git_init(repo)
@@ -54,7 +54,7 @@ def installed_repo(tmp_path: Path) -> Path:
         check=True,
         capture_output=True,
     )
-    install_limina(repo)
+    install_scaffold(repo)
     return repo
 
 
@@ -110,7 +110,7 @@ def test_create_run_adds_commit_by_default(installed_repo: Path) -> None:
     )
     assert "code_commit" in job.sp
     assert len(job.sp["code_commit"]) == 40
-    # After install_limina, the fresh repo's working tree is dirty (we just
+    # After install_scaffold, the fresh repo's working tree is dirty (we just
     # wrote kb/, scripts/, etc.) — ensure the flag is present as a bool.
     assert isinstance(job.sp["code_dirty"], bool)
 
@@ -153,7 +153,7 @@ def test_create_run_new_commit_yields_new_job_id(installed_repo: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_create_run_stamps_limina_link(installed_repo: Path) -> None:
+def test_create_run_stamps_run_link(installed_repo: Path) -> None:
     job = create_run(
         experiment_id="E018",
         hypothesis_id="H012",
@@ -162,7 +162,7 @@ def test_create_run_stamps_limina_link(installed_repo: Path) -> None:
         statepoint={"c": "full"},
         repo_root=installed_repo,
     )
-    link = job.doc["limina"]
+    link = job.doc["aexp"]
     assert link["experiment_id"] == "E018"
     assert link["hypothesis_id"] == "H012"
     assert link["sub_hypothesis_id"] == "H013"

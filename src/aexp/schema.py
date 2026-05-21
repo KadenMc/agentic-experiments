@@ -1,20 +1,21 @@
 """Pydantic + dataclass models for the fusion layer.
 
-The types here are the *lingua franca* between signac jobs, Limina artifacts,
+The types here are the *lingua franca* between signac jobs, research artifacts,
 tracker adapters, and the CLI. They deliberately stay small and frozen-ish;
 business logic lives in the modules that produce / consume them.
 
 Conventions
 -----------
-- ``RunLink``: the canonical shape of ``job.doc["limina"]``.
+- ``RunLink``: the canonical shape of ``job.doc["aexp"]``.
 - ``SupportingRun`` / ``BatchSelector``: entries in a Finding's
   ``supporting_runs:`` frontmatter list (see plan §2, §8).
-- ``LiminaArtifactRef``: typed handle returned by ``limina_io`` readers.
+- ``ArtifactRef``: typed handle returned by ``kb_io`` readers.
 - ``RunSummary``: flat summary row for CLI ``list-runs`` / ``list-batches``.
 - ``Issue``: an actionable validator finding; the CLI prints these.
 """
 from __future__ import annotations
 
+from collections.abc import Mapping, MutableMapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import Any, Literal
@@ -26,7 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field
 # ---------------------------------------------------------------------------
 
 ArtifactKind = Literal["H", "E", "F", "L", "CR", "SR", "T"]
-"""The seven Limina artifact kinds validated by vendored ``kb_validate.py``.
+"""The seven research artifact kinds validated by the bundled ``kb_validate.py``.
 
 ``H``=Hypothesis, ``E``=Experiment, ``F``=Finding, ``L``=Literature,
 ``CR``=Challenge Review, ``SR``=Strategic Review,
@@ -71,12 +72,19 @@ IssueSeverity = Literal["error", "warning"]
 
 
 # ---------------------------------------------------------------------------
-# Limina <-> signac link
+# Run-link <-> signac
 # ---------------------------------------------------------------------------
+
+RUN_LINK_KEY = "aexp"
+"""``job.doc`` key under which the :class:`RunLink` dict is stored."""
+
+_LEGACY_RUN_LINK_KEY = "limina"
+"""Pre-rename run-link key. Read-only fallback so signac projects created
+before the de-brand keep resolving; never written."""
 
 
 class RunLink(BaseModel):
-    """Canonical shape of ``job.doc["limina"]``.
+    """Canonical shape of ``job.doc["aexp"]``.
 
     Mirrors the invariants in plan §2: every tracked run must reference at
     least an experiment; hypothesis is optional when a run links to an
@@ -93,6 +101,29 @@ class RunLink(BaseModel):
     )
     hypothesis_id: str | None = Field(default=None, pattern=r"^H\d{3}$")
     sub_hypothesis_id: str | None = Field(default=None, pattern=r"^H\d{3}$")
+
+
+def read_run_link(doc: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the run-link dict stored on a signac ``job.doc``.
+
+    Reads ``doc[RUN_LINK_KEY]``, falling back to the legacy ``limina`` key
+    for runs stamped before the key was renamed. Always returns a plain
+    dict -- empty when neither key is present.
+    """
+    link = doc.get(RUN_LINK_KEY)
+    if link is None:
+        link = doc.get(_LEGACY_RUN_LINK_KEY)
+    return dict(link or {})
+
+
+def write_run_link(doc: MutableMapping[str, Any], link: Mapping[str, Any]) -> None:
+    """Stamp the run-link dict onto a signac ``job.doc``.
+
+    Writes ``doc[RUN_LINK_KEY]`` and clears any legacy ``limina`` key, so a
+    job re-stamped after the de-brand self-heals to the current key.
+    """
+    doc[RUN_LINK_KEY] = dict(link)
+    doc.pop(_LEGACY_RUN_LINK_KEY, None)
 
 
 class TrackerBinding(BaseModel):
@@ -141,15 +172,15 @@ SupportingRun = SupportingJobRun | BatchSelector
 
 
 # ---------------------------------------------------------------------------
-# Limina artifact reference (read-only handle returned by limina_io)
+# Artifact reference (read-only handle returned by kb_io)
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
-class LiminaArtifactRef:
-    """A typed pointer to one Limina artifact on disk.
+class ArtifactRef:
+    """A typed pointer to one research artifact on disk.
 
-    Returned by ``limina_io.load_*`` helpers. The raw frontmatter dict is
+    Returned by ``kb_io.load_*`` helpers. The raw frontmatter dict is
     exposed as ``metadata`` so callers can read fields we don't model.
     """
 
@@ -285,8 +316,9 @@ __all__ = [
     "BatchSummary",
     "Issue",
     "IssueSeverity",
-    "LiminaArtifactRef",
+    "ArtifactRef",
     "MaterializeResult",
+    "RUN_LINK_KEY",
     "QueueEntry",
     "RunLink",
     "RunStatus",
@@ -297,4 +329,6 @@ __all__ = [
     "batch_slug",
     "date",
     "iso_utc_now",
+    "read_run_link",
+    "write_run_link",
 ]

@@ -1,4 +1,4 @@
-"""Tests for ``install_limina``."""
+"""Tests for ``install_scaffold``."""
 from __future__ import annotations
 
 import json
@@ -11,9 +11,9 @@ from aexp.install import (
     InstallAction,
     InstallRefused,
     block_merge_markdown,
-    compute_vendor_sha,
-    install_limina,
-    is_limina_installed,
+    compute_scaffold_sha,
+    install_scaffold,
+    is_scaffold_installed,
     merge_claude_settings,
 )
 from aexp.utils.paths import (
@@ -45,13 +45,13 @@ def fresh_git_repo(tmp_path: Path) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# compute_vendor_sha
+# compute_scaffold_sha
 # ---------------------------------------------------------------------------
 
 
-def test_vendor_sha_is_deterministic() -> None:
-    s1 = compute_vendor_sha()
-    s2 = compute_vendor_sha()
+def test_scaffold_sha_is_deterministic() -> None:
+    s1 = compute_scaffold_sha()
+    s2 = compute_scaffold_sha()
     assert s1 == s2
     assert len(s1) == 64  # SHA-256 hex digest
 
@@ -62,7 +62,7 @@ def test_vendor_sha_is_deterministic() -> None:
 
 
 def test_merge_claude_settings_into_empty_user() -> None:
-    vendor = {
+    shipped = {
         "hooks": {
             "SessionStart": [
                 {
@@ -72,7 +72,7 @@ def test_merge_claude_settings_into_empty_user() -> None:
             ]
         }
     }
-    merged = merge_claude_settings(vendor, {})
+    merged = merge_claude_settings(shipped, {})
     assert merged["hooks"]["SessionStart"][0]["hooks"][0]["command"] == "python x.py"
 
 
@@ -82,9 +82,9 @@ def test_merge_claude_settings_dedupes_identical_hook() -> None:
         "hooks": [{"type": "command", "command": "python x.py", "timeout": 5}],
     }
     existing = {"hooks": {"SessionStart": [entry]}}
-    vendor = {"hooks": {"SessionStart": [entry]}}
+    shipped = {"hooks": {"SessionStart": [entry]}}
 
-    merged = merge_claude_settings(vendor, existing)
+    merged = merge_claude_settings(shipped, existing)
     assert len(merged["hooks"]["SessionStart"]) == 1
 
 
@@ -93,14 +93,14 @@ def test_merge_claude_settings_preserves_user_hooks_and_appends_ours() -> None:
         "matcher": "Read",
         "hooks": [{"type": "command", "command": "user.sh", "timeout": 5}],
     }
-    vendor_hook = {
+    shipped_hook = {
         "matcher": "Write|Edit",
         "hooks": [{"type": "command", "command": "python guard.py", "timeout": 5}],
     }
     existing = {"hooks": {"PostToolUse": [user_hook]}, "permissions": {"allow": []}}
-    vendor = {"hooks": {"PostToolUse": [vendor_hook]}}
+    shipped = {"hooks": {"PostToolUse": [shipped_hook]}}
 
-    merged = merge_claude_settings(vendor, existing)
+    merged = merge_claude_settings(shipped, existing)
     matchers = [group["matcher"] for group in merged["hooks"]["PostToolUse"]]
     assert matchers == ["Read", "Write|Edit"]
     # User's permissions key untouched
@@ -109,8 +109,8 @@ def test_merge_claude_settings_preserves_user_hooks_and_appends_ours() -> None:
 
 def test_merge_claude_settings_preserves_user_top_level_keys() -> None:
     existing = {"theme": "dark", "other": {"nested": True}}
-    vendor = {"hooks": {"Stop": [{"matcher": "", "hooks": []}]}}
-    merged = merge_claude_settings(vendor, existing)
+    shipped = {"hooks": {"Stop": [{"matcher": "", "hooks": []}]}}
+    merged = merge_claude_settings(shipped, existing)
     assert merged["theme"] == "dark"
     assert merged["other"] == {"nested": True}
 
@@ -122,43 +122,43 @@ def test_merge_claude_settings_preserves_user_top_level_keys() -> None:
 
 def test_block_merge_appends_when_markers_absent() -> None:
     existing = "# User doc\n\nuser content\n"
-    merged = block_merge_markdown(existing, "vendor content")
+    merged = block_merge_markdown(existing, "shipped content")
     assert "user content" in merged
     assert "<!-- agentic-experiments:begin -->" in merged
-    assert "vendor content" in merged
+    assert "shipped content" in merged
     assert "<!-- agentic-experiments:end -->" in merged
 
 
 def test_block_merge_replaces_existing_block() -> None:
     existing = (
         "# User doc\n\n"
-        "<!-- agentic-experiments:begin -->\nold vendor\n<!-- agentic-experiments:end -->\n"
+        "<!-- agentic-experiments:begin -->\nold block\n<!-- agentic-experiments:end -->\n"
         "\nmore user content\n"
     )
-    merged = block_merge_markdown(existing, "new vendor")
-    assert "old vendor" not in merged
-    assert "new vendor" in merged
+    merged = block_merge_markdown(existing, "new block")
+    assert "old block" not in merged
+    assert "new block" in merged
     assert "more user content" in merged
 
 
 # ---------------------------------------------------------------------------
-# install_limina — end-to-end
+# install_scaffold — end-to-end
 # ---------------------------------------------------------------------------
 
 
 def test_install_requires_git_by_default(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="not a git repo"):
-        install_limina(tmp_path)
+        install_scaffold(tmp_path)
 
 
 def test_install_allows_no_git_when_flag_false(tmp_path: Path) -> None:
     # Should not raise.
-    actions = install_limina(tmp_path, assert_git=False)
+    actions = install_scaffold(tmp_path, assert_git=False)
     assert any(a.kind == "wrote_marker" for a in actions)
 
 
 def test_install_populates_fresh_repo(fresh_git_repo: Path) -> None:
-    actions = install_limina(fresh_git_repo)
+    actions = install_scaffold(fresh_git_repo)
     kinds = {a.kind for a in actions}
     assert "copied" in kinds
     assert "initialized_runs" in kinds
@@ -190,7 +190,7 @@ def test_install_drops_slash_commands_without_a_second_step(
     a second step; this test pins the folded-in behaviour so the standalone
     verb can't become load-bearing again.
     """
-    install_limina(fresh_git_repo)
+    install_scaffold(fresh_git_repo)
     commands = fresh_git_repo / ".claude" / "commands"
     assert commands.is_dir()
     for name in (
@@ -207,7 +207,7 @@ def test_install_drops_slash_commands_without_a_second_step(
 
 
 def test_install_initializes_signac_project(fresh_git_repo: Path) -> None:
-    install_limina(fresh_git_repo)
+    install_scaffold(fresh_git_repo)
     assert (fresh_git_repo / ".runs").is_dir()
     assert (fresh_git_repo / ".runs" / "signac.rc").is_file() or (
         fresh_git_repo / ".runs" / "workspace"
@@ -217,33 +217,33 @@ def test_install_initializes_signac_project(fresh_git_repo: Path) -> None:
 
 
 def test_install_writes_valid_marker(fresh_git_repo: Path) -> None:
-    install_limina(fresh_git_repo)
+    install_scaffold(fresh_git_repo)
     marker = read_installed_marker(fresh_git_repo)
     assert marker is not None
     assert marker["version"]
     assert marker["run_store_path"] == ".runs"
-    assert len(marker["limina_vendor_sha"]) == 64
+    assert len(marker["scaffold_sha"]) == 64
     # Cross-platform invocation fields written by default.
     assert "python_exe" in marker
     assert Path(marker["python_exe"]).exists()
     # conda_env_name is present (may be "" when running under a venv).
     assert "conda_env_name" in marker
-    assert is_limina_installed(fresh_git_repo)
+    assert is_scaffold_installed(fresh_git_repo)
 
 
 def test_install_is_idempotent(fresh_git_repo: Path) -> None:
-    install_limina(fresh_git_repo)
+    install_scaffold(fresh_git_repo)
     # Second run: every action should be either already_installed (short-circuit)
-    # or a no-op kind. Because the marker matches the vendor sha, we short-circuit.
-    actions = install_limina(fresh_git_repo)
+    # or a no-op kind. Because the marker matches the scaffold sha, we short-circuit.
+    actions = install_scaffold(fresh_git_repo)
     assert any(a.kind == "already_installed" for a in actions)
     # Critically: nothing got copied again
     assert not any(a.kind == "copied" for a in actions)
 
 
 def test_install_force_bypasses_idempotence(fresh_git_repo: Path) -> None:
-    install_limina(fresh_git_repo)
-    actions = install_limina(fresh_git_repo, force=True)
+    install_scaffold(fresh_git_repo)
+    actions = install_scaffold(fresh_git_repo, force=True)
     # On force, we re-walk the trees; all files should match -> skipped_identical
     # (nothing on disk changed since last install).
     assert not any(a.kind == "already_installed" for a in actions)
@@ -261,7 +261,7 @@ def test_install_preserves_user_modified_kb_content_without_force(
     target.parent.mkdir(parents=True)
     target.write_text("user-owned content", encoding="utf-8")
 
-    actions = install_limina(fresh_git_repo)
+    actions = install_scaffold(fresh_git_repo)
     entries = [a for a in actions if a.path.endswith("kb/ACTIVE.md")]
     assert entries
     assert entries[0].kind == "preserved_user_modified"
@@ -286,7 +286,7 @@ def test_install_preserves_user_modified_kb_content_even_under_force(
         "# My research mission\n\nSpecific objective X.\n", encoding="utf-8"
     )
 
-    actions = install_limina(fresh_git_repo, force=True)
+    actions = install_scaffold(fresh_git_repo, force=True)
     entries = [a for a in actions if a.path.endswith("kb/mission/CHALLENGE.md")]
     assert entries
     assert entries[0].kind == "preserved_user_modified"
@@ -302,7 +302,7 @@ def test_install_preserves_user_modified_templates(fresh_git_repo: Path) -> None
     target.parent.mkdir(parents=True)
     target.write_text("# My custom hypothesis template\n", encoding="utf-8")
 
-    actions = install_limina(fresh_git_repo, force=True)
+    actions = install_scaffold(fresh_git_repo, force=True)
     entries = [
         a for a in actions if a.path.endswith("templates/hypothesis.md")
     ]
@@ -317,8 +317,8 @@ def test_install_refreshes_default_kb_content_under_force(
     """If a kb/ file still byte-matches the shipped default, a re-install
     should report ``skipped_identical`` — no preservation noise, and no
     copy since the content is already correct."""
-    install_limina(fresh_git_repo)  # first run lays down the defaults
-    actions = install_limina(fresh_git_repo, force=True)
+    install_scaffold(fresh_git_repo)  # first run lays down the defaults
+    actions = install_scaffold(fresh_git_repo, force=True)
     # Path filter: files shipped under kb/ always end with "kb/<...>.md".
     kb_entries = [
         a
@@ -343,7 +343,7 @@ def test_install_force_still_overwrites_stale_slash_commands(
     target.parent.mkdir(parents=True)
     target.write_text("# stale hand-edited content\n", encoding="utf-8")
 
-    actions = install_limina(fresh_git_repo, force=True)
+    actions = install_scaffold(fresh_git_repo, force=True)
     entries = [
         a
         for a in actions
@@ -377,13 +377,13 @@ def test_install_json_merges_existing_claude_settings(fresh_git_repo: Path) -> N
         encoding="utf-8",
     )
 
-    install_limina(fresh_git_repo)
+    install_scaffold(fresh_git_repo)
     merged = json.loads((claude / "settings.json").read_text("utf-8"))
     # User's hook survived
     post_tool = merged["hooks"]["PostToolUse"]
     commands = [h["command"] for group in post_tool for h in group["hooks"]]
     assert "user-bash.sh" in commands
-    # Vendor's hook got appended
+    # The shipped hook got appended
     assert any("aexp.hooks.kb_write_guard" in c for c in commands)
     # User's unrelated key survived
     assert merged["theme"] == "dark"
@@ -393,7 +393,7 @@ def test_install_block_merges_existing_agents_md(fresh_git_repo: Path) -> None:
     (fresh_git_repo / "AGENTS.md").write_text(
         "# Existing Agents\n\nuser-defined agent rules\n", encoding="utf-8"
     )
-    install_limina(fresh_git_repo)
+    install_scaffold(fresh_git_repo)
     content = (fresh_git_repo / "AGENTS.md").read_text("utf-8")
     assert "user-defined agent rules" in content
     assert "<!-- agentic-experiments:begin -->" in content
@@ -402,7 +402,7 @@ def test_install_block_merges_existing_agents_md(fresh_git_repo: Path) -> None:
 
 def test_install_creates_claude_dir_if_missing(fresh_git_repo: Path) -> None:
     assert not (fresh_git_repo / ".claude").exists()
-    install_limina(fresh_git_repo)
+    install_scaffold(fresh_git_repo)
     assert (fresh_git_repo / ".claude" / "settings.json").is_file()
 
 
@@ -410,14 +410,14 @@ def test_installed_kb_validates_cleanly(fresh_git_repo: Path) -> None:
     """After install, the seeded kb/ passes structural validation."""
     from aexp.kb_validate import validate_kb
 
-    install_limina(fresh_git_repo)
+    install_scaffold(fresh_git_repo)
     result = validate_kb(fresh_git_repo / "kb")
     assert result.ok, result.errors
 
 
 def test_install_action_kinds_are_expected(fresh_git_repo: Path) -> None:
     """Every returned InstallAction carries a known kind + a non-empty path."""
-    actions = install_limina(fresh_git_repo)
+    actions = install_scaffold(fresh_git_repo)
     valid_kinds = {
         "copied",
         "skipped_identical",
@@ -435,18 +435,16 @@ def test_install_action_kinds_are_expected(fresh_git_repo: Path) -> None:
         assert a.path, a
 
 
-def test_install_copies_limina_skills_to_claude_skills(fresh_git_repo: Path) -> None:
-    """All vendored Limina skills must land under <repo>/.claude/skills/.
+def test_install_copies_skills_to_claude_skills(fresh_git_repo: Path) -> None:
+    """All bundled research skills must land under <repo>/.claude/skills/.
 
     Without these, the AGENTS.md references like $experiment-rigor are broken
     on every consumer repo.
     """
-    install_limina(fresh_git_repo)
+    install_scaffold(fresh_git_repo)
     skills_root = fresh_git_repo / ".claude" / "skills"
     assert skills_root.is_dir()
-    # Top-level "limina" skill (from vendor/limina/skill/)
-    assert (skills_root / "limina" / "SKILL.md").is_file()
-    # Research-methodology skills (from vendor/limina/skills/)
+    # Research-methodology skills (from scaffold/skills/)
     expected = {
         "experiment-rigor",
         "exploratory-sota-research",
@@ -460,12 +458,12 @@ def test_install_copies_limina_skills_to_claude_skills(fresh_git_repo: Path) -> 
 
 
 def test_install_skills_emits_installed_skill_actions(fresh_git_repo: Path) -> None:
-    actions = install_limina(fresh_git_repo)
+    actions = install_scaffold(fresh_git_repo)
     skill_actions = [a for a in actions if a.kind == "installed_skill"]
-    # 4 research skills + 1 top-level "limina" skill = 5 installed_skill entries.
-    assert len(skill_actions) == 5, [a.path for a in skill_actions]
+    # 4 research-methodology skills = 4 installed_skill entries.
+    assert len(skill_actions) == 4, [a.path for a in skill_actions]
     paths = {Path(a.path).name for a in skill_actions}
-    assert "limina" in paths
+    assert "experiment-rigor" in paths
     assert "experiment-rigor" in paths
 
 
@@ -480,7 +478,7 @@ def test_install_writes_mcp_json_at_repo_root(fresh_git_repo: Path) -> None:
     This is the file Claude Code reads for project-scope MCP servers;
     ``.claude/settings.json`` does NOT drive MCP config.
     """
-    install_limina(fresh_git_repo)
+    install_scaffold(fresh_git_repo)
     mcp_path = fresh_git_repo / ".mcp.json"
     assert mcp_path.is_file(), "install must write .mcp.json at repo root"
     mcp = json.loads(mcp_path.read_text("utf-8"))
@@ -500,7 +498,7 @@ def test_install_does_not_write_mcp_servers_to_settings_json(
     """``mcpServers`` must NOT end up in ``.claude/settings.json`` — Claude
     Code would ignore it there. All MCP config belongs in ``.mcp.json``.
     """
-    install_limina(fresh_git_repo)
+    install_scaffold(fresh_git_repo)
     settings = json.loads(
         (fresh_git_repo / ".claude" / "settings.json").read_text("utf-8")
     )
@@ -517,7 +515,7 @@ def test_install_mcp_entry_uses_uvx(fresh_git_repo: Path) -> None:
     MCP quickstart). It lets ``.mcp.json`` be committed to git because
     every teammate with ``uv`` installed gets the same invocation.
     """
-    install_limina(fresh_git_repo)
+    install_scaffold(fresh_git_repo)
     mcp = json.loads((fresh_git_repo / ".mcp.json").read_text("utf-8"))
     entry = mcp["mcpServers"]["aexp"]
     assert entry["command"] == "uvx"
@@ -535,12 +533,12 @@ def test_install_mcp_entry_uses_uvx(fresh_git_repo: Path) -> None:
 
 
 def test_install_dev_mcp_entry_uses_current_interpreter(fresh_git_repo: Path) -> None:
-    """``install_limina(..., dev=True)`` writes a direct-Python MCP invocation
+    """``install_scaffold(..., dev=True)`` writes a direct-Python MCP invocation
     so editable installs (``pip install -e``) take effect on the MCP surface.
     """
     import sys
 
-    install_limina(fresh_git_repo, dev=True)
+    install_scaffold(fresh_git_repo, dev=True)
     mcp = json.loads((fresh_git_repo / ".mcp.json").read_text("utf-8"))
     entry = mcp["mcpServers"]["aexp"]
     # Command is the running interpreter, not uvx.
@@ -555,11 +553,11 @@ def test_install_dev_mcp_entry_uses_current_interpreter(fresh_git_repo: Path) ->
 
 def test_install_dev_flag_can_be_toggled_on_reinstall(fresh_git_repo: Path) -> None:
     """Running install without --dev after a dev install rewrites back to uvx."""
-    install_limina(fresh_git_repo, dev=True)
+    install_scaffold(fresh_git_repo, dev=True)
     mcp_dev = json.loads((fresh_git_repo / ".mcp.json").read_text("utf-8"))
     assert mcp_dev["mcpServers"]["aexp"]["command"] != "uvx"
 
-    install_limina(fresh_git_repo, force=True, dev=False)
+    install_scaffold(fresh_git_repo, force=True, dev=False)
     mcp_prod = json.loads((fresh_git_repo / ".mcp.json").read_text("utf-8"))
     assert mcp_prod["mcpServers"]["aexp"]["command"] == "uvx"
 
@@ -575,7 +573,7 @@ def test_install_mcp_entry_is_env_independent(
 
     # Set a distinctive conda env to confirm we DON'T leak it.
     monkeypatch.setenv("CONDA_DEFAULT_ENV", "some-distinctive-env-name")
-    install_limina(fresh_git_repo)
+    install_scaffold(fresh_git_repo)
     content = (fresh_git_repo / ".mcp.json").read_text("utf-8")
     # No env-specific strings should appear anywhere in the written file.
     assert "some-distinctive-env-name" not in content
@@ -607,7 +605,7 @@ def test_install_preserves_user_mcp_servers_in_mcp_json(
         ),
         encoding="utf-8",
     )
-    install_limina(fresh_git_repo)
+    install_scaffold(fresh_git_repo)
     merged = json.loads(user_mcp.read_text("utf-8"))
     assert "user-mcp" in merged["mcpServers"]
     assert "aexp" in merged["mcpServers"]
@@ -632,7 +630,7 @@ def test_install_overwrites_stale_aexp_mcp_entry_on_reinstall(
         ),
         encoding="utf-8",
     )
-    install_limina(fresh_git_repo)
+    install_scaffold(fresh_git_repo)
     mcp = json.loads(user_mcp.read_text("utf-8"))
     combined = (
         [mcp["mcpServers"]["aexp"]["command"]]
@@ -669,10 +667,10 @@ def _plant_aexp_source_tree(path: Path) -> None:
 
 
 def test_install_refuses_aexp_source_tree(fresh_git_repo: Path) -> None:
-    """``install_limina`` refuses when cwd is the aexp source tree itself."""
+    """``install_scaffold`` refuses when cwd is the aexp source tree itself."""
     _plant_aexp_source_tree(fresh_git_repo)
     with pytest.raises(InstallRefused) as exc_info:
-        install_limina(fresh_git_repo)
+        install_scaffold(fresh_git_repo)
     msg = str(exc_info.value)
     assert "agentic-experiments source tree" in msg
     assert "--allow-self-install" in msg
@@ -696,7 +694,7 @@ def test_install_refuses_subdirectory_of_source_tree(
     subdir.mkdir()
     # `assert_git=False` because the subdir doesn't have its own .git.
     with pytest.raises(InstallRefused):
-        install_limina(subdir, assert_git=False)
+        install_scaffold(subdir, assert_git=False)
 
 
 def test_install_allow_self_install_overrides_guard(
@@ -709,7 +707,7 @@ def test_install_allow_self_install_overrides_guard(
     an inescapable hard block.
     """
     _plant_aexp_source_tree(fresh_git_repo)
-    actions = install_limina(fresh_git_repo, allow_self_install=True)
+    actions = install_scaffold(fresh_git_repo, allow_self_install=True)
     # Got past the guard and produced a normal install action list.
     assert any(a.kind == "wrote_marker" for a in actions)
     assert (fresh_git_repo / ".aexp" / "installed.json").is_file()
@@ -723,7 +721,7 @@ def test_install_allows_consumer_repo_with_different_name(
         '[project]\nname = "my-research"\nversion = "0.1.0"\n',
         encoding="utf-8",
     )
-    actions = install_limina(fresh_git_repo)
+    actions = install_scaffold(fresh_git_repo)
     assert any(a.kind == "wrote_marker" for a in actions)
     assert (fresh_git_repo / ".aexp" / "installed.json").is_file()
 
@@ -737,7 +735,7 @@ def test_install_allows_repo_without_pyproject(fresh_git_repo: Path) -> None:
     install path.
     """
     # No pyproject.toml planted.
-    actions = install_limina(fresh_git_repo)
+    actions = install_scaffold(fresh_git_repo)
     assert any(a.kind == "wrote_marker" for a in actions)
     assert (fresh_git_repo / ".aexp" / "installed.json").is_file()
 
@@ -750,7 +748,7 @@ def test_install_dry_run_also_refuses_source_tree(fresh_git_repo: Path) -> None:
     """
     _plant_aexp_source_tree(fresh_git_repo)
     with pytest.raises(InstallRefused):
-        install_limina(fresh_git_repo, dry_run=True)
+        install_scaffold(fresh_git_repo, dry_run=True)
     # Confirm dry_run path didn't leak anything before the raise.
     assert not (fresh_git_repo / "kb").exists()
     assert not (fresh_git_repo / ".aexp").exists()
@@ -764,7 +762,7 @@ def test_install_dry_run_also_refuses_source_tree(fresh_git_repo: Path) -> None:
 def test_install_with_jupyter_writes_mcp_entries(fresh_git_repo: Path) -> None:
     """--with-jupyter writes the jupyter entry to .mcp.json alongside the
     existing aexp entry. The legacy jupyter-compute server is not emitted."""
-    install_limina(fresh_git_repo, with_jupyter=True, dev=True)
+    install_scaffold(fresh_git_repo, with_jupyter=True, dev=True)
     mcp_json = json.loads((fresh_git_repo / ".mcp.json").read_text(encoding="utf-8"))
     servers = mcp_json["mcpServers"]
     assert "aexp" in servers
@@ -778,7 +776,7 @@ def test_install_with_jupyter_writes_mcp_entries(fresh_git_repo: Path) -> None:
 
 def test_install_without_jupyter_omits_mcp_entries(fresh_git_repo: Path) -> None:
     """Default install (no --with-jupyter) does NOT write the jupyter entry."""
-    install_limina(fresh_git_repo, dev=True)
+    install_scaffold(fresh_git_repo, dev=True)
     mcp_json = json.loads((fresh_git_repo / ".mcp.json").read_text(encoding="utf-8"))
     servers = mcp_json["mcpServers"]
     assert "aexp" in servers
@@ -788,7 +786,7 @@ def test_install_without_jupyter_omits_mcp_entries(fresh_git_repo: Path) -> None
 
 def test_install_with_jupyter_records_marker(fresh_git_repo: Path) -> None:
     """Marker records jupyter_enabled=True after --with-jupyter install."""
-    install_limina(fresh_git_repo, with_jupyter=True, dev=True)
+    install_scaffold(fresh_git_repo, with_jupyter=True, dev=True)
     marker = read_installed_marker(fresh_git_repo)
     assert marker is not None
     assert marker.get("jupyter_enabled") is True
@@ -796,7 +794,7 @@ def test_install_with_jupyter_records_marker(fresh_git_repo: Path) -> None:
 
 def test_install_without_jupyter_marker_omits_field(fresh_git_repo: Path) -> None:
     """Default install does not add jupyter_enabled to the marker (sticky-true semantics)."""
-    install_limina(fresh_git_repo, dev=True)
+    install_scaffold(fresh_git_repo, dev=True)
     marker = read_installed_marker(fresh_git_repo)
     assert marker is not None
     assert "jupyter_enabled" not in marker
@@ -804,30 +802,30 @@ def test_install_without_jupyter_marker_omits_field(fresh_git_repo: Path) -> Non
 
 def test_install_jupyter_marker_is_sticky_true(fresh_git_repo: Path) -> None:
     """Once --with-jupyter is set, a later install without the flag preserves jupyter_enabled=True."""
-    install_limina(fresh_git_repo, with_jupyter=True, dev=True)
+    install_scaffold(fresh_git_repo, with_jupyter=True, dev=True)
     # Re-install with force to bypass the already-installed short-circuit.
-    install_limina(fresh_git_repo, dev=True, force=True)
+    install_scaffold(fresh_git_repo, dev=True, force=True)
     marker = read_installed_marker(fresh_git_repo)
     assert marker is not None
     assert marker.get("jupyter_enabled") is True
 
 
-def test_install_with_jupyter_vendors_setup_doc(fresh_git_repo: Path) -> None:
-    """docs/setup/jupyter-mcp.md is copied verbatim from vendor when --with-jupyter."""
-    install_limina(fresh_git_repo, with_jupyter=True, dev=True)
+def test_install_with_jupyter_copies_setup_doc(fresh_git_repo: Path) -> None:
+    """docs/setup/jupyter-mcp.md is copied verbatim from the scaffold when --with-jupyter."""
+    install_scaffold(fresh_git_repo, with_jupyter=True, dev=True)
     setup_doc = fresh_git_repo / "docs" / "setup" / "jupyter-mcp.md"
     assert setup_doc.is_file()
     body = setup_doc.read_text(encoding="utf-8")
-    # A few load-bearing strings from the vendored doc.
+    # A few load-bearing strings from the bundled doc.
     assert "Adapting this guide to your cluster" in body
     assert "Investigation log" in body
 
 
 def test_install_with_jupyter_idempotent(fresh_git_repo: Path) -> None:
     """Running install twice with the same flags doesn't change .mcp.json."""
-    install_limina(fresh_git_repo, with_jupyter=True, dev=True)
+    install_scaffold(fresh_git_repo, with_jupyter=True, dev=True)
     first = (fresh_git_repo / ".mcp.json").read_text(encoding="utf-8")
-    install_limina(fresh_git_repo, with_jupyter=True, dev=True, force=True)
+    install_scaffold(fresh_git_repo, with_jupyter=True, dev=True, force=True)
     second = (fresh_git_repo / ".mcp.json").read_text(encoding="utf-8")
     assert json.loads(first) == json.loads(second)
 
@@ -840,7 +838,7 @@ def test_install_with_jupyter_preserves_user_entries(fresh_git_repo: Path) -> No
         }
     }
     (fresh_git_repo / ".mcp.json").write_text(json.dumps(custom), encoding="utf-8")
-    install_limina(fresh_git_repo, with_jupyter=True, dev=True)
+    install_scaffold(fresh_git_repo, with_jupyter=True, dev=True)
     mcp_json = json.loads((fresh_git_repo / ".mcp.json").read_text(encoding="utf-8"))
     servers = mcp_json["mcpServers"]
     assert "my_custom" in servers
@@ -864,7 +862,7 @@ def test_install_with_jupyter_preserves_existing_jupyter_entry(fresh_git_repo: P
         }
     }
     (fresh_git_repo / ".mcp.json").write_text(json.dumps(custom), encoding="utf-8")
-    install_limina(fresh_git_repo, with_jupyter=True, dev=True)
+    install_scaffold(fresh_git_repo, with_jupyter=True, dev=True)
     servers = json.loads(
         (fresh_git_repo / ".mcp.json").read_text(encoding="utf-8")
     )["mcpServers"]
@@ -878,7 +876,7 @@ def test_install_with_jupyter_preserves_existing_jupyter_entry(fresh_git_repo: P
 def test_install_with_jupyter_slash_command_always_present(fresh_git_repo: Path) -> None:
     """The /aexp-jupyter-iterate slash command is installed regardless of --with-jupyter
     (it self-checks tool availability at runtime)."""
-    install_limina(fresh_git_repo, dev=True)  # NOTE: no --with-jupyter
+    install_scaffold(fresh_git_repo, dev=True)  # NOTE: no --with-jupyter
     slash_cmd = fresh_git_repo / ".claude" / "commands" / "aexp-jupyter-iterate.md"
     assert slash_cmd.is_file()
 
@@ -888,7 +886,7 @@ def test_install_writes_promote_nb_slash_command(fresh_git_repo: Path) -> None:
     and its body contains the load-bearing guardrails (refuses without an
     experiment ID, references the jupyter MCP family, refuses to
     invent a tracked_notebook_run API)."""
-    install_limina(fresh_git_repo, dev=True)
+    install_scaffold(fresh_git_repo, dev=True)
     slash_cmd = fresh_git_repo / ".claude" / "commands" / "aexp-promote-nb.md"
     assert slash_cmd.is_file()
     body = slash_cmd.read_text(encoding="utf-8")
@@ -1008,7 +1006,7 @@ def test_repo_root_gitattributes_forces_lf_for_text() -> None:
     assert ga.is_file(), f"missing .gitattributes at {ga}"
     body = ga.read_text(encoding="utf-8")
     # Each of these extensions ships in the package data (slash commands,
-    # vendored docs, scaffold JSON). If any drift off, the install symptom
+    # bundled docs, scaffold JSON). If any drift off, the install symptom
     # comes back.
     for ext in (".md", ".json", ".py", ".toml"):
         # Match either `*<ext> text eol=lf` or equivalent.

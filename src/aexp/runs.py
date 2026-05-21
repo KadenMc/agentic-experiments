@@ -1,4 +1,4 @@
-"""signac-backed run store + the Limina-aware ``create_run`` / ``find_runs`` API.
+"""signac-backed run store + the research-aware ``create_run`` / ``find_runs`` API.
 
 Plan §6: thin wrappers that expose signac's ``Project`` / ``Job`` types
 directly — we do *not* hide them — while owning two conventions:
@@ -6,7 +6,7 @@ directly — we do *not* hide them — while owning two conventions:
 1. State point auto-population: ``experiment_id`` is always injected into
    ``job.sp``; ``code_commit`` / ``code_dirty`` are injected by default
    (switchable via ``include_commit=False``).
-2. Job-document layout: ``job.doc["limina"]`` carries the ``RunLink`` dict;
+2. Job-document layout: ``job.doc["aexp"]`` carries the ``RunLink`` dict;
    ``job.doc["status"]`` tracks the lifecycle; ``job.doc["tracker"]`` is
    populated later by tracker adapters.
 """
@@ -22,7 +22,7 @@ from typing import Any
 
 import signac
 
-from aexp.schema import RunLink, RunStatus, iso_utc_now
+from aexp.schema import RunLink, RunStatus, iso_utc_now, read_run_link, write_run_link
 from aexp.utils.atomic import doc_op_with_retry
 from aexp.utils.git import get_git_provenance
 from aexp.utils.paths import (
@@ -46,7 +46,7 @@ DEFAULT_HEARTBEAT_S: float = 30.0
 class RunStoreNotInitialized(RuntimeError):
     """Raised when we cannot find an initialized signac project for this repo.
 
-    Usually means ``install_limina`` hasn't been run yet.
+    Usually means ``install_scaffold`` hasn't been run yet.
     """
 
 
@@ -142,13 +142,13 @@ def create_run(
     include_commit: bool = True,
     resolve_conditions: bool = True,
 ) -> signac.job.Job:
-    """Open (or create) a signac job linked to a Limina experiment.
+    """Open (or create) a signac job linked to an experiment.
 
     Parameters
     ----------
     experiment_id : str
-        Limina ``E###`` id. Always mirrored into ``job.sp["experiment_id"]``
-        and ``job.doc["limina"]["experiment_id"]``.
+        The ``E###`` id. Always mirrored into ``job.sp["experiment_id"]``
+        and ``job.doc["aexp"]["experiment_id"]``.
     statepoint : dict | None
         Caller-supplied identity params. Merged on top of the auto-populated
         defaults (``experiment_id``, optional ``code_commit`` / ``code_dirty``).
@@ -158,10 +158,10 @@ def create_run(
         before signac creates the job — so the resolved config is frozen
         to ``signac_statepoint.json``.
     hypothesis_id, sub_hypothesis_id : str | None
-        If provided, mirrored into both ``sp`` and ``doc["limina"]``.
+        If provided, mirrored into both ``sp`` and ``doc["aexp"]``.
     experiment_path : str | None
         Repo-relative POSIX path of the experiment artifact. Stored on
-        ``doc["limina"]`` for quick navigation; not required for function.
+        ``doc["aexp"]`` for quick navigation; not required for function.
     repo_root : str | Path | None
         Consumer repo root. Defaults to ``find_repo_root()``.
     init_doc : dict | None
@@ -182,7 +182,7 @@ def create_run(
     -------
     signac.job.Job
         The initialized job. Its workspace dir has been materialized and
-        ``job.doc`` carries the Limina link + initial ``status='created'``.
+        ``job.doc`` carries the run link + initial ``status='created'``.
     """
     root = Path(repo_root).resolve() if repo_root else find_repo_root()
     project = get_run_store(root)
@@ -207,7 +207,7 @@ def create_run(
     job = project.open_job(sp)
     job.init()
 
-    # Stamp Limina link + lifecycle metadata. Re-stamp is safe; values
+    # Stamp the run link + lifecycle metadata. Re-stamp is safe; values
     # are deterministic for a given job id.
     link = RunLink(
         experiment_id=experiment_id,
@@ -215,7 +215,7 @@ def create_run(
         hypothesis_id=hypothesis_id,
         sub_hypothesis_id=sub_hypothesis_id,
     )
-    job.doc["limina"] = link.model_dump()
+    write_run_link(job.doc, link.model_dump())
     job.doc.setdefault("status", "created")
     job.doc.setdefault("created_at", iso_utc_now())
 
@@ -258,10 +258,10 @@ def find_runs(
     repo_root: str | Path | None = None,
     **sp_filters: Any,
 ) -> list[signac.job.Job]:
-    """Return signac jobs filtered by Limina-link metadata and / or ``sp`` keys.
+    """Return signac jobs filtered by run-link metadata and / or ``sp`` keys.
 
     ``experiment_id`` and ``hypothesis_id`` match either a top-level ``sp``
-    key (the canonical path) or the ``doc["limina"]`` fields (fallback for
+    key (the canonical path) or the ``doc["aexp"]`` fields (fallback for
     runs created before the sp mirror convention). Status is matched against
     ``doc["status"]``.
 
@@ -289,12 +289,12 @@ def find_runs(
             continue
         # Back-compat fallback when sp doesn't carry the link but doc does.
         if experiment_id is not None and job.sp.get("experiment_id") != experiment_id:
-            limina = job.doc.get("limina", {})
-            if limina.get("experiment_id") != experiment_id:
+            link = read_run_link(job.doc)
+            if link.get("experiment_id") != experiment_id:
                 continue
         if hypothesis_id is not None and job.sp.get("hypothesis_id") != hypothesis_id:
-            limina = job.doc.get("limina", {})
-            if limina.get("hypothesis_id") != hypothesis_id:
+            link = read_run_link(job.doc)
+            if link.get("hypothesis_id") != hypothesis_id:
                 continue
         results.append(job)
     return results

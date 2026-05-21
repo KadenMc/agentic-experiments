@@ -1,5 +1,5 @@
 ---
-description: "List Limina threads, optionally filtered by status or tag."
+description: "List research threads, optionally filtered by status or tag."
 ---
 
 Print every thread under ``kb/research/threads/`` with its current

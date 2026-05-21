@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-05-21
+
 ### Changed
 
 - **The Jupyter MCP integration is now a single MCP server.** `aexp
@@ -31,6 +33,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     additive-only and never deletes servers); remove it by hand for the
     cleanup. The cluster-side `[jupyter]` extra and `aexp jupyter setup`
     extension recipe are unchanged.
+
+- **De-branded and de-vendored the "limina" research harness.** `limina`
+  (the upstream project the harness was adapted from) is no longer
+  surfaced as a named centerpiece, and the `vendor/` directory framing
+  is gone — the harness reads as plain `aexp`. **Breaking** public-API
+  renames (old names removed):
+  - `install_limina()` → `install_scaffold()`
+  - `is_limina_installed()` → `is_scaffold_installed()`
+  - `compute_vendor_sha()` → `compute_scaffold_sha()`
+  - `LiminaArtifactRef` → `ArtifactRef`
+  - module `aexp.limina_io` → `aexp.kb_io`
+
+  Persisted keys are renamed with a **read-side fallback**, so existing
+  signac projects and install markers keep resolving with no migration:
+  - run-link key `job.doc["limina"]` → `job.doc["aexp"]`
+  - install-marker field `limina_vendor_sha` → `scaffold_sha`
+  - W&B run-config block `config["limina"]` → `config["aexp"]` (past
+    W&B runs keep `config.limina`; new runs get `config.aexp`)
+  - validator error codes `limina.validation_failed` /
+    `limina.validator_unavailable` → `aexp.*`
+
+  The bundled harness moved from `src/aexp/vendor/limina/` to
+  `src/aexp/scaffold/` — the `vendor/` directory and the vendoring
+  ceremony files (`VENDORED_FROM.txt`, `VERSION`) are gone. Its
+  contents, the slash commands, `AGENTS.md` / `CLAUDE.md`, and the docs
+  are de-branded. The stale top-level "limina" skill was removed —
+  `aexp install` already scaffolds a project. The upstream credit lives
+  in the README.
 
 ### Fixed
 

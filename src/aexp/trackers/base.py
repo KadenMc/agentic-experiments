@@ -1,6 +1,6 @@
 """TrackerAdapter ABC + ``bind_tracker`` helper.
 
-An adapter translates a signac job + its linked Limina artifact into a
+An adapter translates a signac job + its linked research artifacts into a
 tracker-backend run, without owning any of the canonical state. After
 ``init_run``, the caller's ``bind_tracker`` writes the returned handle's
 identity into ``job.doc["tracker"]`` so the link is persistent.
@@ -17,11 +17,11 @@ from typing import Any
 
 import signac
 
-from aexp.limina_io import (
+from aexp.kb_io import (
     load_experiment,
     load_hypothesis,
 )
-from aexp.schema import TrackerBinding, batch_slug
+from aexp.schema import TrackerBinding, batch_slug, read_run_link
 
 # ---------------------------------------------------------------------------
 # Handle / Record
@@ -148,9 +148,9 @@ def _derive_tracker_payload(
     legacy adapter path and the new BYO-init path compute identical
     metadata. Pure function; does not touch ``job.doc``.
     """
-    limina = dict(job.doc.get("limina") or {})
-    exp_id = limina.get("experiment_id") or job.sp.get("experiment_id")
-    hyp_id = limina.get("hypothesis_id") or job.sp.get("hypothesis_id")
+    link = read_run_link(job.doc)
+    exp_id = link.get("experiment_id") or job.sp.get("experiment_id")
+    hyp_id = link.get("hypothesis_id") or job.sp.get("hypothesis_id")
     cond = condition if condition is not None else job.sp.get("condition")
 
     group = batch_slug(
@@ -165,7 +165,7 @@ def _derive_tracker_payload(
         tags.append(hyp_id)
     if exp_id:
         tags.append(exp_id)
-    sub = limina.get("sub_hypothesis_id")
+    sub = link.get("sub_hypothesis_id")
     if sub:
         tags.append(sub)
     if cond:
@@ -251,7 +251,7 @@ def prepare_tracker(
 ) -> TrackerContext:
     """Compute the tracker payload for a signac job without starting a run.
 
-    Derives the deterministic group slug, auto-tags, curated Limina frame,
+    Derives the deterministic group slug, auto-tags, curated research frame,
     notes, and the flattened state point, then packages them as wandb-shaped
     ``init_kwargs``. The caller owns ``wandb.init`` and run lifecycle; invoke
     :meth:`TrackerContext.bind` after ``wandb.init`` to write the signac
@@ -270,7 +270,7 @@ def prepare_tracker(
     offline
         If ``True``, ``init_kwargs`` will include ``mode="offline"``.
     repo_root
-        Consumer repo root for loading the Limina frame. Auto-detected
+        Consumer repo root for loading the research frame. Auto-detected
         if omitted.
     entity
         Optional W&B entity (team / user). Threaded through ``init_kwargs``
@@ -397,14 +397,14 @@ def tracked_run(
 
 
 def _curated_frame(job: signac.job.Job, repo_root: Path) -> dict[str, Any]:
-    """Pull hypothesis statement + local hypothesis + success criteria from Limina.
+    """Pull hypothesis statement + local hypothesis + success criteria from the kb/ artifacts.
 
     Never uploads raw markdown — just the curated text fields a tracker run
     page benefits from showing as context.
     """
     frame: dict[str, Any] = {}
-    limina = job.doc.get("limina") or {}
-    exp_id = limina.get("experiment_id")
+    link = read_run_link(job.doc)
+    exp_id = link.get("experiment_id")
     if not exp_id:
         return frame
 
@@ -426,7 +426,7 @@ def _curated_frame(job: signac.job.Job, repo_root: Path) -> dict[str, Any]:
         if success:
             frame["success_criteria"] = success
 
-    hyp_id = limina.get("hypothesis_id")
+    hyp_id = link.get("hypothesis_id")
     if hyp_id:
         try:
             hyp = load_hypothesis(hyp_id, kb_root=kb)
@@ -462,14 +462,14 @@ def build_tracker_config(
 ) -> dict[str, Any]:
     """Assemble the ``config`` payload passed to ``adapter.init_run``.
 
-    Includes the full Limina chain (hypothesis, sub-hypothesis, experiment,
+    Includes the full run-link chain (hypothesis, sub-hypothesis, experiment,
     experiment path) + the flattened state point + curated frame fields.
     """
-    limina = dict(job.doc.get("limina") or {})
+    link = read_run_link(job.doc)
     config: dict[str, Any] = {
         **_flatten_sp(job.sp),
         "job_id": job.id,
-        "limina": limina,
+        "aexp": link,
     }
     frame = _curated_frame(job, repo_root)
     if frame:
@@ -529,7 +529,7 @@ def bind_tracker(
     offline : bool
         Passed through to ``adapter.init_run``.
     repo_root : str | Path | None
-        Consumer repo root for loading the Limina frame. Auto-detected if
+        Consumer repo root for loading the research frame. Auto-detected if
         omitted.
     """
     from aexp.utils.paths import find_repo_root  # lazy to avoid circular

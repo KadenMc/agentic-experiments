@@ -27,10 +27,10 @@ Flow:
      update ``supporting_runs:`` or re-run the job.
    - ``finding.empty_batch`` — the batch selector matches zero runs; add
      runs or change the selector.
-   - ``run.orphan`` — the signac job has no ``doc["limina"]`` link;
+   - ``run.orphan`` — the signac job has no ``doc["aexp"]`` link;
      stamp one via `python -m aexp link <job_id> --experiment E###`.
    - ``run.broken_experiment_link`` — the experiment id in
-     ``doc["limina"]`` does not exist in ``kb/``; either create the
+     ``doc["aexp"]`` does not exist in ``kb/``; either create the
      experiment or re-link the run.
    - KB issues (``metadata``, ``links``, ``backlink``, ``reference``,
      ``aliases``) — fix the offending artifact; most common is a missing

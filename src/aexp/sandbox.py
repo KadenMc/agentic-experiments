@@ -7,7 +7,7 @@ and an optional initial notebook scaffold. On first use, it also
 initializes the sandbox root (``notebooks/_sandbox/`` + its README +
 ``.gitignore``).
 
-A sandbox is *not* a tracked Limina artifact (no ``H###``/``E###``
+A sandbox is *not* a tracked research artifact (no ``H###``/``E###``
 allocated, no ``kb_write_guard`` validation). It's a free-form
 exploratory workspace whose conventions are encoded by the scaffolder.
 Promote a sandbox experiment to the tracked-artifact graph with
@@ -130,7 +130,7 @@ def setup_sandbox_notebook(name: str, *, start: Path | str | None = None) -> dic
 # Templates are inline strings rather than separate files. v0 trade-off:
 # inline = easier to ship + reason about; cost = users can't override
 # without monkey-patching. If override needs surface, extract to
-# vendor/limina/templates/sandbox/ and add a precedence rule similar to
+# scaffold/templates/sandbox/ and add a precedence rule similar to
 # artifacts._load_template.
 
 _SANDBOX_ROOT_README = """# notebooks/_sandbox/

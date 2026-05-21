@@ -1,6 +1,0 @@
-interface:
-  display_name: "Experiment Rigor"
-  short_description: "Design rigorous Limina experiments"
-  default_prompt: "Use $experiment-rigor to design or review a Limina hypothesis or experiment before it runs."
-policy:
-  allow_implicit_invocation: false

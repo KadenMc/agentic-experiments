@@ -73,8 +73,8 @@ def atomic_write(
         Text encoding (ignored for bytes). Default ``"utf-8"``.
     newline : str or None, optional
         Newline policy (ignored for bytes). Default ``"\\n"`` to force LF
-        on Windows as well — matters because vendored hook scripts and
-        kb_validate expect Unix line endings.
+        on Windows as well — matters because the bundled scaffold files
+        and kb_validate expect Unix line endings.
 
     Returns
     -------

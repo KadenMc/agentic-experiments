@@ -1,4 +1,4 @@
-"""Tests for the aexp hooks (ported from vendored Limina scripts).
+"""Tests for the aexp hooks (ported from the upstream harness scripts).
 
 Covers:
 
@@ -8,7 +8,7 @@ Covers:
 - ``aexp.hooks.stop_validate`` full-KB validation.
 
 Strategy: hooks derive the repo root from ``os.getcwd()``. Each test
-constructs a project directory (via the ``limina_project`` fixture) and
+constructs a project directory (via the ``scaffold_project`` fixture) and
 invokes the hook as ``python -m aexp.hooks.<name>`` with ``cwd`` set to
 that directory.
 """
@@ -120,7 +120,7 @@ def test_parse_hook_input_invalid_json_yields_empty() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_enforce_hef_allows_non_hef_path(limina_project: Path, python_exe: str) -> None:
+def test_enforce_hef_allows_non_hef_path(scaffold_project: Path, python_exe: str) -> None:
     """Writes outside experiment/finding paths are not blocked."""
     payload = {
         "tool_input": {
@@ -128,12 +128,12 @@ def test_enforce_hef_allows_non_hef_path(limina_project: Path, python_exe: str) 
             "content": "any content",
         }
     }
-    r = _run_hook(limina_project, "enforce_hef_chain", payload, python_exe)
+    r = _run_hook(scaffold_project, "enforce_hef_chain", payload, python_exe)
     assert r.returncode == 0, (r.returncode, r.stderr)
 
 
 def test_enforce_hef_blocks_experiment_missing_hypothesis_ref(
-    limina_project: Path, python_exe: str
+    scaffold_project: Path, python_exe: str
 ) -> None:
     """Experiment without any hypothesis reference is blocked."""
     payload = {
@@ -142,13 +142,13 @@ def test_enforce_hef_blocks_experiment_missing_hypothesis_ref(
             "content": "no reference here",
         }
     }
-    r = _run_hook(limina_project, "enforce_hef_chain", payload, python_exe)
+    r = _run_hook(scaffold_project, "enforce_hef_chain", payload, python_exe)
     assert r.returncode == 2
     assert "without a hypothesis reference" in r.stderr
 
 
 def test_enforce_hef_blocks_experiment_referencing_missing_hypothesis(
-    limina_project: Path, python_exe: str
+    scaffold_project: Path, python_exe: str
 ) -> None:
     """Experiment with hypothesis ref but no matching hypothesis file is blocked."""
     payload = {
@@ -157,17 +157,17 @@ def test_enforce_hef_blocks_experiment_referencing_missing_hypothesis(
             "content": "> **Hypothesis**: H999\n",
         }
     }
-    r = _run_hook(limina_project, "enforce_hef_chain", payload, python_exe)
+    r = _run_hook(scaffold_project, "enforce_hef_chain", payload, python_exe)
     assert r.returncode == 2
     assert "no hypothesis file found" in r.stderr
 
 
 def test_enforce_hef_allows_experiment_with_existing_hypothesis(
-    limina_project: Path, python_exe: str
+    scaffold_project: Path, python_exe: str
 ) -> None:
     """Experiment + valid hypothesis ref + matching hypothesis file -> allowed."""
-    (limina_project / "kb" / "research" / "hypotheses").mkdir(parents=True, exist_ok=True)
-    (limina_project / "kb" / "research" / "hypotheses" / "H007-smoke.md").write_text(
+    (scaffold_project / "kb" / "research" / "hypotheses").mkdir(parents=True, exist_ok=True)
+    (scaffold_project / "kb" / "research" / "hypotheses" / "H007-smoke.md").write_text(
         "hypothesis body", encoding="utf-8"
     )
     payload = {
@@ -176,12 +176,12 @@ def test_enforce_hef_allows_experiment_with_existing_hypothesis(
             "content": "> **Hypothesis**: H007\n",
         }
     }
-    r = _run_hook(limina_project, "enforce_hef_chain", payload, python_exe)
+    r = _run_hook(scaffold_project, "enforce_hef_chain", payload, python_exe)
     assert r.returncode == 0, (r.returncode, r.stderr)
 
 
 def test_enforce_hef_blocks_finding_missing_experiment_ref(
-    limina_project: Path, python_exe: str
+    scaffold_project: Path, python_exe: str
 ) -> None:
     """Finding without any experiment reference is blocked."""
     payload = {
@@ -190,17 +190,17 @@ def test_enforce_hef_blocks_finding_missing_experiment_ref(
             "content": "bare finding body",
         }
     }
-    r = _run_hook(limina_project, "enforce_hef_chain", payload, python_exe)
+    r = _run_hook(scaffold_project, "enforce_hef_chain", payload, python_exe)
     assert r.returncode == 2
     assert "without an experiment reference" in r.stderr
 
 
 def test_enforce_hef_allows_finding_with_existing_experiment(
-    limina_project: Path, python_exe: str
+    scaffold_project: Path, python_exe: str
 ) -> None:
     """Finding + valid experiment ref + matching file -> allowed."""
-    (limina_project / "kb" / "research" / "experiments").mkdir(parents=True, exist_ok=True)
-    (limina_project / "kb" / "research" / "experiments" / "E042-bar.md").write_text(
+    (scaffold_project / "kb" / "research" / "experiments").mkdir(parents=True, exist_ok=True)
+    (scaffold_project / "kb" / "research" / "experiments" / "E042-bar.md").write_text(
         "experiment body", encoding="utf-8"
     )
     payload = {
@@ -209,16 +209,16 @@ def test_enforce_hef_allows_finding_with_existing_experiment(
             "content": "> **Experiment**: E042\n",
         }
     }
-    r = _run_hook(limina_project, "enforce_hef_chain", payload, python_exe)
+    r = _run_hook(scaffold_project, "enforce_hef_chain", payload, python_exe)
     assert r.returncode == 0, (r.returncode, r.stderr)
 
 
 def test_enforce_hef_accepts_frontmatter_hypothesis_key(
-    limina_project: Path, python_exe: str
+    scaffold_project: Path, python_exe: str
 ) -> None:
     """YAML frontmatter ``hypothesis: H###`` is picked up alongside blockquote metadata."""
-    (limina_project / "kb" / "research" / "hypotheses").mkdir(parents=True, exist_ok=True)
-    (limina_project / "kb" / "research" / "hypotheses" / "H003-fm.md").write_text(
+    (scaffold_project / "kb" / "research" / "hypotheses").mkdir(parents=True, exist_ok=True)
+    (scaffold_project / "kb" / "research" / "hypotheses" / "H003-fm.md").write_text(
         "hypothesis body", encoding="utf-8"
     )
     payload = {
@@ -227,7 +227,7 @@ def test_enforce_hef_accepts_frontmatter_hypothesis_key(
             "content": "---\nhypothesis: \"H003\"\n---\n\nbody\n",
         }
     }
-    r = _run_hook(limina_project, "enforce_hef_chain", payload, python_exe)
+    r = _run_hook(scaffold_project, "enforce_hef_chain", payload, python_exe)
     assert r.returncode == 0, (r.returncode, r.stderr)
 
 
@@ -247,28 +247,28 @@ def test_enforce_hef_accepts_frontmatter_hypothesis_key(
     ],
 )
 def test_kb_write_guard_skips_non_guarded_paths(
-    limina_project: Path, python_exe: str, path: str
+    scaffold_project: Path, python_exe: str, path: str
 ) -> None:
     payload = {"tool_input": {"file_path": path, "content": "any"}}
-    r = _run_hook(limina_project, "kb_write_guard", payload, python_exe)
+    r = _run_hook(scaffold_project, "kb_write_guard", payload, python_exe)
     assert r.returncode == 0, (r.returncode, r.stdout, r.stderr)
 
 
 def test_kb_write_guard_blocks_invalid_md(
-    limina_project: Path, python_exe: str
+    scaffold_project: Path, python_exe: str
 ) -> None:
     """A malformed artifact under kb/research/ triggers kb_validate -> blocked."""
-    target = limina_project / "kb" / "research" / "hypotheses" / "H050-bogus.md"
+    target = scaffold_project / "kb" / "research" / "hypotheses" / "H050-bogus.md"
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text("this is not a valid Limina artifact", encoding="utf-8")
+    target.write_text("this is not a valid kb/ artifact", encoding="utf-8")
 
     payload = {
         "tool_input": {
             "file_path": str(target),
-            "content": "this is not a valid Limina artifact",
+            "content": "this is not a valid kb/ artifact",
         }
     }
-    r = _run_hook(limina_project, "kb_write_guard", payload, python_exe)
+    r = _run_hook(scaffold_project, "kb_write_guard", payload, python_exe)
     assert r.returncode == 2, (r.returncode, r.stdout, r.stderr)
     assert "BLOCKED" in r.stderr
 
@@ -279,32 +279,32 @@ def test_kb_write_guard_blocks_invalid_md(
 
 
 def test_stop_validate_passes_on_clean_kb(
-    limina_project: Path, python_exe: str
+    scaffold_project: Path, python_exe: str
 ) -> None:
-    """Vendored Limina's shipped kb/ template validates cleanly out of the box."""
-    r = _run_hook(limina_project, "stop_validate", None, python_exe, timeout=30)
+    """The bundled kb/ template validates cleanly out of the box."""
+    r = _run_hook(scaffold_project, "stop_validate", None, python_exe, timeout=30)
     assert r.returncode == 0, (r.returncode, r.stdout, r.stderr)
 
 
 def test_stop_validate_no_kb_dir_is_noop(
-    limina_project: Path, python_exe: str
+    scaffold_project: Path, python_exe: str
 ) -> None:
     """Missing kb/ dir -> hook returns 0 without running the validator."""
     import shutil as _shutil
 
-    _shutil.rmtree(limina_project / "kb")
-    r = _run_hook(limina_project, "stop_validate", None, python_exe, timeout=10)
+    _shutil.rmtree(scaffold_project / "kb")
+    r = _run_hook(scaffold_project, "stop_validate", None, python_exe, timeout=10)
     assert r.returncode == 0
 
 
 def test_stop_validate_blocks_on_broken_kb(
-    limina_project: Path, python_exe: str
+    scaffold_project: Path, python_exe: str
 ) -> None:
     """Introduce a broken artifact -> stop_validate exits 2 with BLOCKED."""
-    broken = limina_project / "kb" / "research" / "experiments" / "E999-broken.md"
+    broken = scaffold_project / "kb" / "research" / "experiments" / "E999-broken.md"
     broken.parent.mkdir(parents=True, exist_ok=True)
     broken.write_text("no frontmatter, no valid structure", encoding="utf-8")
 
-    r = _run_hook(limina_project, "stop_validate", None, python_exe, timeout=30)
+    r = _run_hook(scaffold_project, "stop_validate", None, python_exe, timeout=30)
     assert r.returncode == 2, (r.returncode, r.stdout, r.stderr)
     assert "BLOCKED" in r.stderr

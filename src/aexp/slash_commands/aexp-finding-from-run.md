@@ -1,5 +1,5 @@
 ---
-description: "Create a Limina finding (F###) citing one specific signac run."
+description: "Create a finding (F###) citing one specific signac run."
 ---
 
 Create a new finding that cites a single signac run as its supporting
