@@ -9,7 +9,7 @@ This module exposes three capabilities:
 1. :func:`runs_for_experiment` — convenience wrapper over ``find_runs``.
 2. :func:`list_batches` / :func:`show_batch` — distinct ``(experiment,
    condition)`` slices rolled up to :class:`BatchSummary`.
-3. :func:`link_to_experiment` — retroactively stamp ``job.doc["limina"]``
+3. :func:`link_to_experiment` — retroactively stamp ``job.doc["aexp"]``
    onto a job that was created without a link (or to repoint it).
 """
 from __future__ import annotations
@@ -27,6 +27,8 @@ from aexp.schema import (
     RunStatus,
     RunSummary,
     batch_slug,
+    read_run_link,
+    write_run_link,
 )
 
 # ---------------------------------------------------------------------------
@@ -39,16 +41,16 @@ def runs_for_experiment(
     *,
     repo_root: str | Path | None = None,
 ) -> list[signac.job.Job]:
-    """Return every job linked to a given Limina ``E###``."""
+    """Return every job linked to a given ``E###``."""
     return find_runs(experiment_id=experiment_id, repo_root=repo_root)
 
 
 def summarize_run(job: signac.job.Job) -> RunSummary:
     """Flatten a signac job into a :class:`RunSummary` row."""
-    limina = dict(job.doc.get("limina", {}))
+    link = read_run_link(job.doc)
     tracker = dict(job.doc.get("tracker", {}))
-    hyp = job.sp.get("hypothesis_id") or limina.get("hypothesis_id")
-    exp = job.sp.get("experiment_id") or limina.get("experiment_id")
+    hyp = job.sp.get("hypothesis_id") or link.get("hypothesis_id")
+    exp = job.sp.get("experiment_id") or link.get("experiment_id")
     condition = job.sp.get("condition")
     slug = batch_slug(
         hypothesis_id=hyp,
@@ -106,7 +108,7 @@ def list_batches(
     # Group by (experiment_id, *selector_values)
     groups: dict[tuple, list[signac.job.Job]] = defaultdict(list)
     for job in jobs:
-        exp = job.sp.get("experiment_id") or job.doc.get("limina", {}).get("experiment_id")
+        exp = job.sp.get("experiment_id") or read_run_link(job.doc).get("experiment_id")
         if exp is None:
             continue
         key = (exp,) + _selector_key(job, selector_keys)
@@ -117,7 +119,7 @@ def list_batches(
         exp = key[0]
         sel = dict(zip(selector_keys, key[1:], strict=True))
         first = batch_jobs[0]
-        hyp = first.sp.get("hypothesis_id") or first.doc.get("limina", {}).get("hypothesis_id")
+        hyp = first.sp.get("hypothesis_id") or read_run_link(first.doc).get("hypothesis_id")
         cond = sel.get("condition")
         slug = batch_slug(
             hypothesis_id=hyp,
@@ -180,7 +182,7 @@ def link_to_experiment(
     experiment_path: str | None = None,
     repo_root: str | Path | None = None,
 ) -> signac.job.Job:
-    """Stamp (or overwrite) ``job.doc["limina"]`` on an existing job.
+    """Stamp (or overwrite) ``job.doc["aexp"]`` on an existing job.
 
     Used by the ``aex link`` command to retroactively link jobs that were
     created outside ``create_run`` (e.g. by direct signac calls from notebooks).
@@ -192,7 +194,7 @@ def link_to_experiment(
         hypothesis_id=hypothesis_id,
         sub_hypothesis_id=sub_hypothesis_id,
     )
-    job.doc["limina"] = link.model_dump()
+    write_run_link(job.doc, link.model_dump())
     return job
 
 

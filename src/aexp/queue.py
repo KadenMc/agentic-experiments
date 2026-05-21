@@ -50,7 +50,7 @@ from aexp.runs import (
     open_run,
     run_lifecycle,
 )
-from aexp.schema import MaterializeResult, QueueEntry, iso_utc_now
+from aexp.schema import MaterializeResult, QueueEntry, iso_utc_now, read_run_link
 from aexp.utils.atomic import atomic_write, doc_op_with_retry
 from aexp.utils.git import get_dirty_diff_summary
 from aexp.utils.paths import find_repo_root
@@ -554,11 +554,11 @@ def add_many_to_queue(
 
 def _job_to_queue_entry(job: signac.job.Job) -> QueueEntry:
     q = dict(job.doc.get("queue") or {})
-    limina = dict(job.doc.get("limina") or {})
+    link = read_run_link(job.doc)
     return QueueEntry(
         job_id=job.id,
-        experiment_id=limina.get("experiment_id") or job.sp.get("experiment_id"),
-        hypothesis_id=limina.get("hypothesis_id") or job.sp.get("hypothesis_id"),
+        experiment_id=link.get("experiment_id") or job.sp.get("experiment_id"),
+        hypothesis_id=link.get("hypothesis_id") or job.sp.get("hypothesis_id"),
         status=job.doc.get("status"),
         tag=q.get("tag"),
         queued_at=q.get("queued_at"),
@@ -825,8 +825,8 @@ def _resolve_runner_template(
     override = q.get("runner_command_override")
     if override:
         return str(override)
-    limina = dict(job.doc.get("limina") or {})
-    exp_id = limina.get("experiment_id") or job.sp.get("experiment_id")
+    link = read_run_link(job.doc)
+    exp_id = link.get("experiment_id") or job.sp.get("experiment_id")
     if not exp_id:
         raise RunnerCommandMissing(
             f"job {job.id} has no experiment_id; cannot resolve runner_command"

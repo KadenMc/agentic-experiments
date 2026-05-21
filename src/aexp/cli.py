@@ -772,7 +772,7 @@ def link(
     hypothesis: str | None = typer.Option(None, "--hypothesis"),
     sub_hypothesis: str | None = typer.Option(None, "--sub-hypothesis"),
 ) -> None:
-    """Retroactively stamp ``job.doc['limina']`` onto an existing run."""
+    """Retroactively stamp ``job.doc['aexp']`` onto an existing run."""
     link_to_experiment(
         job_id,
         experiment_id=experiment,

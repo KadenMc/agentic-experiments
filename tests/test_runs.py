@@ -153,7 +153,7 @@ def test_create_run_new_commit_yields_new_job_id(installed_repo: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_create_run_stamps_limina_link(installed_repo: Path) -> None:
+def test_create_run_stamps_run_link(installed_repo: Path) -> None:
     job = create_run(
         experiment_id="E018",
         hypothesis_id="H012",
@@ -162,7 +162,7 @@ def test_create_run_stamps_limina_link(installed_repo: Path) -> None:
         statepoint={"c": "full"},
         repo_root=installed_repo,
     )
-    link = job.doc["limina"]
+    link = job.doc["aexp"]
     assert link["experiment_id"] == "E018"
     assert link["hypothesis_id"] == "H012"
     assert link["sub_hypothesis_id"] == "H013"

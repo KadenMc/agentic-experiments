@@ -525,7 +525,7 @@ def link_run(
     sub_hypothesis_id: str | None = None,
     experiment_path: str | None = None,
 ) -> dict[str, Any]:
-    """Retroactively stamp ``doc['limina']`` onto an existing signac job."""
+    """Retroactively stamp ``doc['aexp']`` onto an existing signac job."""
     job = _link_to_experiment(
         job_id,
         experiment_id=experiment_id,

@@ -25,7 +25,7 @@ class InstalledMarker(TypedDict, total=False):
     version: str
     installed_at: str
     run_store_path: str
-    limina_vendor_sha: str
+    vendor_sha: str
     python_exe: str           # absolute path to the Python that ran install_limina
     conda_env_name: str       # CONDA_DEFAULT_ENV at install time, or "" for venv/system Python
     jupyter_enabled: bool     # True if any prior install used --with-jupyter; sticky once set
@@ -92,7 +92,7 @@ def write_installed_marker(
     *,
     version: str,
     run_store_path: str,
-    limina_vendor_sha: str,
+    vendor_sha: str,
     installed_at: str | None = None,
     python_exe: str | None = None,
     conda_env_name: str | None = None,
@@ -108,8 +108,8 @@ def write_installed_marker(
         agentic-experiments package version.
     run_store_path : str
         Path (relative to ``repo_root``) of the signac project.
-    limina_vendor_sha : str
-        Fingerprint of the vendored Limina snapshot used at install time.
+    vendor_sha : str
+        Fingerprint of the vendored research-harness snapshot used at install time.
     installed_at : str or None
         ISO-8601 UTC timestamp. Defaults to ``now`` in UTC.
     python_exe : str or None
@@ -147,7 +147,7 @@ def write_installed_marker(
         "version": version,
         "installed_at": installed_at,
         "run_store_path": run_store_path,
-        "limina_vendor_sha": limina_vendor_sha,
+        "vendor_sha": vendor_sha,
         "python_exe": python_exe,
         "conda_env_name": conda_env_name,
     }

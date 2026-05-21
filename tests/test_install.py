@@ -222,7 +222,7 @@ def test_install_writes_valid_marker(fresh_git_repo: Path) -> None:
     assert marker is not None
     assert marker["version"]
     assert marker["run_store_path"] == ".runs"
-    assert len(marker["limina_vendor_sha"]) == 64
+    assert len(marker["vendor_sha"]) == 64
     # Cross-platform invocation fields written by default.
     assert "python_exe" in marker
     assert Path(marker["python_exe"]).exists()

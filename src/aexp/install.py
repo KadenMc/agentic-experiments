@@ -893,7 +893,13 @@ def install_limina(
         (existing_marker or {}).get("jupyter_enabled", False)
     )
     if existing_marker and not force:
-        if existing_marker.get("limina_vendor_sha") == vendor_sha:
+        # Dual-read: markers written before the de-brand carry the legacy
+        # `limina_vendor_sha` key. Fall back to it so an old marker still
+        # short-circuits cleanly instead of forcing a spurious re-install.
+        marker_sha = existing_marker.get("vendor_sha") or existing_marker.get(
+            "limina_vendor_sha"
+        )
+        if marker_sha == vendor_sha:
             actions.append(
                 InstallAction(
                     "already_installed",
@@ -1010,7 +1016,7 @@ def install_limina(
         root,
         version=__version__,
         run_store_path=run_store,
-        limina_vendor_sha=vendor_sha,
+        vendor_sha=vendor_sha,
         jupyter_enabled=with_jupyter,
     )
     actions.append(InstallAction("wrote_marker", _display_relpath(marker_path)))

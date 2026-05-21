@@ -186,8 +186,8 @@ def test_add_to_queue_inherits_create_run_behavior(
     assert "code_commit" in job.sp
     assert "code_dirty" in job.sp
     assert job.sp["hypothesis_id"] == "H001"
-    # Limina link stamped:
-    assert job.doc["limina"]["experiment_id"] == "E001"
+    # Run link stamped:
+    assert job.doc["aexp"]["experiment_id"] == "E001"
 
 
 # ---------------------------------------------------------------------------
