@@ -36,14 +36,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (the upstream project the harness was adapted from) is no longer
   surfaced as a named centerpiece, and the `vendor/` directory framing
   is gone — the harness reads as plain `aexp`. **Breaking** public-API
-  renames (old names removed; one shim — see below):
+  renames (old names removed):
   - `install_limina()` → `install_scaffold()`
   - `is_limina_installed()` → `is_scaffold_installed()`
   - `compute_vendor_sha()` → `compute_scaffold_sha()`
   - `LiminaArtifactRef` → `ArtifactRef`
-  - module `aexp.limina_io` → `aexp.kb_io`. `aexp.limina_io` is kept as
-    a deprecation shim (re-exports `aexp.kb_io`, emits a
-    `DeprecationWarning`) for one release.
+  - module `aexp.limina_io` → `aexp.kb_io`
 
   Persisted keys are renamed with a **read-side fallback**, so existing
   signac projects and install markers keep resolving with no migration:
