@@ -175,7 +175,18 @@ def _print_actions(actions: list, *, dry_run: bool) -> None:
                 f"[cyan]preserved_user_modified[/cyan] {a.path}: "
                 "kept your content; shipped default not applied"
             )
-        elif a.kind in ("merged_json", "merged_block", "wrote_marker", "initialized_runs"):
+        elif a.kind == "gitignore_migration_warning":
+            # Surface this prominently; the consumer's gitignore needs a
+            # manual edit before `.aexp/runs-index/` and `.aexp/ledger/`
+            # can be committed.
+            console.print(f"[yellow]MIGRATION[/yellow] {a.path}: {a.detail}")
+        elif a.kind in (
+            "merged_json",
+            "merged_block",
+            "merged_gitignore",
+            "wrote_marker",
+            "initialized_runs",
+        ):
             console.print(f"[green]{a.kind}[/green] {a.path}")
     title = "dry-run plan" if dry_run else "install summary"
     table = Table(title=title, show_header=True)
@@ -263,6 +274,20 @@ def install(
             "tool availability when invoked."
         ),
     ),
+    machine_label: str = typer.Option(
+        "",
+        "--machine-label",
+        help=(
+            "Short identifier for this install, written to "
+            "`.aexp/installed.json::machine_label`. Used by "
+            "`aexp runs-export-index` and the Phase 2 ledger to tag which "
+            "install registered a run. Empty string (default) keeps the "
+            "previous marker's value if any, else falls back to short "
+            "hostname (e.g. `kaden-thinkpad`). On HPC, pass an explicit "
+            "name (`--machine-label cluster`) so per-node hostnames "
+            "(`gpu023`, `h4huhnlogin2`) don't proliferate index files."
+        ),
+    ),
 ) -> None:
     """Install the aexp harness into the current repo.
 
@@ -294,6 +319,7 @@ def install(
                 dev=dev,
                 allow_self_install=allow_self_install,
                 with_jupyter=with_jupyter,
+                machine_label=machine_label or None,
             )
         except InstallRefused as exc:
             console.print(f"[red]{exc}[/red]")
@@ -321,6 +347,7 @@ def install(
             dev=dev,
             allow_self_install=allow_self_install,
             with_jupyter=with_jupyter,
+            machine_label=machine_label or None,
         )
     except InstallRefused as exc:
         console.print(f"[red]{exc}[/red]")

@@ -422,8 +422,11 @@ def test_install_action_kinds_are_expected(fresh_git_repo: Path) -> None:
         "copied",
         "skipped_identical",
         "skipped_conflict",
+        "preserved_user_modified",
         "merged_json",
         "merged_block",
+        "merged_gitignore",
+        "gitignore_migration_warning",
         "initialized_runs",
         "installed_skill",
         "wrote_marker",
@@ -1014,3 +1017,129 @@ def test_repo_root_gitattributes_forces_lf_for_text() -> None:
         assert pat_a in body and "eol=lf" in body, (
             f"expected `*{ext}` line with `eol=lf` in .gitattributes"
         )
+
+
+# ---------------------------------------------------------------------------
+# .gitignore block-merge + machine_label (Phase 1B prereq)
+# ---------------------------------------------------------------------------
+
+
+def test_install_writes_gitignore_block_on_fresh_repo(fresh_git_repo: Path) -> None:
+    """Fresh install writes the managed .gitignore with the aexp block."""
+    install_scaffold(fresh_git_repo)
+    gi = (fresh_git_repo / ".gitignore").read_text(encoding="utf-8")
+    assert "# agentic-experiments:begin" in gi
+    assert "# agentic-experiments:end" in gi
+    assert ".aexp/*" in gi
+    assert "!.aexp/runs-index/" in gi
+    assert "!.aexp/ledger/" in gi
+
+
+def test_install_gitignore_is_idempotent(fresh_git_repo: Path) -> None:
+    """Two installs in a row produce identical .gitignore content."""
+    install_scaffold(fresh_git_repo)
+    first = (fresh_git_repo / ".gitignore").read_text(encoding="utf-8")
+    install_scaffold(fresh_git_repo, force=True)
+    second = (fresh_git_repo / ".gitignore").read_text(encoding="utf-8")
+    assert first == second
+
+
+def test_install_gitignore_preserves_user_lines_outside_block(
+    fresh_git_repo: Path,
+) -> None:
+    """User-authored gitignore entries above/below our block are preserved."""
+    gi = fresh_git_repo / ".gitignore"
+    gi.write_text(
+        "# user content above\n*.log\n*.tmp\n\n# user content below\n",
+        encoding="utf-8",
+    )
+    install_scaffold(fresh_git_repo)
+    final = gi.read_text(encoding="utf-8")
+    assert "# user content above" in final
+    assert "*.log" in final
+    assert "*.tmp" in final
+    assert "# user content below" in final
+    assert "# agentic-experiments:begin" in final
+
+
+def test_install_gitignore_migration_warning_on_legacy_aexp_rule(
+    fresh_git_repo: Path,
+) -> None:
+    """Legacy `.aexp/` rule outside our block emits a migration warning."""
+    gi = fresh_git_repo / ".gitignore"
+    gi.write_text(
+        "# pre-existing aexp ignore — this is the legacy pattern\n.aexp/\n",
+        encoding="utf-8",
+    )
+    actions = install_scaffold(fresh_git_repo)
+    warning_actions = [a for a in actions if a.kind == "gitignore_migration_warning"]
+    assert len(warning_actions) == 1, [a.kind for a in actions]
+    assert ".aexp/" in warning_actions[0].detail
+
+
+def test_install_gitignore_no_warning_when_legacy_rule_replaced(
+    fresh_git_repo: Path,
+) -> None:
+    """A consumer who's already replaced their `.aexp/` rule with `.aexp/*`
+    doesn't get a migration warning."""
+    gi = fresh_git_repo / ".gitignore"
+    gi.write_text("# pre-existing wildcard form\n.aexp/*\n", encoding="utf-8")
+    actions = install_scaffold(fresh_git_repo)
+    warning_actions = [a for a in actions if a.kind == "gitignore_migration_warning"]
+    assert warning_actions == []
+
+
+# machine_label behavior
+
+
+def test_install_seeds_machine_label_from_hostname(fresh_git_repo: Path) -> None:
+    """Fresh install populates machine_label with short hostname by default."""
+    import socket
+
+    install_scaffold(fresh_git_repo)
+    from aexp.utils.paths import read_installed_marker
+
+    marker = read_installed_marker(fresh_git_repo)
+    assert marker is not None
+    assert "machine_label" in marker
+    expected = socket.gethostname().split(".")[0]
+    assert marker["machine_label"] == expected
+
+
+def test_install_machine_label_override(fresh_git_repo: Path) -> None:
+    """Explicit machine_label is written to the marker."""
+    install_scaffold(fresh_git_repo, machine_label="cluster")
+    from aexp.utils.paths import read_installed_marker
+
+    marker = read_installed_marker(fresh_git_repo)
+    assert marker is not None
+    assert marker["machine_label"] == "cluster"
+
+
+def test_install_machine_label_sticky_across_reinstall(fresh_git_repo: Path) -> None:
+    """Re-install without --machine-label preserves the previous value."""
+    install_scaffold(fresh_git_repo, machine_label="cluster")
+    install_scaffold(fresh_git_repo, force=True)  # no machine_label
+    from aexp.utils.paths import read_installed_marker
+
+    marker = read_installed_marker(fresh_git_repo)
+    assert marker is not None
+    assert marker["machine_label"] == "cluster"
+
+
+def test_read_machine_label_helper_falls_back_to_hostname(tmp_path: Path) -> None:
+    """read_machine_label() with no marker returns short hostname."""
+    import socket
+
+    from aexp.utils.paths import read_machine_label
+
+    label = read_machine_label(tmp_path)
+    assert label == (socket.gethostname().split(".")[0] or "unknown")
+
+
+def test_read_machine_label_helper_reads_marker(fresh_git_repo: Path) -> None:
+    """read_machine_label() returns the explicit value from the marker."""
+    install_scaffold(fresh_git_repo, machine_label="cluster")
+    from aexp.utils.paths import read_machine_label
+
+    assert read_machine_label(fresh_git_repo) == "cluster"
