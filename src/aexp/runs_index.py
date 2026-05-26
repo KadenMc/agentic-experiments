@@ -1,4 +1,4 @@
-"""Per-machine run index — Phase 1B of the cross-machine-ledger plan.
+"""Per-machine transitional run index.
 
 Each machine periodically dumps a JSON list of its terminal-state runs to
 ``.aexp/runs-index/<machine_label>.json``. The validator unions these index
@@ -7,11 +7,10 @@ for citations that resolve in an index but not in the local run store —
 distinguishing "lives on the cluster's ledger" from "broken" at validate
 time without the user needing ``--strict-runs=warn``.
 
-This is transitional infrastructure. Phase 2's universal ledger
-(`aexp.ledger`) supersedes it; this module + the ``aexp runs-export-index``
-verb stay through one minor-version deprecation window after Phase 2 ships,
-then get removed. Phase 1B's index files double as the migration tool for
-Phase 2's ``aexp ledger backfill``.
+This is transitional infrastructure. The universal ledger
+(``aexp.ledger``) supersedes it; this module + the
+``aexp runs-export-index`` verb stay through one minor-version
+deprecation window, then get removed.
 
 Schema of a single ``runs-index/<machine_label>.json``::
 
@@ -87,8 +86,8 @@ def _index_entry_for_job(job: Any) -> IndexEntry | None:
     # `condition` is a common batch selector field but not universally
     # present. We capture it best-effort so batch citations like
     # `{type: batch, experiment_id: E005, selector: {condition: ...}}`
-    # can be resolved against the index when Phase 1B's three-state
-    # validator runs.
+    # can be resolved against the index when the validator runs its
+    # three-state existence check.
     condition = job.sp.get("condition")
     if condition:
         entry["condition"] = str(condition)
@@ -201,9 +200,10 @@ def collect_known_elsewhere(repo_root: str | Path) -> dict[str, dict[str, Any]]:
     ``finding.absent_run_citation`` warning message so the user knows
     where the run actually lives.
 
-    Phase 2's universal ledger supersedes this: when
+    The universal ledger supersedes this helper: when
     ``.aexp/ledger/<job_id>.json`` is the canonical source, the
-    "elsewhere" category dissolves and this helper isn't called.
+    "elsewhere" category dissolves and this is only consulted as a
+    back-compat fallback for jobs not yet promoted to the ledger.
     """
     out: dict[str, dict[str, Any]] = {}
     for label, index in load_all_indexes(repo_root).items():

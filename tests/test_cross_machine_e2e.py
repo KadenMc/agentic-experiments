@@ -11,9 +11,7 @@ cluster has backfilled its ledger.
 """
 from __future__ import annotations
 
-import json
 import subprocess
-import tempfile
 from pathlib import Path
 
 import pytest

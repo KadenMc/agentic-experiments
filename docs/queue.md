@@ -502,21 +502,21 @@ the run directly — the signac project listing is filesystem-local.
 Before 0.6 this was a hard error. As of 0.6 the validator has three
 layered sources of truth, in order of preference:
 
-1. **`.aexp/ledger/<job_id>.json`** — Phase 2 universal ledger.
-   Sanitized projection of a terminal-state job, committed to git.
-   Every machine sees the same ledger after `git pull`. This is the
-   canonical "this run exists" source.
+1. **`.aexp/ledger/<job_id>.json`** — the universal cross-machine
+   ledger. Sanitized projection of a terminal-state job, committed
+   to git. Every machine sees the same ledger after `git pull`. This
+   is the canonical "this run exists" source.
 2. **Local `.runs/workspace/<id>/`** — the signac project. Counts as
    "here" too, so freshly-promoted runs (after `mark_status` fires
    the auto-promote hook but before the next git push) are still
    recognized.
-3. **`.aexp/runs-index/<machine>.json`** — Phase 1B transitional
-   per-machine index. Deprecated; kept one release for back-compat.
-   A citation matching only an index file (not in ledger or local
-   store) emits `finding.absent_run_citation` (warning) so you know
-   a peer machine has the run but it hasn't been promoted yet.
+3. **`.aexp/runs-index/<machine>.json`** — a transitional per-machine
+   index. Deprecated; kept one release for back-compat. A citation
+   matching only an index file (not in the ledger or local store)
+   emits `finding.absent_run_citation` (warning) so you know a peer
+   machine has the run but it hasn't been promoted yet.
 
-The end-state workflow (Phase 2):
+The steady-state workflow:
 
 ```
 # cluster (after each batch finishes):
@@ -539,7 +539,7 @@ where the hook didn't fire for some reason).
 #### --strict-runs escape hatch
 
 If the ledger hasn't been backfilled everywhere yet (or you're
-running on a pre-Phase-2 install), `aexp validate
+running against an older install), `aexp validate
 --strict-runs={error|warn|off}` lets you downgrade or skip the
 existence check:
 
@@ -549,12 +549,12 @@ aexp validate --strict-runs=warn    # exits 0: "WARNING finding.broken_run_citat
 aexp validate --strict-runs=off     # skips existence checks entirely
 ```
 
-`warn` is the right escape hatch during the Phase 1→2 transition.
+`warn` is the right escape hatch during a partial rollout.
 Structural-shape checks (malformed citation, non-32-hex ids) always
 emit at error severity regardless — those are real authoring
 mistakes, not cross-machine ledger gaps.
 
-### Migration from 0.5 to 0.6 (Phase 2 ledger)
+### Migrating to the cross-machine ledger (0.5 → 0.6)
 
 After upgrading aexp:
 
@@ -563,7 +563,7 @@ After upgrading aexp:
    pip install -e <agentic-experiments>     # (you do this)
    aexp install --force                      # picks up new gitignore block + scaffold
    aexp ledger backfill                      # promotes every terminal-state job
-   git add .gitignore .aexp/installed.json .aexp/ledger/
+   git add .gitignore .aexp/ledger/
    git commit -m "migrate to aexp 0.6 ledger"
    git push
    ```
@@ -572,8 +572,8 @@ After upgrading aexp:
    git pull
    aexp validate    # exits 0 — every cited job resolves via ledger
    ```
-3. The Phase 1B `aexp runs-export-index` verb still works for one
-   release window, with a deprecation warning. Remove
+3. The transitional `aexp runs-export-index` verb still works for
+   one release window, with a deprecation warning. Remove
    `.aexp/runs-index/` after every machine has backfilled.
 
 If `aexp install --force` warns about a legacy `.aexp/` pattern in

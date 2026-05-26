@@ -138,7 +138,7 @@ def write_installed_marker(
         of the integration is a manual edit by the user.
     machine_label : str or None
         Short identifier for this install. Used by
-        ``aexp runs-export-index`` and Phase 2's ledger entries to tag
+        ``aexp runs-export-index`` and the cross-machine ledger to tag
         which install registered a run. When ``None``, defaults to the
         previous marker's value (sticky across re-installs) or, if no
         previous marker, ``socket.gethostname().split(".")[0]``. Pass an

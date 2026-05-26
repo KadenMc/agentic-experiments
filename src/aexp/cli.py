@@ -279,13 +279,13 @@ def install(
         "--machine-label",
         help=(
             "Short identifier for this install, written to "
-            "`.aexp/installed.json::machine_label`. Used by "
-            "`aexp runs-export-index` and the Phase 2 ledger to tag which "
-            "install registered a run. Empty string (default) keeps the "
-            "previous marker's value if any, else falls back to short "
-            "hostname (e.g. `kaden-thinkpad`). On HPC, pass an explicit "
-            "name (`--machine-label cluster`) so per-node hostnames "
-            "(`gpu023`, `h4huhnlogin2`) don't proliferate index files."
+            "`.aexp/installed.json::machine_label`. Tagged onto ledger "
+            "entries to record which install registered each run. Empty "
+            "string (default) keeps the previous marker's value if any, "
+            "else falls back to short hostname (e.g. `kaden-thinkpad`). "
+            "On HPC, pass an explicit name (`--machine-label cluster`) "
+            "so per-node hostnames (`gpu023`, `h4huhnlogin2`) don't "
+            "proliferate index files."
         ),
     ),
 ) -> None:
@@ -869,8 +869,9 @@ def validate(
             "'warn': downgrade to warnings, exit 0. "
             "'off': skip existence checks entirely (structural checks still run). "
             "Use 'warn' on a laptop when runs live on a cluster you can't see "
-            "locally; Phase 1B's `aexp runs-export-index` removes the need by "
-            "letting the validator distinguish 'elsewhere' from 'broken'."
+            "locally; `aexp ledger backfill` (committed + pushed from the "
+            "cluster) removes the need entirely by giving the validator a "
+            "universal source of truth."
         ),
     ),
 ) -> None:
@@ -904,7 +905,7 @@ def validate(
 
 
 # ---------------------------------------------------------------------------
-# runs-export-index — Phase 1B
+# runs-export-index — transitional per-machine index
 # ---------------------------------------------------------------------------
 
 
@@ -936,21 +937,22 @@ def runs_export_index_cmd(
     distinguish "registered elsewhere" (warning) from "broken" (error)
     citations.
 
-    Phase 1B mechanism — superseded by `aexp ledger backfill` once
-    Phase 2's universal ledger lands. Deprecation window: one minor
-    version after Phase 2 ships.
+    Superseded by `aexp ledger backfill`, which writes the same
+    information as a universal ledger entry per run. The index-file
+    mechanism stays through one minor-version window for back-compat
+    reads.
     """
     from aexp.runs_index import export_index
     from aexp.utils.paths import find_repo_root
 
-    # Deprecation: Phase 2's `aexp ledger backfill` supersedes this verb.
-    # The index file mechanism stays through one minor-version window for
-    # consumers still upgrading from Phase 1B.
+    # Deprecation: `aexp ledger backfill` supersedes this verb. The
+    # index-file mechanism stays through one minor-version window for
+    # consumers still on the per-machine-index workflow.
     console.print(
         "[yellow]DEPRECATED[/yellow] `aexp runs-export-index` is superseded "
-        "by `aexp ledger backfill` (Phase 2). The runs-index/ mechanism "
-        "stays for one release for back-compat reads; switch to the "
-        "ledger when you can."
+        "by `aexp ledger backfill`. The runs-index/ mechanism stays for "
+        "one release for back-compat reads; switch to the ledger when "
+        "you can."
     )
 
     root = find_repo_root()
@@ -1283,7 +1285,7 @@ app.add_typer(airgapped_app, name="airgapped")
 
 
 # ---------------------------------------------------------------------------
-# ledger subcommand group — Phase 2 universal cross-machine ledger
+# ledger subcommand group — universal cross-machine ledger
 # ---------------------------------------------------------------------------
 
 
@@ -1312,8 +1314,9 @@ def ledger_promote_cmd(
 ) -> None:
     """Manually promote a terminal-state job to the ledger.
 
-    For cases where the auto-hook in mark_status() didn't fire (rare —
-    out-of-band status writes, pre-Phase-2 runs). Idempotent.
+    For cases where the auto-promote hook in mark_status() didn't fire
+    (rare — out-of-band status writes, runs registered before 0.6).
+    Idempotent.
     """
     from aexp.ledger import promote_to_ledger
     from aexp.runs import open_run
@@ -1348,11 +1351,11 @@ def ledger_backfill_cmd(
 ) -> None:
     """Promote every terminal-state local run to the ledger.
 
-    The Phase 2 migration verb. Each machine with terminal-state runs
-    runs this once after upgrading to 0.6; commits the resulting
-    `.aexp/ledger/<id>.json` files; pushes. After every machine has
-    pushed, every machine pulls and the validator resolves all cited
-    jobs universally.
+    The migration verb when adopting the cross-machine ledger. Each
+    machine with terminal-state runs runs this once after upgrading to
+    0.6; commits the resulting `.aexp/ledger/<id>.json` files; pushes.
+    After every machine has pushed, every machine pulls and the
+    validator resolves all cited jobs universally.
     """
     from aexp.ledger import backfill_ledger
     from aexp.utils.paths import find_repo_root

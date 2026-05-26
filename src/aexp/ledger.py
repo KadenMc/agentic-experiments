@@ -1,4 +1,4 @@
-"""Universal cross-machine ledger — Phase 2 of the cross-machine-ledger plan.
+"""Universal cross-machine ledger for terminal-state runs.
 
 A *ledger entry* is a sanitized projection of a terminal-state signac job:
 frozen statepoint, run-link, tracker URLs (NOT raw event log), code commit,
@@ -18,7 +18,7 @@ Promotion mechanism:
   :func:`promote_to_ledger`. Wrapped in try/except so a promotion failure
   never crashes the run lifecycle.
 - **Manual**: ``aexp ledger promote <id>`` for cases where the hook didn't
-  fire (rare — out-of-band status writes, pre-Phase-2 runs).
+  fire (rare — out-of-band status writes, runs registered before 0.6).
 - **Backfill**: ``aexp ledger backfill`` walks the local run store and
   promotes every terminal-state job not yet in ``.aexp/ledger/``. This is
   the migration tool — every machine that has terminal-state runs runs it
@@ -250,10 +250,11 @@ def backfill_ledger(
 ) -> tuple[int, int]:
     """Walk the local run store and promote every terminal-state job.
 
-    This is the Phase 2 migration tool. Every machine that has
-    terminal-state runs runs this once after upgrading aexp; the
-    resulting `.aexp/ledger/<id>.json` files get committed and pulled by
-    other machines so the validator resolves citations universally.
+    This is the migration tool for adopting the cross-machine ledger.
+    Every machine that has terminal-state runs runs this once after
+    upgrading aexp; the resulting `.aexp/ledger/<id>.json` files get
+    committed and pulled by other machines so the validator resolves
+    citations universally.
 
     Returns ``(promoted, skipped_already_present)``.
 

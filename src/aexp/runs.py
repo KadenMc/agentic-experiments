@@ -524,8 +524,8 @@ def mark_status(
 
     This is the unified terminal-status hook point: every transition into
     ``complete``/``failed``/``abandoned``/``stopped`` should route through
-    this function, so a future ledger-promotion hook (Phase 2 of the
-    cross-machine-ledger plan) only needs to fire from one place.
+    this function, so the ledger-promotion hook only needs to fire from
+    one place.
 
     Parameters
     ----------
@@ -553,8 +553,8 @@ def mark_status(
         doc_op_with_retry(
             lambda: job.doc.setdefault("ended_at", iso_utc_now())
         )
-    # Phase 2 ledger-promote hook: on every terminal transition, project
-    # the job into the universal cross-machine ledger at
+    # Ledger-promote hook: on every terminal transition, project the
+    # job into the universal cross-machine ledger at
     # .aexp/ledger/<job_id>.json. Wrapped in try/except so a promotion
     # failure (signac state corruption, write error, etc.) never crashes
     # the lifecycle — `aexp ledger backfill` recovers any missed jobs.

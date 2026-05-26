@@ -1020,7 +1020,7 @@ def test_repo_root_gitattributes_forces_lf_for_text() -> None:
 
 
 # ---------------------------------------------------------------------------
-# .gitignore block-merge + machine_label (Phase 1B prereq)
+# .gitignore block-merge + machine_label
 # ---------------------------------------------------------------------------
 
 

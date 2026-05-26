@@ -1,12 +1,12 @@
 """Tests for the cross-machine validation features.
 
-Covers ``--strict-runs={error|warn|off}`` (Phase 1A) and — once Phases 1B and 2
-land — the per-machine index three-state vocabulary and the ledger-source
-switch.
+Covers the ``--strict-runs={error|warn|off}`` severity knob, the
+per-machine runs-index three-state vocabulary, and the universal
+ledger as the canonical validator source.
 
-The test fixtures here mirror the broken-citation + empty-batch shapes from
-``test_validate.py`` so we exercise the same code paths from the citation
-check, just with the new severity policy in play.
+The test fixtures here mirror the broken-citation + empty-batch shapes
+from ``test_validate.py`` so we exercise the same code paths from the
+citation check, just with the new severity policy in play.
 """
 from __future__ import annotations
 
@@ -161,7 +161,7 @@ def _write_finding_citing_empty_batch(kb: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# --strict-runs (Phase 1A)
+# --strict-runs severity knob
 # ---------------------------------------------------------------------------
 
 
@@ -312,7 +312,7 @@ def test_cli_strict_runs_invalid_value(installed_repo: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Phase 1B — per-machine runs-index files (three-state vocabulary)
+# Per-machine runs-index files (three-state vocabulary)
 # ---------------------------------------------------------------------------
 
 
@@ -602,7 +602,7 @@ def test_cli_runs_export_index_writes_file(
 def test_cli_runs_export_index_prints_deprecation_warning(
     installed_repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Phase 2 ships a deprecation warning on the Phase 1B verb."""
+    """`aexp runs-export-index` prints a deprecation warning pointing at `aexp ledger backfill`."""
     from typer.testing import CliRunner
 
     from aexp.cli import app
@@ -616,7 +616,7 @@ def test_cli_runs_export_index_prints_deprecation_warning(
 
 
 # ---------------------------------------------------------------------------
-# Phase 2 — universal ledger as validator source
+# Universal ledger as validator source
 # ---------------------------------------------------------------------------
 
 
@@ -694,7 +694,7 @@ def test_validator_ledger_supersedes_runs_index_for_same_job(
     kb = installed_repo / "kb"
     _seed_h_e_artifacts(kb)
     jid = "d" * 32
-    # Same job in both ledger and Phase 1B index
+    # Same job in both the ledger and a per-machine index
     _write_ledger_entry(installed_repo, jid, status="complete", machine="cluster")
     _write_index_file(
         installed_repo,

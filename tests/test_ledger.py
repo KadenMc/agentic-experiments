@@ -1,4 +1,4 @@
-"""Focused tests for ``aexp.ledger`` — Phase 2 universal cross-machine ledger.
+"""Focused tests for ``aexp.ledger`` — the universal cross-machine ledger.
 
 Integration tests for the ledger-aware validator and the auto-promote hook
 live in ``test_validate_cross_machine.py``. This file covers the ledger

@@ -11,42 +11,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Cross-machine ledger (Phase 2).** New `.aexp/ledger/<job_id>.json`
-  universal projection of terminal-state runs, committed to git. Every
-  machine sees the same view after `git pull` — the validator no longer
-  needs to read filesystem-local signac workspace state to resolve
-  finding citations. Auto-populated via a hook in `aexp.runs.mark_status`
-  that fires on every terminal-status transition (complete/failed/
-  abandoned/stopped). Sanitized projection: explicit allowlist of fields
-  (statepoint, run_link, status, ended_at, wallclock_s, tracker
-  pointers, code commit, registered_machine, promoted_at). Per-machine
-  debris (absolute paths in `tracker_log/events.jsonl`, wandb offline
-  run dirs, user artifacts) stays in the gitignored
-  `.runs/workspace/<id>/`. New `aexp.ledger` module with
-  `promote_to_ledger`, `backfill_ledger`, and lookup helpers.
+- **Cross-machine run ledger.** New `.aexp/ledger/<job_id>.json` files
+  are sanitized projections of terminal-state runs, committed to git.
+  Every machine sees the same view after `git pull` — the validator
+  no longer needs to read filesystem-local signac workspace state to
+  resolve finding citations. Auto-populated by a hook in
+  `aexp.runs.mark_status` that fires on every terminal-status
+  transition (complete/failed/abandoned/stopped). The projection is an
+  explicit allowlist (statepoint, run_link, status, ended_at,
+  wallclock_s, tracker pointers, code commit, registered_machine,
+  promoted_at). Per-machine debris (absolute paths in
+  `tracker_log/events.jsonl`, wandb offline-run dirs, user artifacts)
+  stays in the gitignored `.runs/workspace/<id>/`. New `aexp.ledger`
+  module with `promote_to_ledger`, `backfill_ledger`, and lookup
+  helpers.
 - **`aexp ledger promote <id>` / `aexp ledger backfill` CLI verbs.**
-  Manual one-shot promotion and the bulk migration tool. Each machine
+  Manual one-shot promotion and a bulk migration tool. Each machine
   with terminal-state runs runs `aexp ledger backfill` once after
   upgrading; the resulting ledger files commit and push.
 - **`aexp validate --strict-runs={error|warn|off}` flag.** Manual
-  escape hatch for the laptop-vs-cluster validator UX while the
-  ledger is being backfilled. Default `error` preserves 0.5 behavior.
-  `warn` downgrades existence failures to warnings (exit 0); `off`
-  skips existence checks entirely. Structural-shape checks always
-  emit at error severity regardless.
+  severity knob for finding-citation existence checks. Default
+  `error` preserves 0.5 behavior. `warn` downgrades existence
+  failures to warnings (exit 0); `off` skips existence checks
+  entirely. Structural-shape checks always emit at error severity
+  regardless. Useful while the ledger is being backfilled across
+  machines.
 - **`finding.absent_run_citation` warning code** for citations that
-  resolve in a Phase 1B index file but not in the local store or
+  resolve in a per-machine index file but not in the local store or
   ledger — distinguishes "lives on another machine" from "broken."
   Same treatment for batches: `finding.absent_batch_runs`.
 - **`finding.no_run_store` warning code** emitted once per validate
   run when no source-of-truth is available (no ledger, no local
-  store, no index). Replaces the legacy silent tolerance branch at
-  `validate.py:341-342`.
+  store, no index). Replaces a previously-silent tolerance branch
+  that made it easy to overlook a missing local store.
 - **`.aexp/installed.json::machine_label` field.** Short identifier
   for each install, tagged on ledger entries via `registered_machine`.
-  Default: short hostname. Override: `aexp install --machine-label
-  <name>`, or edit `installed.json` directly. Sticky across re-installs.
-  New `read_machine_label` helper in `aexp.utils.paths`.
+  Default: short hostname. Override at install time with
+  `aexp install --machine-label <name>`, or by editing
+  `installed.json` directly. Sticky across re-installs. New
+  `read_machine_label` helper in `aexp.utils.paths`.
 - **`aexp install` manages a `.gitignore` block.** Block-merged with
   `# agentic-experiments:begin`/`:end` markers. Body sets `.aexp/*` +
   `!.aexp/runs-index/` + `!.aexp/ledger/` so per-machine state stays
@@ -54,11 +57,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a `gitignore_migration_warning` action when a legacy `.aexp/`
   pattern is detected outside the managed block (the legacy form
   parent-excludes `.aexp/`, blocking the `!` exceptions).
-- **`aexp runs-export-index` verb (Phase 1B, transitional).** Per-
-  machine JSON dump of terminal runs at
-  `.aexp/runs-index/<machine_label>.json`. Deprecated immediately in
-  favor of `aexp ledger backfill`; emits a deprecation warning when
-  invoked. Kept one release window for back-compat reads.
+- **`aexp runs-export-index` verb (transitional).** Per-machine JSON
+  dump of terminal runs at `.aexp/runs-index/<machine_label>.json`,
+  unioned by the validator into a three-state vocabulary. Deprecated
+  immediately in favor of `aexp ledger backfill`; emits a
+  deprecation warning when invoked. Kept one release window for
+  back-compat reads.
 
 ### Changed
 
@@ -70,9 +74,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   = True` keyword; default preserves the pre-0.6 behavior for
   existing callers. New `TERMINAL_STATUSES` module constant.
 - **`aexp.linking.link_to_experiment` re-promotes on terminal jobs.**
-  Re-stamping a job's run-link via `aexp link` now updates the ledger
-  entry's `run_link` field in addition to the doc, so the ledger
-  projection doesn't lag the on-disk state.
+  Re-stamping a job's run-link via `aexp link` now also updates the
+  ledger entry's `run_link` field, so the ledger projection doesn't
+  lag the on-disk state.
 
 ### Fixed
 
@@ -85,17 +89,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Existing consumers upgrading from 0.5:
 
 1. `pip install -e <agentic-experiments>` in each env.
-2. `aexp install --force` once per consumer (writes new gitignore
-   block, materializes `machine_label`). If a
+2. `aexp install --force` once per consumer (writes the new
+   gitignore block, materializes `machine_label`). If a
    `gitignore_migration_warning` is emitted, delete the legacy
    `.aexp/` line from `.gitignore`.
-3. `aexp ledger backfill` on each machine with terminal-state runs.
+3. `aexp ledger backfill` on each machine that has terminal-state
+   runs.
 4. Commit `.gitignore` and `.aexp/ledger/`. Push, then pull on every
    other consumer.
 
-See `docs/queue.md` § cross-machine for the full workflow. The
-`aexp friction — cross-machine run ledger and the validator` design
-doc (in the electricrag repo) walks through the rationale.
+See `docs/queue.md` § cross-machine for the full workflow.
 
 ## [0.5.0] - 2026-05-21
 

@@ -118,12 +118,13 @@ _GITIGNORE_END_MARKER = "# agentic-experiments:end"
 #   a parent-dir exclusion makes `!` exceptions a no-op). So we keep `.aexp/`
 #   itself unignored and ignore each per-machine file/subdir explicitly OR via
 #   the wildcard, with `!` exceptions for the cross-machine shared subdirs.
-# - `!.aexp/runs-index/` and `!.aexp/ledger/` re-include the Phase 1B index
-#   directory and Phase 2 ledger directory so they can be committed.
+# - `!.aexp/runs-index/` and `!.aexp/ledger/` re-include the
+#   transitional per-machine index directory and the universal ledger
+#   directory so they can be committed.
 _GITIGNORE_BLOCK_BODY = (
     "# aexp per-install / per-machine state — kept gitignored\n"
     ".aexp/*\n"
-    "# ...except these cross-machine shared subdirs (Phase 1B + Phase 2):\n"
+    "# ...except these cross-machine shared subdirs:\n"
     "!.aexp/runs-index/\n"
     "!.aexp/ledger/\n"
 )
@@ -945,13 +946,12 @@ def install_scaffold(
         See ``docs/setup/jupyter-mcp.md`` for the full setup recipe.
     machine_label : str or None, optional
         Short identifier for this install, written to
-        ``.aexp/installed.json::machine_label``. Used by
-        ``aexp runs-export-index`` and Phase 2's ledger entries to tag
-        which install registered a run. ``None`` (default) keeps the
-        previous marker's value if any, else falls back to
-        ``socket.gethostname().split(".")[0]``. Pass an explicit string
-        on HPC clusters where per-node hostnames are noisy (e.g.
-        ``machine_label="cluster"``).
+        ``.aexp/installed.json::machine_label``. Tagged onto ledger
+        entries to record which install registered each run. ``None``
+        (default) keeps the previous marker's value if any, else falls
+        back to ``socket.gethostname().split(".")[0]``. Pass an
+        explicit string on HPC clusters where per-node hostnames are
+        noisy (e.g. ``machine_label="cluster"``).
 
     Returns
     -------
@@ -1131,12 +1131,12 @@ def install_scaffold(
 
     # 3e. Block-merge the aexp-managed `.gitignore` block. Ensures
     #     `.aexp/installed.json` (per-machine) stays ignored while the
-    #     cross-machine subdirs `.aexp/runs-index/` (Phase 1B) and
-    #     `.aexp/ledger/` (Phase 2) are committable. New consumers get a
-    #     fresh `.gitignore` written; existing ones get a managed block
-    #     appended (idempotent). If a legacy `.aexp/` pattern is detected
-    #     outside our block, a warning is emitted (we don't auto-delete
-    #     user-authored content).
+    #     cross-machine subdirs `.aexp/runs-index/` (transitional) and
+    #     `.aexp/ledger/` (canonical) are committable. New consumers get
+    #     a fresh `.gitignore` written; existing ones get a managed
+    #     block appended (idempotent). If a legacy `.aexp/` pattern is
+    #     detected outside our block, a warning is emitted (we don't
+    #     auto-delete user-authored content).
     actions.extend(_merge_gitignore(root / ".gitignore", dry_run=dry_run))
 
     # 4. Initialize signac project.

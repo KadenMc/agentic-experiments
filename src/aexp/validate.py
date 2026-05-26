@@ -62,9 +62,9 @@ StrictRuns = Literal["error", "warn", "off"]
   surface and runs are known to live elsewhere.
 
 See ``docs/queue.md`` § cross-machine workflow for when each value
-makes sense. Phase 1B (per-machine index files) and Phase 2 (universal
-ledger) reduce the need to use anything other than the default by
-giving the validator more context about where runs actually live.
+makes sense. The per-machine index files and the universal ledger
+both reduce the need to use anything other than the default by giving
+the validator more context about where runs actually live.
 """
 
 
@@ -308,14 +308,14 @@ def _check_finding_citations(
     except Exception:
         findings = []
 
-    # Phase 2: universal ledger is the canonical source-of-truth when
-    # present. Citations resolve against the union of:
-    #   - .aexp/ledger/*.json (Phase 2, universal — every machine sees this)
+    # Universal ledger is the canonical source-of-truth when present.
+    # Citations resolve against the union of:
+    #   - .aexp/ledger/*.json (universal — every machine sees this)
     #   - local .runs/workspace/*/ (the legacy + still-current local view)
     # The ledger is the "in or out" canonical answer; the local store is
     # additive (a freshly-promoted run lives locally before it makes the
-    # next git push). Phase 1B's per-machine indexes stay as a
-    # transitional layer (Phase 2.5 coexistence) — they emit the
+    # next git push). Per-machine indexes stay as a transitional layer
+    # during the deprecation window — they emit the
     # finding.absent_run_citation warning only when a citation is in an
     # index BUT NOT in the ledger.
     ledger_ids = list_ledger_job_ids(repo_root)
@@ -325,7 +325,7 @@ def _check_finding_citations(
     # Union: ledger entries + local terminal runs both count as "here".
     known_job_ids: set[str] = ledger_ids | local_ids
 
-    # Phase 1B: union of per-machine index files at .aexp/runs-index/<machine>.json.
+    # Transitional: union of per-machine index files at .aexp/runs-index/<machine>.json.
     # Now scoped to ONLY jobs absent from the ledger (the index is a back-compat
     # bridge during the deprecation window; entries already in the ledger
     # supersede their index appearances).
