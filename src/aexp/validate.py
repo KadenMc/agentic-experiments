@@ -48,6 +48,25 @@ VALID_STATUSES: set[RunStatus] = {
 
 ValidateMode = Literal["full", "kb-only", "runs-only"]
 
+StrictRuns = Literal["error", "warn", "off"]
+"""Severity policy for finding-citation existence checks.
+
+- ``"error"`` (default): citations to jobs that don't exist in the local
+  run store emit ``finding.broken_run_citation`` / ``finding.empty_batch``
+  with severity error. Validator exits 1. Pre-0.6 behavior.
+- ``"warn"``: existence-check failures emit the same codes with severity
+  warning. Validator exits 0. Structural-shape checks (32-hex id format,
+  mapping shape, missing experiment_id) still emit errors.
+- ``"off"``: skip the existence check entirely. Structural-shape checks
+  still run. Useful when the local machine is purely an authoring
+  surface and runs are known to live elsewhere.
+
+See ``docs/queue.md`` § cross-machine workflow for when each value
+makes sense. Phase 1B (per-machine index files) and Phase 2 (universal
+ledger) reduce the need to use anything other than the default by
+giving the validator more context about where runs actually live.
+"""
+
 
 class ValidateResult:
     """A validation run's outcome — Issues + an easy boolean."""
@@ -251,8 +270,24 @@ def _check_run_links(repo_root: Path) -> list[Issue]:
 _JOB_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
 
-def _check_finding_citations(repo_root: Path) -> list[Issue]:
-    """Validate ``supporting_runs:`` entries in every finding."""
+def _check_finding_citations(
+    repo_root: Path,
+    *,
+    strict_runs: StrictRuns = "error",
+) -> list[Issue]:
+    """Validate ``supporting_runs:`` entries in every finding.
+
+    Parameters
+    ----------
+    repo_root : Path
+    strict_runs : StrictRuns, default ``"error"``
+        Severity policy for existence-check failures. See the
+        :data:`StrictRuns` docstring for the three values' semantics.
+        Structural-shape checks (mapping shape, 32-hex id format,
+        missing experiment_id, unknown citation type) always emit at
+        error severity regardless — those reflect malformed citations,
+        not cross-machine ledger gaps.
+    """
     issues: list[Issue] = []
     kb_root = repo_root / "kb"
     if not kb_root.is_dir():
@@ -269,6 +304,12 @@ def _check_finding_citations(repo_root: Path) -> list[Issue]:
         findings = []
 
     known_job_ids: set[str] = set(j.id for j in project) if project is not None else set()
+    # Severity for existence-check failures (citation references a job/batch
+    # that doesn't resolve). Structural-shape errors stay at error severity.
+    existence_severity: Literal["error", "warning"] = (
+        "warning" if strict_runs == "warn" else "error"
+    )
+    skip_existence_check = strict_runs == "off"
 
     for finding in findings:
         citations = finding.metadata.get("supporting_runs") or []
@@ -311,7 +352,11 @@ def _check_finding_citations(repo_root: Path) -> list[Issue]:
                         )
                     )
                     continue
-                if project is not None and jid not in known_job_ids:
+                if (
+                    not skip_existence_check
+                    and project is not None
+                    and jid not in known_job_ids
+                ):
                     issues.append(
                         Issue(
                             code="finding.broken_run_citation",
@@ -321,6 +366,7 @@ def _check_finding_citations(repo_root: Path) -> list[Issue]:
                             ),
                             path=finding.path,
                             detail=f"job_id={jid}",
+                            severity=existence_severity,
                         )
                     )
             elif ctype == "batch":
@@ -338,6 +384,8 @@ def _check_finding_citations(repo_root: Path) -> list[Issue]:
                         )
                     )
                     continue
+                if skip_existence_check:
+                    continue  # --strict-runs=off: skip batch existence checks
                 if project is None:
                     continue  # can't resolve without a run store
                 batches = list_batches(experiment_id=exp_id, repo_root=repo_root)
@@ -352,6 +400,7 @@ def _check_finding_citations(repo_root: Path) -> list[Issue]:
                                 "matches no runs"
                             ),
                             path=finding.path,
+                            severity=existence_severity,
                         )
                     )
             else:
@@ -388,6 +437,7 @@ def validate_repo(
     repo_root: str | Path | None = None,
     *,
     mode: ValidateMode = "full",
+    strict_runs: StrictRuns = "error",
 ) -> ValidateResult:
     """Run the full repo validation.
 
@@ -399,6 +449,10 @@ def validate_repo(
         - ``full`` (default): all checks.
         - ``kb-only``: only invoke ``kb_validate.py``; skip signac-side checks.
         - ``runs-only``: only run the run-link + finding-citation checks.
+    strict_runs : {"error", "warn", "off"}, default ``"error"``
+        Severity policy for finding-citation existence checks. See the
+        :data:`StrictRuns` docstring. Only affects citation existence;
+        structural-shape checks and run-link checks ignore this knob.
     """
     root = Path(repo_root).resolve() if repo_root else find_repo_root()
     result = ValidateResult()
@@ -410,13 +464,14 @@ def validate_repo(
     if mode in ("full", "runs-only"):
         for issue in _check_run_links(root):
             result.add(issue)
-        for issue in _check_finding_citations(root):
+        for issue in _check_finding_citations(root, strict_runs=strict_runs):
             result.add(issue)
 
     return result
 
 
 __all__ = [
+    "StrictRuns",
     "VALID_STATUSES",
     "ValidateMode",
     "ValidateResult",

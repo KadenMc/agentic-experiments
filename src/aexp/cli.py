@@ -833,13 +833,35 @@ def bind_tracker_cmd(
 def validate(
     kb_only: bool = typer.Option(False, "--kb-only"),
     runs_only: bool = typer.Option(False, "--runs-only"),
+    strict_runs: str = typer.Option(
+        "error",
+        "--strict-runs",
+        help=(
+            "Severity for finding-citation existence checks. "
+            "'error' (default): broken/empty citations exit 1. "
+            "'warn': downgrade to warnings, exit 0. "
+            "'off': skip existence checks entirely (structural checks still run). "
+            "Use 'warn' on a laptop when runs live on a cluster you can't see "
+            "locally; Phase 1B's `aexp runs-export-index` removes the need by "
+            "letting the validator distinguish 'elsewhere' from 'broken'."
+        ),
+    ),
 ) -> None:
     """Validate the KB + run-link integrity."""
     if kb_only and runs_only:
         console.print("[red]cannot combine --kb-only and --runs-only[/red]")
         _exit(2)
+    if strict_runs not in ("error", "warn", "off"):
+        console.print(
+            f"[red]invalid --strict-runs={strict_runs!r}; "
+            "expected one of: error, warn, off[/red]"
+        )
+        _exit(2)
     mode = "kb-only" if kb_only else ("runs-only" if runs_only else "full")
-    result: ValidateResult = validate_repo(mode=mode)  # type: ignore[arg-type]
+    result: ValidateResult = validate_repo(
+        mode=mode,  # type: ignore[arg-type]
+        strict_runs=strict_runs,  # type: ignore[arg-type]
+    )
     for issue in result.issues:
         color = "red" if issue.severity == "error" else "yellow"
         tag = issue.severity.upper()

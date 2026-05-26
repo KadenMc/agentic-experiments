@@ -494,6 +494,35 @@ recommended pattern is:
 - Cluster writes **during/after** execution (run-queued → status transitions).
 - Laptop doesn't touch `.runs/` while the cluster is running.
 
+### Validator and citations across machines (`--strict-runs`)
+
+If a `kb/research/findings/F###.md` cites a job that lives on the
+cluster but not your laptop, `aexp validate` on the laptop will
+report `finding.broken_run_citation` (error) even though the run
+exists — the validator can only see the local `.runs/workspace/`.
+
+As of 0.6, `aexp validate --strict-runs={error|warn|off}` lets you
+downgrade or skip the existence check:
+
+```
+# laptop (no cluster runs locally):
+aexp validate                       # exits 1: "ERROR finding.broken_run_citation ..."
+aexp validate --strict-runs=warn    # exits 0: "WARNING finding.broken_run_citation ..."
+aexp validate --strict-runs=off     # skips existence checks entirely
+```
+
+`warn` is the right escape hatch when you trust the citation but the
+local run store doesn't have the data. Structural-shape checks
+(malformed citation, non-32-hex ids) always emit at error severity
+regardless — those are real authoring mistakes, not cross-machine
+ledger gaps.
+
+This is a manual workaround. Phase 1B (per-machine index files,
+`aexp runs-export-index`) and Phase 2 (universal ledger via
+`aexp ledger backfill`) let the validator distinguish "elsewhere"
+from "broken" automatically, so you can stop needing `--strict-runs`
+in steady state.
+
 ## FAQ
 
 **What happens if the runner script is killed mid-job?**
