@@ -553,6 +553,22 @@ def mark_status(
         doc_op_with_retry(
             lambda: job.doc.setdefault("ended_at", iso_utc_now())
         )
+    # Phase 2 ledger-promote hook: on every terminal transition, project
+    # the job into the universal cross-machine ledger at
+    # .aexp/ledger/<job_id>.json. Wrapped in try/except so a promotion
+    # failure (signac state corruption, write error, etc.) never crashes
+    # the lifecycle — `aexp ledger backfill` recovers any missed jobs.
+    if status in TERMINAL_STATUSES:
+        try:
+            # Lazy import to avoid circular: ledger imports runs.
+            from aexp.ledger import promote_to_ledger as _promote
+            _promote(job)
+        except Exception as exc:  # pragma: no cover - defensive
+            import sys as _sys
+            print(
+                f"[aexp ledger] promote_to_ledger failed for {job.id}: {exc}",
+                file=_sys.stderr,
+            )
 
 
 __all__ = [

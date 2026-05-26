@@ -1272,6 +1272,91 @@ app.add_typer(queue_app, name="queue")
 app.add_typer(airgapped_app, name="airgapped")
 
 
+# ---------------------------------------------------------------------------
+# ledger subcommand group — Phase 2 universal cross-machine ledger
+# ---------------------------------------------------------------------------
+
+
+ledger_app = typer.Typer(
+    help=(
+        "Universal cross-machine ledger: sanitized projections of terminal "
+        "runs at .aexp/ledger/<job_id>.json. Committed to git so every "
+        "machine sees the same view after `git pull`."
+    ),
+    no_args_is_help=True,
+)
+app.add_typer(ledger_app, name="ledger")
+
+
+@ledger_app.command("promote")
+def ledger_promote_cmd(
+    job_id: str = typer.Argument(..., help="32-hex job id to promote."),
+    machine_label: str = typer.Option(
+        "",
+        "--machine-label",
+        help=(
+            "Override registered_machine in the ledger entry. Defaults to "
+            "`installed.json::machine_label`."
+        ),
+    ),
+) -> None:
+    """Manually promote a terminal-state job to the ledger.
+
+    For cases where the auto-hook in mark_status() didn't fire (rare —
+    out-of-band status writes, pre-Phase-2 runs). Idempotent.
+    """
+    from aexp.ledger import promote_to_ledger
+    from aexp.runs import open_run
+    from aexp.utils.paths import find_repo_root
+
+    root = find_repo_root()
+    job = open_run(job_id, repo_root=root)
+    path = promote_to_ledger(
+        job, repo_root=root, machine_label=(machine_label or None)
+    )
+    console.print(f"[green][OK][/green] promoted {job_id} -> {path}")
+
+
+@ledger_app.command("backfill")
+def ledger_backfill_cmd(
+    machine_label: str = typer.Option(
+        "",
+        "--machine-label",
+        help=(
+            "Tag every backfilled entry with this label. Defaults to "
+            "`installed.json::machine_label`."
+        ),
+    ),
+    overwrite: bool = typer.Option(
+        False,
+        "--overwrite",
+        help=(
+            "Re-promote even already-present entries. Useful after "
+            "bumping the schema version or a bulk `aexp link` fix."
+        ),
+    ),
+) -> None:
+    """Promote every terminal-state local run to the ledger.
+
+    The Phase 2 migration verb. Each machine with terminal-state runs
+    runs this once after upgrading to 0.6; commits the resulting
+    `.aexp/ledger/<id>.json` files; pushes. After every machine has
+    pushed, every machine pulls and the validator resolves all cited
+    jobs universally.
+    """
+    from aexp.ledger import backfill_ledger
+    from aexp.utils.paths import find_repo_root
+
+    root = find_repo_root()
+    promoted, skipped = backfill_ledger(
+        root, machine_label=(machine_label or None), overwrite=overwrite
+    )
+    console.print(
+        f"[green][OK][/green] promoted {promoted} entries "
+        f"({skipped} already present, skipped)"
+    )
+
+
 def _parse_sweep_or_exit(raw: str | None) -> dict:
     if not raw:
         return {}

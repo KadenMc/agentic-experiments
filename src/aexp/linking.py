@@ -195,6 +195,21 @@ def link_to_experiment(
         sub_hypothesis_id=sub_hypothesis_id,
     )
     write_run_link(job.doc, link.model_dump())
+    # Phase 2: if the job is already terminal, re-promote so the ledger
+    # entry's run_link field reflects the new linkage. Without this, the
+    # ledger projection would lag behind the on-disk job.doc until the
+    # next backfill. Idempotent — re-promotion overwrites the entry.
+    from aexp.runs import TERMINAL_STATUSES
+    if job.doc.get("status") in TERMINAL_STATUSES:
+        try:
+            from aexp.ledger import promote_to_ledger
+            promote_to_ledger(job, repo_root=repo_root)
+        except Exception as exc:  # pragma: no cover - defensive
+            import sys as _sys
+            print(
+                f"[aexp ledger] re-promote after link failed for {job.id}: {exc}",
+                file=_sys.stderr,
+            )
     return job
 
 
