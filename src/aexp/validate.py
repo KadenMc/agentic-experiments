@@ -290,7 +290,7 @@ def _check_finding_citations(
     """
     # Lazy imports to keep validate.py importable when runs_index/ledger
     # have issues, and to defer the (small) import cost.
-    from aexp.ledger import list_ledger_job_ids
+    from aexp.ledger import list_ledger_job_ids, load_ledger_entry
     from aexp.runs_index import collect_known_elsewhere
 
     issues: list[Issue] = []
@@ -352,6 +352,25 @@ def _check_finding_citations(
         cond = entry.get("condition")
         if isinstance(exp, str) and isinstance(cond, str):
             elsewhere_batches.setdefault((exp, cond), []).append(entry)
+
+    # Universal ledger entries also need to participate in batch resolution.
+    # The job-id existence check above already counts ledger entries via
+    # `known_job_ids = ledger_ids | local_ids`, but the batch-citation check
+    # uses `list_batches()` which walks the local signac project only and
+    # therefore can't see ledger-only entries. Without this lookup, a batch
+    # citation like `{type: batch, experiment_id: E005, selector: {condition: X}}`
+    # spuriously emits `finding.empty_batch` even though the universal ledger
+    # has matching terminal runs from another machine.
+    ledger_batches: dict[tuple[str, str], list[str]] = {}
+    for jid in ledger_ids:
+        entry = load_ledger_entry(repo_root, jid)
+        if not entry:
+            continue
+        sp = entry.get("statepoint", {}) or {}
+        exp = sp.get("experiment_id")
+        cond = sp.get("condition")
+        if isinstance(exp, str) and isinstance(cond, str):
+            ledger_batches.setdefault((exp, cond), []).append(jid)
 
     # finding.no_run_store: a single warning per validate run when no
     # source-of-truth for run identity is available — no ledger entries,
@@ -494,10 +513,28 @@ def _check_finding_citations(
                 local_count = sum(b.count for b in local_matches) if local_matches else 0
 
                 if local_count > 0:
-                    continue  # here: clean
+                    continue  # here: clean (local matches)
+
+                # Then check the universal ledger. `list_batches()` only walks
+                # the local signac project, so ledger-only entries (no local
+                # workspace) need a separate check via the (exp, cond) index
+                # built above. Without this, batch citations spuriously emit
+                # `finding.empty_batch` even when the ledger has matching
+                # terminal runs from another machine.
+                cond = selector.get("condition") if isinstance(selector, dict) else None
+                ledger_match_count = 0
+                if isinstance(cond, str):
+                    ledger_match_count = len(ledger_batches.get((exp_id, cond), []))
+                elif isinstance(selector, dict) and not selector:
+                    # Empty selector: any ledger entry for this experiment counts.
+                    ledger_match_count = sum(
+                        1 for (e, _c) in ledger_batches.keys() if e == exp_id
+                    )
+
+                if ledger_match_count > 0:
+                    continue  # here: clean (ledger matches)
 
                 # Check the elsewhere index. Match by experiment_id + condition.
-                cond = selector.get("condition") if isinstance(selector, dict) else None
                 elsewhere_matches: list[dict[str, Any]] = []
                 if isinstance(cond, str):
                     elsewhere_matches = elsewhere_batches.get((exp_id, cond), [])

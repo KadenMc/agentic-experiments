@@ -1,6 +1,6 @@
 [project]
 name = "agentic-experiments"
-version = "0.6.0"
+version = "0.6.1"
 description = "Git-first, hypothesis-forcing experiment tracking for agent-driven ML research. Bundles a research harness for the H->E->F artifact model, uses signac for local execution/run state, and bridges to W&B for remote observability."
 authors = [
     {name = "Kaden McKeen", email = "mckeenkaden@gmail.com"}
