@@ -77,12 +77,20 @@ def _tracker_projection(doc: Any) -> dict[str, Any]:
     or full config dict (those contain absolute workspace paths via the
     `"dir"` field — see ``trackers/base.py:185``).
     """
-    raw = doc.get("tracker") or {}
-    if not isinstance(raw, dict):
+    raw = doc.get("tracker")
+    if raw is None:
         return {}
-    keep = {}
+    # signac wraps nested dicts in synced_collections types that aren't
+    # strict `dict` subclasses; check for Mapping-shape duck-typing
+    # instead. Convert to a plain dict before reading keys to also strip
+    # any in-memory synced overhead.
+    try:
+        raw_dict = dict(raw)
+    except (TypeError, ValueError):
+        return {}
+    keep: dict[str, Any] = {}
     for k in ("backend", "run_id", "url", "group", "project"):
-        v = raw.get(k)
+        v = raw_dict.get(k)
         if v is not None:
             keep[k] = v
     return keep
