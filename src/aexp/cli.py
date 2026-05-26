@@ -175,7 +175,18 @@ def _print_actions(actions: list, *, dry_run: bool) -> None:
                 f"[cyan]preserved_user_modified[/cyan] {a.path}: "
                 "kept your content; shipped default not applied"
             )
-        elif a.kind in ("merged_json", "merged_block", "wrote_marker", "initialized_runs"):
+        elif a.kind == "gitignore_migration_warning":
+            # Surface this prominently; the consumer's gitignore needs a
+            # manual edit before `.aexp/runs-index/` and `.aexp/ledger/`
+            # can be committed.
+            console.print(f"[yellow]MIGRATION[/yellow] {a.path}: {a.detail}")
+        elif a.kind in (
+            "merged_json",
+            "merged_block",
+            "merged_gitignore",
+            "wrote_marker",
+            "initialized_runs",
+        ):
             console.print(f"[green]{a.kind}[/green] {a.path}")
     title = "dry-run plan" if dry_run else "install summary"
     table = Table(title=title, show_header=True)
@@ -263,6 +274,20 @@ def install(
             "tool availability when invoked."
         ),
     ),
+    machine_label: str = typer.Option(
+        "",
+        "--machine-label",
+        help=(
+            "Short identifier for this install, written to "
+            "`.aexp/installed.json::machine_label`. Tagged onto ledger "
+            "entries to record which install registered each run. Empty "
+            "string (default) keeps the previous marker's value if any, "
+            "else falls back to short hostname (e.g. `kaden-thinkpad`). "
+            "On HPC, pass an explicit name (`--machine-label cluster`) "
+            "so per-node hostnames (`gpu023`, `h4huhnlogin2`) don't "
+            "proliferate index files."
+        ),
+    ),
 ) -> None:
     """Install the aexp harness into the current repo.
 
@@ -294,6 +319,7 @@ def install(
                 dev=dev,
                 allow_self_install=allow_self_install,
                 with_jupyter=with_jupyter,
+                machine_label=machine_label or None,
             )
         except InstallRefused as exc:
             console.print(f"[red]{exc}[/red]")
@@ -321,6 +347,7 @@ def install(
             dev=dev,
             allow_self_install=allow_self_install,
             with_jupyter=with_jupyter,
+            machine_label=machine_label or None,
         )
     except InstallRefused as exc:
         console.print(f"[red]{exc}[/red]")
@@ -833,13 +860,36 @@ def bind_tracker_cmd(
 def validate(
     kb_only: bool = typer.Option(False, "--kb-only"),
     runs_only: bool = typer.Option(False, "--runs-only"),
+    strict_runs: str = typer.Option(
+        "error",
+        "--strict-runs",
+        help=(
+            "Severity for finding-citation existence checks. "
+            "'error' (default): broken/empty citations exit 1. "
+            "'warn': downgrade to warnings, exit 0. "
+            "'off': skip existence checks entirely (structural checks still run). "
+            "Use 'warn' on a laptop when runs live on a cluster you can't see "
+            "locally; `aexp ledger backfill` (committed + pushed from the "
+            "cluster) removes the need entirely by giving the validator a "
+            "universal source of truth."
+        ),
+    ),
 ) -> None:
     """Validate the KB + run-link integrity."""
     if kb_only and runs_only:
         console.print("[red]cannot combine --kb-only and --runs-only[/red]")
         _exit(2)
+    if strict_runs not in ("error", "warn", "off"):
+        console.print(
+            f"[red]invalid --strict-runs={strict_runs!r}; "
+            "expected one of: error, warn, off[/red]"
+        )
+        _exit(2)
     mode = "kb-only" if kb_only else ("runs-only" if runs_only else "full")
-    result: ValidateResult = validate_repo(mode=mode)  # type: ignore[arg-type]
+    result: ValidateResult = validate_repo(
+        mode=mode,  # type: ignore[arg-type]
+        strict_runs=strict_runs,  # type: ignore[arg-type]
+    )
     for issue in result.issues:
         color = "red" if issue.severity == "error" else "yellow"
         tag = issue.severity.upper()
@@ -852,6 +902,72 @@ def validate(
         f"[red]FAILED[/red] {len(result.errors)} error(s), {len(result.warnings)} warning(s)"
     )
     _exit(1)
+
+
+# ---------------------------------------------------------------------------
+# runs-export-index — transitional per-machine index
+# ---------------------------------------------------------------------------
+
+
+@app.command("runs-export-index")
+def runs_export_index_cmd(
+    machine_label: str = typer.Option(
+        "",
+        "--as",
+        "--machine-label",
+        help=(
+            "Override the machine label for this export. Defaults to "
+            "`installed.json::machine_label` (typically short hostname). "
+            "Pass a stable name on HPC where per-node hostnames are noisy."
+        ),
+    ),
+    out: str = typer.Option(
+        "",
+        "--out",
+        help=(
+            "Output file path. Defaults to "
+            "`<repo>/.aexp/runs-index/<machine_label>.json`."
+        ),
+    ),
+) -> None:
+    """Export this machine's terminal-state runs to a JSON index file.
+
+    Each machine periodically runs this verb and commits the resulting
+    file. Other machines pull and the validator unions the indexes to
+    distinguish "registered elsewhere" (warning) from "broken" (error)
+    citations.
+
+    Superseded by `aexp ledger backfill`, which writes the same
+    information as a universal ledger entry per run. The index-file
+    mechanism stays through one minor-version window for back-compat
+    reads.
+    """
+    from aexp.runs_index import export_index
+    from aexp.utils.paths import find_repo_root
+
+    # Deprecation: `aexp ledger backfill` supersedes this verb. The
+    # index-file mechanism stays through one minor-version window for
+    # consumers still on the per-machine-index workflow.
+    console.print(
+        "[yellow]DEPRECATED[/yellow] `aexp runs-export-index` is superseded "
+        "by `aexp ledger backfill`. The runs-index/ mechanism stays for "
+        "one release for back-compat reads; switch to the ledger when "
+        "you can."
+    )
+
+    root = find_repo_root()
+    target = Path(out).resolve() if out else None
+    label_override = machine_label or None
+
+    path = export_index(root, out=target, machine_label=label_override)
+    # Count entries for the summary line.
+    import json as _json
+    try:
+        entries = _json.loads(path.read_text(encoding="utf-8")).get("entries", [])
+        n = len(entries)
+    except Exception:
+        n = -1
+    console.print(f"[green][OK][/green] wrote {n} terminal-run entries to {path}")
 
 
 # ---------------------------------------------------------------------------
@@ -1166,6 +1282,92 @@ app.add_typer(queue_app, name="queue")
 # (alongside the request() core it drives). Register it here so it is
 # reachable as `aexp airgapped ...`; it is also `python -m aexp.airgapped`.
 app.add_typer(airgapped_app, name="airgapped")
+
+
+# ---------------------------------------------------------------------------
+# ledger subcommand group — universal cross-machine ledger
+# ---------------------------------------------------------------------------
+
+
+ledger_app = typer.Typer(
+    help=(
+        "Universal cross-machine ledger: sanitized projections of terminal "
+        "runs at .aexp/ledger/<job_id>.json. Committed to git so every "
+        "machine sees the same view after `git pull`."
+    ),
+    no_args_is_help=True,
+)
+app.add_typer(ledger_app, name="ledger")
+
+
+@ledger_app.command("promote")
+def ledger_promote_cmd(
+    job_id: str = typer.Argument(..., help="32-hex job id to promote."),
+    machine_label: str = typer.Option(
+        "",
+        "--machine-label",
+        help=(
+            "Override registered_machine in the ledger entry. Defaults to "
+            "`installed.json::machine_label`."
+        ),
+    ),
+) -> None:
+    """Manually promote a terminal-state job to the ledger.
+
+    For cases where the auto-promote hook in mark_status() didn't fire
+    (rare — out-of-band status writes, runs registered before 0.6).
+    Idempotent.
+    """
+    from aexp.ledger import promote_to_ledger
+    from aexp.runs import open_run
+    from aexp.utils.paths import find_repo_root
+
+    root = find_repo_root()
+    job = open_run(job_id, repo_root=root)
+    path = promote_to_ledger(
+        job, repo_root=root, machine_label=(machine_label or None)
+    )
+    console.print(f"[green][OK][/green] promoted {job_id} -> {path}")
+
+
+@ledger_app.command("backfill")
+def ledger_backfill_cmd(
+    machine_label: str = typer.Option(
+        "",
+        "--machine-label",
+        help=(
+            "Tag every backfilled entry with this label. Defaults to "
+            "`installed.json::machine_label`."
+        ),
+    ),
+    overwrite: bool = typer.Option(
+        False,
+        "--overwrite",
+        help=(
+            "Re-promote even already-present entries. Useful after "
+            "bumping the schema version or a bulk `aexp link` fix."
+        ),
+    ),
+) -> None:
+    """Promote every terminal-state local run to the ledger.
+
+    The migration verb when adopting the cross-machine ledger. Each
+    machine with terminal-state runs runs this once after upgrading to
+    0.6; commits the resulting `.aexp/ledger/<id>.json` files; pushes.
+    After every machine has pushed, every machine pulls and the
+    validator resolves all cited jobs universally.
+    """
+    from aexp.ledger import backfill_ledger
+    from aexp.utils.paths import find_repo_root
+
+    root = find_repo_root()
+    promoted, skipped = backfill_ledger(
+        root, machine_label=(machine_label or None), overwrite=overwrite
+    )
+    console.print(
+        f"[green][OK][/green] promoted {promoted} entries "
+        f"({skipped} already present, skipped)"
+    )
 
 
 def _parse_sweep_or_exit(raw: str | None) -> dict:

@@ -29,6 +29,13 @@ class InstalledMarker(TypedDict, total=False):
     python_exe: str           # absolute path to the Python that ran install_scaffold
     conda_env_name: str       # CONDA_DEFAULT_ENV at install time, or "" for venv/system Python
     jupyter_enabled: bool     # True if any prior install used --with-jupyter; sticky once set
+    machine_label: str        # short identifier for this install, used by
+                              # `aexp runs-export-index` and ledger entries to
+                              # tag which install registered a run. Defaults
+                              # to `socket.gethostname().split(".")[0]` at
+                              # install time; overridable via
+                              # `aexp install --machine-label <name>` or by
+                              # editing this file directly. Stable per-install.
 
 
 class RepoRootNotFound(RuntimeError):
@@ -97,6 +104,7 @@ def write_installed_marker(
     python_exe: str | None = None,
     conda_env_name: str | None = None,
     jupyter_enabled: bool | None = None,
+    machine_label: str | None = None,
 ) -> Path:
     """Write a new install marker atomically.
 
@@ -128,12 +136,21 @@ def write_installed_marker(
         Pass ``True`` to set; ``False``/``None`` preserves whatever the
         previous marker had. The field is never auto-cleared — backing out
         of the integration is a manual edit by the user.
+    machine_label : str or None
+        Short identifier for this install. Used by
+        ``aexp runs-export-index`` and the cross-machine ledger to tag
+        which install registered a run. When ``None``, defaults to the
+        previous marker's value (sticky across re-installs) or, if no
+        previous marker, ``socket.gethostname().split(".")[0]``. Pass an
+        explicit string to override — useful on HPC where per-node
+        hostnames are noisy and you want a stable cluster label.
 
     Returns
     -------
     Path
         The absolute path of the written marker.
     """
+    import socket
     import sys
 
     if installed_at is None:
@@ -161,9 +178,39 @@ def write_installed_marker(
     if new_enabled:
         payload["jupyter_enabled"] = True
 
+    # machine_label is sticky per-install: a re-install without --machine-label
+    # preserves the existing value (so editing installed.json by hand sticks).
+    # First-time installs (no previous marker) default to the short hostname.
+    if machine_label is not None:
+        payload["machine_label"] = machine_label
+    elif prev.get("machine_label"):
+        payload["machine_label"] = prev["machine_label"]
+    else:
+        payload["machine_label"] = socket.gethostname().split(".")[0] or "unknown"
+
     target = Path(repo_root) / INSTALLED_MARKER_REL
     atomic_write(target, json.dumps(payload, indent=2) + "\n")
     return target
+
+
+def read_machine_label(repo_root: str | Path) -> str:
+    """Return the machine label for this install.
+
+    Reads ``machine_label`` from ``.aexp/installed.json`` if present. If the
+    marker exists but predates the machine_label field, falls back to
+    ``socket.gethostname().split(".")[0]``. If no marker, same fallback.
+
+    Always returns a non-empty string — callers use this directly as a
+    filename component for ``.aexp/runs-index/<machine_label>.json``.
+    """
+    import socket
+
+    marker = read_installed_marker(repo_root)
+    if marker:
+        label = (marker.get("machine_label") or "").strip()
+        if label:
+            return label
+    return socket.gethostname().split(".")[0] or "unknown"
 
 
 def _detect_conda_env_name(python_exe: str | None = None) -> str:

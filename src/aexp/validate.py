@@ -48,6 +48,25 @@ VALID_STATUSES: set[RunStatus] = {
 
 ValidateMode = Literal["full", "kb-only", "runs-only"]
 
+StrictRuns = Literal["error", "warn", "off"]
+"""Severity policy for finding-citation existence checks.
+
+- ``"error"`` (default): citations to jobs that don't exist in the local
+  run store emit ``finding.broken_run_citation`` / ``finding.empty_batch``
+  with severity error. Validator exits 1. Pre-0.6 behavior.
+- ``"warn"``: existence-check failures emit the same codes with severity
+  warning. Validator exits 0. Structural-shape checks (32-hex id format,
+  mapping shape, missing experiment_id) still emit errors.
+- ``"off"``: skip the existence check entirely. Structural-shape checks
+  still run. Useful when the local machine is purely an authoring
+  surface and runs are known to live elsewhere.
+
+See ``docs/queue.md`` § cross-machine workflow for when each value
+makes sense. The per-machine index files and the universal ledger
+both reduce the need to use anything other than the default by giving
+the validator more context about where runs actually live.
+"""
+
 
 class ValidateResult:
     """A validation run's outcome — Issues + an easy boolean."""
@@ -251,8 +270,29 @@ def _check_run_links(repo_root: Path) -> list[Issue]:
 _JOB_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
 
-def _check_finding_citations(repo_root: Path) -> list[Issue]:
-    """Validate ``supporting_runs:`` entries in every finding."""
+def _check_finding_citations(
+    repo_root: Path,
+    *,
+    strict_runs: StrictRuns = "error",
+) -> list[Issue]:
+    """Validate ``supporting_runs:`` entries in every finding.
+
+    Parameters
+    ----------
+    repo_root : Path
+    strict_runs : StrictRuns, default ``"error"``
+        Severity policy for existence-check failures. See the
+        :data:`StrictRuns` docstring for the three values' semantics.
+        Structural-shape checks (mapping shape, 32-hex id format,
+        missing experiment_id, unknown citation type) always emit at
+        error severity regardless — those reflect malformed citations,
+        not cross-machine ledger gaps.
+    """
+    # Lazy imports to keep validate.py importable when runs_index/ledger
+    # have issues, and to defer the (small) import cost.
+    from aexp.ledger import list_ledger_job_ids
+    from aexp.runs_index import collect_known_elsewhere
+
     issues: list[Issue] = []
     kb_root = repo_root / "kb"
     if not kb_root.is_dir():
@@ -268,7 +308,77 @@ def _check_finding_citations(repo_root: Path) -> list[Issue]:
     except Exception:
         findings = []
 
-    known_job_ids: set[str] = set(j.id for j in project) if project is not None else set()
+    # Universal ledger is the canonical source-of-truth when present.
+    # Citations resolve against the union of:
+    #   - .aexp/ledger/*.json (universal — every machine sees this)
+    #   - local .runs/workspace/*/ (the legacy + still-current local view)
+    # The ledger is the "in or out" canonical answer; the local store is
+    # additive (a freshly-promoted run lives locally before it makes the
+    # next git push). Per-machine indexes stay as a transitional layer
+    # during the deprecation window — they emit the
+    # finding.absent_run_citation warning only when a citation is in an
+    # index BUT NOT in the ledger.
+    ledger_ids = list_ledger_job_ids(repo_root)
+    local_ids: set[str] = (
+        set(j.id for j in project) if project is not None else set()
+    )
+    # Union: ledger entries + local terminal runs both count as "here".
+    known_job_ids: set[str] = ledger_ids | local_ids
+
+    # Transitional: union of per-machine index files at .aexp/runs-index/<machine>.json.
+    # Now scoped to ONLY jobs absent from the ledger (the index is a back-compat
+    # bridge during the deprecation window; entries already in the ledger
+    # supersede their index appearances).
+    raw_elsewhere = collect_known_elsewhere(repo_root)
+    known_elsewhere = {
+        jid: entry for jid, entry in raw_elsewhere.items()
+        if jid not in known_job_ids
+    }
+
+    # An *authoritative source* is something we could in principle compare
+    # against — even if it's empty. A consumer who's `aexp install`ed but
+    # not yet run anything has an empty local store; a citation to a
+    # made-up job_id is still broken (the store says it's not there).
+    # We only emit `finding.no_run_store` when there is genuinely no
+    # source available — no ledger dir, no signac project, no index files.
+    has_authority = (
+        bool(ledger_ids) or project is not None or bool(raw_elsewhere)
+    )
+    # Build a (experiment_id, condition) -> [job_ids] lookup so batch
+    # citations matching only elsewhere-entries downgrade to a warning too.
+    elsewhere_batches: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for entry in known_elsewhere.values():
+        exp = entry.get("experiment_id")
+        cond = entry.get("condition")
+        if isinstance(exp, str) and isinstance(cond, str):
+            elsewhere_batches.setdefault((exp, cond), []).append(entry)
+
+    # finding.no_run_store: a single warning per validate run when no
+    # source-of-truth for run identity is available — no ledger entries,
+    # no local store, no cross-machine indexes. Without this, the validator
+    # silently passes citations through which used to be invisible
+    # (validate.py:341-342 legacy tolerance branch).
+    if not has_authority:
+        issues.append(
+            Issue(
+                code="finding.no_run_store",
+                message=(
+                    "no .aexp/ledger/ entries, no local .runs/ project, AND "
+                    "no .aexp/runs-index/*.json files — finding-citation "
+                    "existence checks are skipped. Run `aexp install` + "
+                    "`aexp ledger backfill` on each machine with runs, then "
+                    "pull on this one."
+                ),
+                severity="warning",
+            )
+        )
+
+    # Severity for existence-check failures (citation references a job/batch
+    # that doesn't resolve). Structural-shape errors stay at error severity.
+    existence_severity: Literal["error", "warning"] = (
+        "warning" if strict_runs == "warn" else "error"
+    )
+    skip_existence_check = strict_runs == "off"
 
     for finding in findings:
         citations = finding.metadata.get("supporting_runs") or []
@@ -311,16 +421,49 @@ def _check_finding_citations(repo_root: Path) -> list[Issue]:
                         )
                     )
                     continue
-                if project is not None and jid not in known_job_ids:
+                if skip_existence_check:
+                    pass  # --strict-runs=off: skip existence check
+                elif jid in known_job_ids:
+                    pass  # here: clean (in ledger OR local store)
+                elif jid in known_elsewhere:
+                    # elsewhere: registered on another machine's index but
+                    # not present locally. Always emit as warning regardless
+                    # of strict_runs (the citation is good; the data just
+                    # lives on a different ledger).
+                    elsewhere_machine = known_elsewhere[jid].get(
+                        "ledger_machine", "unknown"
+                    )
+                    issues.append(
+                        Issue(
+                            code="finding.absent_run_citation",
+                            message=(
+                                f"finding {finding.id}: supporting_runs[{idx}] "
+                                f"references job {jid} registered on machine "
+                                f"'{elsewhere_machine}' but not present in local .runs/"
+                            ),
+                            path=finding.path,
+                            detail=f"job_id={jid} ledger_machine={elsewhere_machine}",
+                            severity="warning",
+                        )
+                    )
+                elif has_authority:
+                    # broken: not in any known ledger. Severity per strict_runs.
+                    # (When neither ledger nor store nor index exists, the
+                    # finding.no_run_store warning at the top covers this case
+                    # — we don't want a broken_run_citation for every citation
+                    # in that situation.)
                     issues.append(
                         Issue(
                             code="finding.broken_run_citation",
                             message=(
                                 f"finding {finding.id}: supporting_runs[{idx}] "
-                                f"references job {jid} which does not exist in .runs/"
+                                f"references job {jid} which does not exist in "
+                                f".aexp/ledger/, .runs/, or any "
+                                f".aexp/runs-index/*.json"
                             ),
                             path=finding.path,
                             detail=f"job_id={jid}",
+                            severity=existence_severity,
                         )
                     )
             elif ctype == "batch":
@@ -338,22 +481,71 @@ def _check_finding_citations(repo_root: Path) -> list[Issue]:
                         )
                     )
                     continue
-                if project is None:
-                    continue  # can't resolve without a run store
-                batches = list_batches(experiment_id=exp_id, repo_root=repo_root)
-                matches = [b for b in batches if _selector_matches(b.selector, selector)]
-                if not matches or all(b.count == 0 for b in matches):
+                if skip_existence_check:
+                    continue  # --strict-runs=off: skip batch existence checks
+
+                # Resolve local batches first.
+                local_matches: list[Any] = []
+                if project is not None:
+                    batches = list_batches(experiment_id=exp_id, repo_root=repo_root)
+                    local_matches = [
+                        b for b in batches if _selector_matches(b.selector, selector)
+                    ]
+                local_count = sum(b.count for b in local_matches) if local_matches else 0
+
+                if local_count > 0:
+                    continue  # here: clean
+
+                # Check the elsewhere index. Match by experiment_id + condition.
+                cond = selector.get("condition") if isinstance(selector, dict) else None
+                elsewhere_matches: list[dict[str, Any]] = []
+                if isinstance(cond, str):
+                    elsewhere_matches = elsewhere_batches.get((exp_id, cond), [])
+                # Selector with no `condition` key: fall back to any
+                # elsewhere job with the same experiment_id.
+                elif isinstance(selector, dict) and not selector:
+                    elsewhere_matches = [
+                        e for e in known_elsewhere.values()
+                        if e.get("experiment_id") == exp_id
+                    ]
+
+                if elsewhere_matches:
+                    # elsewhere: batch selector matches only remote-indexed runs.
+                    machines = sorted({
+                        m.get("ledger_machine", "unknown") for m in elsewhere_matches
+                    })
                     issues.append(
                         Issue(
-                            code="finding.empty_batch",
+                            code="finding.absent_batch_runs",
                             message=(
                                 f"finding {finding.id}: batch citation for "
-                                f"experiment={exp_id} selector={selector} "
-                                "matches no runs"
+                                f"experiment={exp_id} selector={selector} matches "
+                                f"{len(elsewhere_matches)} run(s) on machine(s) "
+                                f"{machines} but no local runs"
                             ),
                             path=finding.path,
+                            detail=f"experiment_id={exp_id} ledger_machines={machines}",
+                            severity="warning",
                         )
                     )
+                    continue
+
+                if not has_authority:
+                    continue  # no_run_store warning already emitted
+
+                # broken / empty: no local or elsewhere matches.
+                issues.append(
+                    Issue(
+                        code="finding.empty_batch",
+                        message=(
+                            f"finding {finding.id}: batch citation for "
+                            f"experiment={exp_id} selector={selector} "
+                            "matches no runs"
+                        ),
+                        path=finding.path,
+                        severity=existence_severity,
+                    )
+                )
             else:
                 hint = (
                     "expected type='job' with an 'id' (32-hex job id) OR "
@@ -388,6 +580,7 @@ def validate_repo(
     repo_root: str | Path | None = None,
     *,
     mode: ValidateMode = "full",
+    strict_runs: StrictRuns = "error",
 ) -> ValidateResult:
     """Run the full repo validation.
 
@@ -399,6 +592,10 @@ def validate_repo(
         - ``full`` (default): all checks.
         - ``kb-only``: only invoke ``kb_validate.py``; skip signac-side checks.
         - ``runs-only``: only run the run-link + finding-citation checks.
+    strict_runs : {"error", "warn", "off"}, default ``"error"``
+        Severity policy for finding-citation existence checks. See the
+        :data:`StrictRuns` docstring. Only affects citation existence;
+        structural-shape checks and run-link checks ignore this knob.
     """
     root = Path(repo_root).resolve() if repo_root else find_repo_root()
     result = ValidateResult()
@@ -410,13 +607,14 @@ def validate_repo(
     if mode in ("full", "runs-only"):
         for issue in _check_run_links(root):
             result.add(issue)
-        for issue in _check_finding_citations(root):
+        for issue in _check_finding_citations(root, strict_runs=strict_runs):
             result.add(issue)
 
     return result
 
 
 __all__ = [
+    "StrictRuns",
     "VALID_STATUSES",
     "ValidateMode",
     "ValidateResult",

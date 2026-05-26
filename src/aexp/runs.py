@@ -476,14 +476,26 @@ def run_lifecycle(
         # exceptions in the writes below.
         _stop_heartbeat()
         if _should_write_terminal_status():
-            _safe_doc_set("status", "failed")
+            # Route through mark_status() so the single hook point fires
+            # for every terminal transition (complete/failed/abandoned/
+            # stopped). Swallow PermissionError to preserve the previous
+            # _safe_doc_set tolerance: the doc-store lock race is the
+            # losing writer's intent already being covered by the
+            # winning writer's terminal-status record.
+            try:
+                mark_status(job, "failed", set_ended_at=False)
+            except PermissionError:
+                pass
         _safe_doc_set("ended_at", iso_utc_now())
         _safe_doc_set("wallclock_s", round(perf_counter() - t0, 3))
         raise
     else:
         _stop_heartbeat()
         if _should_write_terminal_status():
-            _safe_doc_set("status", "complete")
+            try:
+                mark_status(job, "complete", set_ended_at=False)
+            except PermissionError:
+                pass
         _safe_doc_set("ended_at", iso_utc_now())
         _safe_doc_set("wallclock_s", round(perf_counter() - t0, 3))
     finally:
@@ -494,18 +506,69 @@ def run_lifecycle(
         _stop_heartbeat()
 
 
-def mark_status(job: signac.job.Job, status: RunStatus) -> None:
-    """Set ``job.doc['status']`` and update ``ended_at`` / ``wallclock_s`` sensibly.
+TERMINAL_STATUSES: tuple[RunStatus, ...] = (
+    "complete",
+    "failed",
+    "abandoned",
+    "stopped",
+)
 
-    Useful for out-of-band transitions like ``abandoned``. Doc writes go
-    through :func:`doc_op_with_retry` so concurrent writers on Windows
-    don't trip on ``PermissionError`` from the signac atomic-rename race.
+
+def mark_status(
+    job: signac.job.Job,
+    status: RunStatus,
+    *,
+    set_ended_at: bool = True,
+) -> None:
+    """Set ``job.doc['status']`` — the single point for status transitions.
+
+    This is the unified terminal-status hook point: every transition into
+    ``complete``/``failed``/``abandoned``/``stopped`` should route through
+    this function, so the ledger-promotion hook only needs to fire from
+    one place.
+
+    Parameters
+    ----------
+    job : signac.job.Job
+    status : RunStatus
+        New status value to write into ``job.doc['status']``.
+    set_ended_at : bool, default True
+        When True and ``status`` is terminal, also ``setdefault`` an
+        ``ended_at`` timestamp into the doc. Callers that already manage
+        ``ended_at`` themselves (notably :func:`run_lifecycle`, whose
+        except/else branches do their own write) pass ``False`` to avoid
+        an extra doc-load on the lifecycle's terminal exit path. That
+        extra doc-load is what races with ``stop_queued``'s concurrent
+        writes on Windows file-lock — keeping it out of the lifecycle
+        eliminates a synchronization point inside the race window.
+
+    Doc writes go through :func:`doc_op_with_retry` so concurrent writers
+    on Windows don't trip on ``PermissionError`` from signac's
+    atomic-rename race. Callers that need to tolerate exhausted-retry
+    failures (e.g. ``run_lifecycle``, which doesn't want a lock-loss to
+    crash the run) wrap this call in ``try/PermissionError``.
     """
     doc_op_with_retry(lambda: job.doc.__setitem__("status", status))
-    if status in ("complete", "failed", "abandoned", "stopped"):
+    if set_ended_at and status in TERMINAL_STATUSES:
         doc_op_with_retry(
             lambda: job.doc.setdefault("ended_at", iso_utc_now())
         )
+    # Ledger-promote hook: on every terminal transition, project the
+    # job into the universal cross-machine ledger at
+    # .aexp/ledger/<job_id>.json. Wrapped in try/except so a promotion
+    # failure (signac state corruption, write error, etc.) never crashes
+    # the lifecycle — `aexp ledger backfill` recovers any missed jobs.
+    if status in TERMINAL_STATUSES:
+        try:
+            # Lazy import to avoid circular: ledger imports runs.
+            from aexp.ledger import promote_to_ledger as _promote
+            _promote(job)
+        except Exception as exc:  # pragma: no cover - defensive
+            import sys as _sys
+            print(
+                f"[aexp ledger] promote_to_ledger failed for {job.id}: {exc}",
+                file=_sys.stderr,
+            )
 
 
 __all__ = [

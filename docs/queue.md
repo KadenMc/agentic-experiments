@@ -494,6 +494,107 @@ recommended pattern is:
 - Cluster writes **during/after** execution (run-queued → status transitions).
 - Laptop doesn't touch `.runs/` while the cluster is running.
 
+### Validator and citations across machines
+
+If a `kb/research/findings/F###.md` cites a job that lives on the
+cluster but not your laptop, the validator on the laptop can't see
+the run directly — the signac project listing is filesystem-local.
+Before 0.6 this was a hard error. As of 0.6 the validator has three
+layered sources of truth, in order of preference:
+
+1. **`.aexp/ledger/<job_id>.json`** — the universal cross-machine
+   ledger. Sanitized projection of a terminal-state job, committed
+   to git. Every machine sees the same ledger after `git pull`. This
+   is the canonical "this run exists" source.
+2. **Local `.runs/workspace/<id>/`** — the signac project. Counts as
+   "here" too, so freshly-promoted runs (after `mark_status` fires
+   the auto-promote hook but before the next git push) are still
+   recognized.
+3. **`.aexp/runs-index/<machine>.json`** — a transitional per-machine
+   index. Deprecated; kept one release for back-compat. A citation
+   matching only an index file (not in the ledger or local store)
+   emits `finding.absent_run_citation` (warning) so you know a peer
+   machine has the run but it hasn't been promoted yet.
+
+The steady-state workflow:
+
+```
+# cluster (after each batch finishes):
+aexp ledger backfill          # promotes every terminal-state local run
+git add .aexp/ledger/
+git commit -m "ledger: backfill <date>"
+git push
+
+# laptop:
+git pull
+aexp validate                  # exits 0 — every cited job resolves via ledger
+```
+
+The auto-promote hook in `aexp.runs.mark_status` makes the backfill
+step optional in steady state — every `mark_status(job, "complete")`
+already writes the ledger entry. `aexp ledger backfill` is the
+migration path for runs registered before 0.6 (or in environments
+where the hook didn't fire for some reason).
+
+#### --strict-runs escape hatch
+
+If the ledger hasn't been backfilled everywhere yet (or you're
+running against an older install), `aexp validate
+--strict-runs={error|warn|off}` lets you downgrade or skip the
+existence check:
+
+```
+aexp validate                       # exits 1: "ERROR finding.broken_run_citation ..."
+aexp validate --strict-runs=warn    # exits 0: "WARNING finding.broken_run_citation ..."
+aexp validate --strict-runs=off     # skips existence checks entirely
+```
+
+`warn` is the right escape hatch during a partial rollout.
+Structural-shape checks (malformed citation, non-32-hex ids) always
+emit at error severity regardless — those are real authoring
+mistakes, not cross-machine ledger gaps.
+
+### Migrating to the cross-machine ledger (0.5 → 0.6)
+
+After upgrading aexp:
+
+1. On every machine that has terminal-state runs:
+   ```
+   pip install -e <agentic-experiments>     # (you do this)
+   aexp install --force                      # picks up new gitignore block + scaffold
+   aexp ledger backfill                      # promotes every terminal-state job
+   git add .gitignore .aexp/ledger/
+   git commit -m "migrate to aexp 0.6 ledger"
+   git push
+   ```
+2. On the laptop (or any other consumer of these runs):
+   ```
+   git pull
+   aexp validate    # exits 0 — every cited job resolves via ledger
+   ```
+3. The transitional `aexp runs-export-index` verb still works for
+   one release window, with a deprecation warning. Remove
+   `.aexp/runs-index/` after every machine has backfilled.
+
+If `aexp install --force` warns about a legacy `.aexp/` pattern in
+your gitignore (`gitignore_migration_warning`), edit `.gitignore` and
+remove the plain `.aexp/` line — git can't re-include
+`.aexp/runs-index/` or `.aexp/ledger/` while the whole `.aexp/`
+directory is excluded. The aexp-managed block (with `.aexp/*` +
+explicit `!` exceptions) replaces it.
+
+### Machine identity
+
+The ledger entries record which machine registered each run via the
+`registered_machine` field, sourced from
+`.aexp/installed.json::machine_label`. Default is short hostname
+(`socket.gethostname().split(".")[0]`); override at install time with
+`aexp install --machine-label <name>`, or by editing
+`.aexp/installed.json` directly (the file is per-machine and
+gitignored). On HPC clusters where per-node hostnames are noisy,
+set `--machine-label cluster` so the ledger is consistent across
+login nodes and compute nodes.
+
 ## FAQ
 
 **What happens if the runner script is killed mid-job?**

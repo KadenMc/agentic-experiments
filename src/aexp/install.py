@@ -107,6 +107,28 @@ _MERGE_FILES: tuple[str, ...] = ("AGENTS.md", "CLAUDE.md")
 _BEGIN_MARKER = "<!-- agentic-experiments:begin -->"
 _END_MARKER = "<!-- agentic-experiments:end -->"
 
+# Block-merge markers for .gitignore — # is the comment char, HTML-comment
+# style wouldn't be honored by git.
+_GITIGNORE_BEGIN_MARKER = "# agentic-experiments:begin"
+_GITIGNORE_END_MARKER = "# agentic-experiments:end"
+
+# The aexp-managed .gitignore block. Pattern semantics:
+# - `.aexp/*` ignores only IMMEDIATE children of `.aexp/`, NOT the dir itself
+#   (gitignore can't re-include children of a directory that's wholly excluded;
+#   a parent-dir exclusion makes `!` exceptions a no-op). So we keep `.aexp/`
+#   itself unignored and ignore each per-machine file/subdir explicitly OR via
+#   the wildcard, with `!` exceptions for the cross-machine shared subdirs.
+# - `!.aexp/runs-index/` and `!.aexp/ledger/` re-include the
+#   transitional per-machine index directory and the universal ledger
+#   directory so they can be committed.
+_GITIGNORE_BLOCK_BODY = (
+    "# aexp per-install / per-machine state — kept gitignored\n"
+    ".aexp/*\n"
+    "# ...except these cross-machine shared subdirs:\n"
+    "!.aexp/runs-index/\n"
+    "!.aexp/ledger/\n"
+)
+
 
 ActionKind = Literal[
     "copied",
@@ -115,6 +137,8 @@ ActionKind = Literal[
     "preserved_user_modified",
     "merged_json",
     "merged_block",
+    "merged_gitignore",
+    "gitignore_migration_warning",
     "initialized_runs",
     "installed_skill",
     "wrote_marker",
@@ -671,6 +695,102 @@ def _merge_or_copy_markdown(src: Path, dst: Path, *, dry_run: bool = False) -> I
 
 
 # ---------------------------------------------------------------------------
+# .gitignore block-merge — managed `.aexp/` patterns
+# ---------------------------------------------------------------------------
+
+
+def block_merge_gitignore(existing: str, shipped_body: str) -> str:
+    """Append (or refresh) the aexp-managed block inside a ``.gitignore`` text.
+
+    Same structural pattern as :func:`block_merge_markdown` but with
+    ``#``-prefixed markers (HTML-comment markers would not be recognized
+    as gitignore comments and would silently land as patterns).
+    """
+    begin = _GITIGNORE_BEGIN_MARKER
+    end = _GITIGNORE_END_MARKER
+    block = f"{begin}\n{shipped_body.rstrip()}\n{end}\n"
+
+    if begin in existing and end in existing:
+        before, rest = existing.split(begin, 1)
+        _, after = rest.split(end, 1)
+        return f"{before}{block}{after.lstrip()}"
+
+    separator = (
+        "" if existing.endswith("\n\n") else ("\n" if existing.endswith("\n") else "\n\n")
+    )
+    return f"{existing}{separator}{block}"
+
+
+_LEGACY_AEXP_IGNORE_RE = re.compile(
+    r"^\s*\.aexp/?\s*(?:#.*)?$", re.MULTILINE
+)
+
+
+def _legacy_aexp_pattern_outside_block(text: str) -> bool:
+    """True if a legacy ``.aexp/`` or ``.aexp`` line lives outside our block.
+
+    Such a line *parent-excludes* `.aexp/`, which makes our
+    ``!.aexp/runs-index/`` exception a no-op. The install verb warns the
+    user when this is detected; they need to delete the legacy line
+    themselves (we don't auto-delete user-authored content).
+    """
+    # Strip everything between our markers, then check the remainder.
+    if _GITIGNORE_BEGIN_MARKER in text and _GITIGNORE_END_MARKER in text:
+        before, rest = text.split(_GITIGNORE_BEGIN_MARKER, 1)
+        _, after = rest.split(_GITIGNORE_END_MARKER, 1)
+        outside = before + after
+    else:
+        outside = text
+    return bool(_LEGACY_AEXP_IGNORE_RE.search(outside))
+
+
+def _merge_gitignore(dst: Path, *, dry_run: bool = False) -> list[InstallAction]:
+    """Materialize the aexp-managed `.gitignore` block in ``dst``.
+
+    Returns one or two actions: the block-merge action and (if a legacy
+    `.aexp/` rule is present outside the block) a migration warning.
+    """
+    rel = _display_relpath(dst)
+    actions: list[InstallAction] = []
+
+    if not dst.exists():
+        if not dry_run:
+            atomic_write(
+                dst,
+                f"{_GITIGNORE_BEGIN_MARKER}\n"
+                f"{_GITIGNORE_BLOCK_BODY.rstrip()}\n"
+                f"{_GITIGNORE_END_MARKER}\n",
+            )
+        actions.append(InstallAction("merged_gitignore", rel, "wrote new .gitignore"))
+        return actions
+
+    existing_text = dst.read_text(encoding="utf-8")
+    merged = block_merge_gitignore(existing_text, _GITIGNORE_BLOCK_BODY)
+    if merged == existing_text:
+        actions.append(InstallAction("skipped_identical", rel))
+    else:
+        if not dry_run:
+            atomic_write(dst, merged)
+        actions.append(InstallAction("merged_gitignore", rel))
+
+    if _legacy_aexp_pattern_outside_block(merged):
+        actions.append(
+            InstallAction(
+                "gitignore_migration_warning",
+                rel,
+                "found a `.aexp/` rule OUTSIDE the aexp-managed block. That "
+                "rule excludes the whole .aexp/ directory, which makes the "
+                "managed block's `!.aexp/runs-index/` and `!.aexp/ledger/` "
+                "exceptions a no-op (git can't re-include a child of an "
+                "excluded directory). Delete the legacy line manually so the "
+                "shared subdirs become committable.",
+            )
+        )
+
+    return actions
+
+
+# ---------------------------------------------------------------------------
 # Tree-copy helpers
 # ---------------------------------------------------------------------------
 
@@ -775,6 +895,7 @@ def install_scaffold(
     dev: bool = False,
     allow_self_install: bool = False,
     with_jupyter: bool = False,
+    machine_label: str | None = None,
 ) -> list[InstallAction]:
     """Install the bundled research-harness scaffold into ``repo_root``.
 
@@ -823,6 +944,14 @@ def install_scaffold(
         entry is additive: an existing user-defined ``jupyter`` block is
         preserved (so a customized URL/port survives).
         See ``docs/setup/jupyter-mcp.md`` for the full setup recipe.
+    machine_label : str or None, optional
+        Short identifier for this install, written to
+        ``.aexp/installed.json::machine_label``. Tagged onto ledger
+        entries to record which install registered each run. ``None``
+        (default) keeps the previous marker's value if any, else falls
+        back to ``socket.gethostname().split(".")[0]``. Pass an
+        explicit string on HPC clusters where per-node hostnames are
+        noisy (e.g. ``machine_label="cluster"``).
 
     Returns
     -------
@@ -1000,6 +1129,16 @@ def install_scaffold(
     # target directory.
     actions.extend(_install_slash_commands(root, force=force, dry_run=dry_run))
 
+    # 3e. Block-merge the aexp-managed `.gitignore` block. Ensures
+    #     `.aexp/installed.json` (per-machine) stays ignored while the
+    #     cross-machine subdirs `.aexp/runs-index/` (transitional) and
+    #     `.aexp/ledger/` (canonical) are committable. New consumers get
+    #     a fresh `.gitignore` written; existing ones get a managed
+    #     block appended (idempotent). If a legacy `.aexp/` pattern is
+    #     detected outside our block, a warning is emitted (we don't
+    #     auto-delete user-authored content).
+    actions.extend(_merge_gitignore(root / ".gitignore", dry_run=dry_run))
+
     # 4. Initialize signac project.
     run_store_path = (root / run_store).resolve()
     if not dry_run:
@@ -1018,6 +1157,7 @@ def install_scaffold(
         run_store_path=run_store,
         scaffold_sha=scaffold_sha,
         jupyter_enabled=with_jupyter,
+        machine_label=machine_label,
     )
     actions.append(InstallAction("wrote_marker", _display_relpath(marker_path)))
 
