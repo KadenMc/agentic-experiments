@@ -687,6 +687,96 @@ def test_validator_treats_ledger_entry_as_here(installed_repo: Path) -> None:
     assert result.ok
 
 
+def test_validator_batch_citation_resolves_via_ledger_only(
+    installed_repo: Path,
+) -> None:
+    """Regression: batch citations must resolve against ledger entries
+    that have NO local signac workspace.
+
+    Before the fix, the batch-citation check only walked the local signac
+    project (via `list_batches`), so a finding citing
+    `{type: batch, experiment_id: E001, selector: {condition: X}}` whose
+    only matching runs lived in the ledger from another machine would
+    spuriously emit `finding.empty_batch` even though the universal ledger
+    had matching terminal runs.
+    """
+    kb = installed_repo / "kb"
+    _seed_h_e_artifacts(kb)
+
+    # Synthesize a ledger entry that lives ONLY in .aexp/ledger/
+    # (no corresponding .runs/workspace/<id>/ on this machine).
+    #
+    # NOTE on `registered_machine`: this field is *informational
+    # provenance* — the validator does NOT consult it during batch
+    # resolution (or any other resolution path). The string `"cluster"`
+    # below is purely to mirror the real-world scenario this test
+    # regresses (cluster-registered runs satisfying a citation read on
+    # the laptop); the test would pass identically with any other value
+    # in `registered_machine`. The Phase 2 design choice was that the
+    # ledger is universal: a run is in the ledger or it isn't, and
+    # machine identity does not gate satisfaction.
+    jid = "9" * 32
+    target = installed_repo / LEDGER_DIR_REL / f"{jid}.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        _json.dumps(
+            {
+                "schema_version": 1,
+                "job_id": jid,
+                "status": "complete",
+                "statepoint": {
+                    "experiment_id": "E001",
+                    "condition": "remote_only",
+                },
+                "registered_machine": "cluster",
+                "promoted_at": "2026-05-26T00:00:00Z",
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    # F001 cites a BATCH (not a job id) by experiment + condition selector.
+    _write_artifact(
+        kb,
+        "research/findings",
+        "F001-a.md",
+        {
+            "id": "F001",
+            "type": "finding",
+            "hypothesis": "H001",
+            "experiment": "E001",
+            "impact": "moderate",
+            "created": "2026-04-20",
+            "supporting_runs": [
+                {
+                    "type": "batch",
+                    "experiment_id": "E001",
+                    "selector": {"condition": "remote_only"},
+                }
+            ],
+        },
+        "# F001\n> **Hypothesis**: [[H001]]\n> **Experiment**: [[E001]]\n> **Impact**: moderate\n> **Created**: 2026-04-20\n",
+    )
+
+    result = validate_repo(installed_repo, mode="runs-only")
+    citation_codes = [
+        i.code
+        for i in result.issues
+        if i.code
+        in (
+            "finding.broken_run_citation",
+            "finding.absent_run_citation",
+            "finding.empty_batch",
+            "finding.absent_batch_runs",
+        )
+    ]
+    assert citation_codes == [], [i.message for i in result.issues]
+    assert result.ok
+
+
 def test_validator_ledger_supersedes_runs_index_for_same_job(
     installed_repo: Path,
 ) -> None:

@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-05-26
+
+### Fixed
+
+- **Validator batch citations now resolve against the universal ledger.**
+  In 0.6.0 the job-id citation check correctly consulted both the local
+  signac project AND `.aexp/ledger/<id>.json`, but the batch-citation
+  check still went through `aexp.linking.list_batches()` — which walks
+  the local signac project only. The result: a finding citing a batch
+  selector like `{type: batch, experiment_id: E005, selector: {condition:
+  X}}` would spuriously emit `finding.empty_batch` even when the
+  universal ledger held matching terminal runs from another machine.
+  Now the batch-resolution path also builds an `(experiment_id,
+  condition) -> [job_ids]` index from ledger entries and counts those
+  matches before falling through to the empty/elsewhere paths. Closes
+  the gap surfaced during the electricrag laptop validate at 0.6.0:
+  after the cluster backfilled, F005 batch citations correctly resolve.
+  Regression test: `tests/test_validate_cross_machine.py::test_validator_batch_citation_resolves_via_ledger_only`.
+
+### Notes
+
+- `registered_machine` in ledger entries remains *informational
+  provenance only* — the validator does not consult it for resolution.
+  A run is in the ledger or it isn't; which machine registered it
+  doesn't affect whether it satisfies a citation. (This is intentional
+  per the Phase 2 universal-ledger design and is documented in the new
+  regression test's comment.)
+
+### Note about PyPI
+
+0.6.0 was tagged in source but never published to PyPI; this 0.6.1
+release is the first publish of the cross-machine-ledger surface. PyPI
+history therefore goes 0.5.0 → 0.6.1.
+
 ## [0.6.0] - 2026-05-25
 
 ### Added
