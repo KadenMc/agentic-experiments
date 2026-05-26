@@ -288,7 +288,9 @@ def _check_finding_citations(
         error severity regardless — those reflect malformed citations,
         not cross-machine ledger gaps.
     """
-    # Lazy import to keep validate.py importable when runs_index has issues.
+    # Lazy imports to keep validate.py importable when runs_index/ledger
+    # have issues, and to defer the (small) import cost.
+    from aexp.ledger import list_ledger_job_ids
     from aexp.runs_index import collect_known_elsewhere
 
     issues: list[Issue] = []
@@ -306,13 +308,42 @@ def _check_finding_citations(
     except Exception:
         findings = []
 
-    known_job_ids: set[str] = set(j.id for j in project) if project is not None else set()
+    # Phase 2: universal ledger is the canonical source-of-truth when
+    # present. Citations resolve against the union of:
+    #   - .aexp/ledger/*.json (Phase 2, universal — every machine sees this)
+    #   - local .runs/workspace/*/ (the legacy + still-current local view)
+    # The ledger is the "in or out" canonical answer; the local store is
+    # additive (a freshly-promoted run lives locally before it makes the
+    # next git push). Phase 1B's per-machine indexes stay as a
+    # transitional layer (Phase 2.5 coexistence) — they emit the
+    # finding.absent_run_citation warning only when a citation is in an
+    # index BUT NOT in the ledger.
+    ledger_ids = list_ledger_job_ids(repo_root)
+    local_ids: set[str] = (
+        set(j.id for j in project) if project is not None else set()
+    )
+    # Union: ledger entries + local terminal runs both count as "here".
+    known_job_ids: set[str] = ledger_ids | local_ids
+
     # Phase 1B: union of per-machine index files at .aexp/runs-index/<machine>.json.
-    # Maps job_id -> {experiment_id?, condition?, status?, ledger_machine, ...}.
-    # When this is populated, citations resolving here-but-not-locally emit
-    # finding.absent_run_citation (warning) instead of finding.broken_run_citation
-    # (error) — distinguishing "elsewhere" from "broken".
-    known_elsewhere = collect_known_elsewhere(repo_root)
+    # Now scoped to ONLY jobs absent from the ledger (the index is a back-compat
+    # bridge during the deprecation window; entries already in the ledger
+    # supersede their index appearances).
+    raw_elsewhere = collect_known_elsewhere(repo_root)
+    known_elsewhere = {
+        jid: entry for jid, entry in raw_elsewhere.items()
+        if jid not in known_job_ids
+    }
+
+    # An *authoritative source* is something we could in principle compare
+    # against — even if it's empty. A consumer who's `aexp install`ed but
+    # not yet run anything has an empty local store; a citation to a
+    # made-up job_id is still broken (the store says it's not there).
+    # We only emit `finding.no_run_store` when there is genuinely no
+    # source available — no ledger dir, no signac project, no index files.
+    has_authority = (
+        bool(ledger_ids) or project is not None or bool(raw_elsewhere)
+    )
     # Build a (experiment_id, condition) -> [job_ids] lookup so batch
     # citations matching only elsewhere-entries downgrade to a warning too.
     elsewhere_batches: dict[tuple[str, str], list[dict[str, Any]]] = {}
@@ -322,19 +353,21 @@ def _check_finding_citations(
         if isinstance(exp, str) and isinstance(cond, str):
             elsewhere_batches.setdefault((exp, cond), []).append(entry)
 
-    # finding.no_run_store: a single warning per validate run when neither
-    # the local store nor any cross-machine index has any data. Without
-    # this, the validator silently passes citations through which used to
-    # be invisible (validate.py:341-342 legacy tolerance branch).
-    if project is None and not known_elsewhere:
+    # finding.no_run_store: a single warning per validate run when no
+    # source-of-truth for run identity is available — no ledger entries,
+    # no local store, no cross-machine indexes. Without this, the validator
+    # silently passes citations through which used to be invisible
+    # (validate.py:341-342 legacy tolerance branch).
+    if not has_authority:
         issues.append(
             Issue(
                 code="finding.no_run_store",
                 message=(
-                    "no local .runs/ project AND no .aexp/runs-index/*.json "
-                    "files — finding-citation existence checks are skipped. "
-                    "Run `aexp install` (creates the local run store) or pull "
-                    "an index file from another machine that has the runs."
+                    "no .aexp/ledger/ entries, no local .runs/ project, AND "
+                    "no .aexp/runs-index/*.json files — finding-citation "
+                    "existence checks are skipped. Run `aexp install` + "
+                    "`aexp ledger backfill` on each machine with runs, then "
+                    "pull on this one."
                 ),
                 severity="warning",
             )
@@ -390,8 +423,8 @@ def _check_finding_citations(
                     continue
                 if skip_existence_check:
                     pass  # --strict-runs=off: skip existence check
-                elif project is not None and jid in known_job_ids:
-                    pass  # here: clean
+                elif jid in known_job_ids:
+                    pass  # here: clean (in ledger OR local store)
                 elif jid in known_elsewhere:
                     # elsewhere: registered on another machine's index but
                     # not present locally. Always emit as warning regardless
@@ -413,19 +446,20 @@ def _check_finding_citations(
                             severity="warning",
                         )
                     )
-                elif project is not None or known_elsewhere:
+                elif has_authority:
                     # broken: not in any known ledger. Severity per strict_runs.
-                    # (When neither store nor index exists, the no_run_store
-                    # warning at the top covers this case — we don't want a
-                    # broken_run_citation error for every citation in that
-                    # situation.)
+                    # (When neither ledger nor store nor index exists, the
+                    # finding.no_run_store warning at the top covers this case
+                    # — we don't want a broken_run_citation for every citation
+                    # in that situation.)
                     issues.append(
                         Issue(
                             code="finding.broken_run_citation",
                             message=(
                                 f"finding {finding.id}: supporting_runs[{idx}] "
-                                f"references job {jid} which does not exist in .runs/ "
-                                f"or any .aexp/runs-index/*.json"
+                                f"references job {jid} which does not exist in "
+                                f".aexp/ledger/, .runs/, or any "
+                                f".aexp/runs-index/*.json"
                             ),
                             path=finding.path,
                             detail=f"job_id={jid}",
@@ -496,7 +530,7 @@ def _check_finding_citations(
                     )
                     continue
 
-                if project is None and not known_elsewhere:
+                if not has_authority:
                     continue  # no_run_store warning already emitted
 
                 # broken / empty: no local or elsewhere matches.

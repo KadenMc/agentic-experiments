@@ -943,6 +943,16 @@ def runs_export_index_cmd(
     from aexp.runs_index import export_index
     from aexp.utils.paths import find_repo_root
 
+    # Deprecation: Phase 2's `aexp ledger backfill` supersedes this verb.
+    # The index file mechanism stays through one minor-version window for
+    # consumers still upgrading from Phase 1B.
+    console.print(
+        "[yellow]DEPRECATED[/yellow] `aexp runs-export-index` is superseded "
+        "by `aexp ledger backfill` (Phase 2). The runs-index/ mechanism "
+        "stays for one release for back-compat reads; switch to the "
+        "ledger when you can."
+    )
+
     root = find_repo_root()
     target = Path(out).resolve() if out else None
     label_override = machine_label or None

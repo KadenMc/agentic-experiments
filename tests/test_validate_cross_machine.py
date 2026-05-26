@@ -19,6 +19,11 @@ import pytest
 import yaml
 
 from aexp.install import install_scaffold
+from aexp.ledger import (
+    LEDGER_DIR_REL,
+    backfill_ledger,
+    list_ledger_job_ids,
+)
 from aexp.runs_index import (
     INDEX_DIR_REL,
     SCHEMA_VERSION,
@@ -592,3 +597,294 @@ def test_cli_runs_export_index_writes_file(
     assert "[OK]" in result.output
     out = installed_repo / INDEX_DIR_REL / "cluster.json"
     assert out.is_file()
+
+
+def test_cli_runs_export_index_prints_deprecation_warning(
+    installed_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Phase 2 ships a deprecation warning on the Phase 1B verb."""
+    from typer.testing import CliRunner
+
+    from aexp.cli import app
+
+    monkeypatch.chdir(installed_repo)
+    runner = CliRunner()
+    result = runner.invoke(app, ["runs-export-index", "--as", "cluster"])
+    assert result.exit_code == 0
+    assert "DEPRECATED" in result.output
+    assert "ledger backfill" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 — universal ledger as validator source
+# ---------------------------------------------------------------------------
+
+
+def _write_ledger_entry(
+    repo: Path,
+    job_id: str,
+    *,
+    status: str = "complete",
+    machine: str = "cluster",
+) -> Path:
+    """Synthetically write a ledger entry without spinning up a signac job."""
+    target = repo / LEDGER_DIR_REL / f"{job_id}.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        _json.dumps(
+            {
+                "schema_version": 1,
+                "job_id": job_id,
+                "status": status,
+                "statepoint": {"experiment_id": "E001", "code_commit": "deadbeef"},
+                "registered_machine": machine,
+                "promoted_at": "2026-05-26T00:00:00Z",
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return target
+
+
+def test_validator_treats_ledger_entry_as_here(installed_repo: Path) -> None:
+    """A finding citing a job present in the ledger → clean, no warning."""
+    kb = installed_repo / "kb"
+    _seed_h_e_artifacts(kb)
+    jid = "c" * 32
+    _write_ledger_entry(installed_repo, jid, status="complete")
+    _write_artifact(
+        kb,
+        "research/findings",
+        "F001-a.md",
+        {
+            "id": "F001",
+            "type": "finding",
+            "hypothesis": "H001",
+            "experiment": "E001",
+            "impact": "moderate",
+            "created": "2026-04-20",
+            "supporting_runs": [{"type": "job", "id": jid}],
+        },
+        "# F001\n> **Hypothesis**: [[H001]]\n> **Experiment**: [[E001]]\n> **Impact**: moderate\n> **Created**: 2026-04-20\n",
+    )
+
+    result = validate_repo(installed_repo, mode="runs-only")
+    # Citation should resolve cleanly — no broken/absent codes about jid.
+    citation_codes = [
+        i.code
+        for i in result.issues
+        if i.code in (
+            "finding.broken_run_citation",
+            "finding.absent_run_citation",
+            "finding.empty_batch",
+            "finding.absent_batch_runs",
+        )
+    ]
+    assert citation_codes == [], [i.message for i in result.issues]
+    assert result.ok
+
+
+def test_validator_ledger_supersedes_runs_index_for_same_job(
+    installed_repo: Path,
+) -> None:
+    """Job in both ledger AND index → counted as ledger-here, no warning."""
+    kb = installed_repo / "kb"
+    _seed_h_e_artifacts(kb)
+    jid = "d" * 32
+    # Same job in both ledger and Phase 1B index
+    _write_ledger_entry(installed_repo, jid, status="complete", machine="cluster")
+    _write_index_file(
+        installed_repo,
+        "cluster",
+        [{"job_id": jid, "experiment_id": "E001", "status": "complete"}],
+    )
+    _write_artifact(
+        kb,
+        "research/findings",
+        "F001-a.md",
+        {
+            "id": "F001",
+            "type": "finding",
+            "hypothesis": "H001",
+            "experiment": "E001",
+            "impact": "moderate",
+            "created": "2026-04-20",
+            "supporting_runs": [{"type": "job", "id": jid}],
+        },
+        "# F001\n> **Hypothesis**: [[H001]]\n> **Experiment**: [[E001]]\n> **Impact**: moderate\n> **Created**: 2026-04-20\n",
+    )
+
+    result = validate_repo(installed_repo, mode="runs-only")
+    absent = [i for i in result.issues if i.code == "finding.absent_run_citation"]
+    broken = [i for i in result.issues if i.code == "finding.broken_run_citation"]
+    assert absent == [], [i.message for i in absent]
+    assert broken == [], [i.message for i in broken]
+
+
+def test_mark_status_auto_promotes_to_ledger(installed_repo: Path) -> None:
+    """The lifecycle hook in mark_status writes a ledger entry on terminal."""
+    from aexp.runs import create_run, mark_status
+
+    job = create_run(
+        experiment_id="E001",
+        statepoint={"c": "f"},
+        repo_root=installed_repo,
+    )
+    assert job.id not in list_ledger_job_ids(installed_repo)
+    mark_status(job, "complete")
+    assert job.id in list_ledger_job_ids(installed_repo)
+
+
+def test_backfill_promotes_only_terminal_jobs(installed_repo: Path) -> None:
+    """backfill_ledger walks the run store and promotes terminal jobs only."""
+    from aexp.runs import create_run, mark_status
+
+    # One terminal, one not.
+    done = create_run(
+        experiment_id="E001",
+        statepoint={"c": "done"},
+        repo_root=installed_repo,
+    )
+    mark_status(done, "complete")
+    pending = create_run(
+        experiment_id="E001",
+        statepoint={"c": "pending"},
+        repo_root=installed_repo,
+    )
+    # Wipe ledger and re-backfill from scratch.
+    import shutil
+    shutil.rmtree(installed_repo / LEDGER_DIR_REL, ignore_errors=True)
+    promoted, skipped = backfill_ledger(installed_repo)
+    assert promoted == 1
+    assert skipped == 0
+    ids = list_ledger_job_ids(installed_repo)
+    assert done.id in ids
+    assert pending.id not in ids
+
+
+def test_backfill_is_idempotent(installed_repo: Path) -> None:
+    """Second backfill skips already-present entries."""
+    from aexp.runs import create_run, mark_status
+
+    job = create_run(
+        experiment_id="E001",
+        statepoint={"c": "f"},
+        repo_root=installed_repo,
+    )
+    mark_status(job, "complete")
+    promoted1, _ = backfill_ledger(installed_repo)
+    promoted2, skipped2 = backfill_ledger(installed_repo)
+    # First call may be 0 (hook already promoted on mark_status) or 1.
+    # Second call must be 0 promotions, 1 skip.
+    assert promoted2 == 0
+    assert skipped2 >= 1
+
+
+def test_link_to_experiment_re_promotes_terminal_job(installed_repo: Path) -> None:
+    """aexp link on a terminal job updates the ledger entry's run_link."""
+    from aexp.ledger import load_ledger_entry
+    from aexp.linking import link_to_experiment
+    from aexp.runs import create_run, mark_status
+
+    job = create_run(
+        experiment_id="E001",
+        statepoint={"c": "f"},
+        repo_root=installed_repo,
+    )
+    mark_status(job, "complete")
+    pre = load_ledger_entry(installed_repo, job.id)
+    assert pre is not None
+    assert pre["run_link"]["experiment_id"] == "E001"
+    # Stamp a different experiment via link
+    _write_artifact(
+        installed_repo / "kb",
+        "research/experiments",
+        "E042-other.md",
+        {
+            "id": "E042",
+            "type": "experiment",
+            "status": "DESIGNED",
+            "hypothesis": "H001",
+            "created": "2026-04-20",
+        },
+        "# E042\n> **Status**: DESIGNED\n> **Hypothesis**: [[H001]]\n> **Created**: 2026-04-20\n",
+    )
+    link_to_experiment(
+        job.id, experiment_id="E042", repo_root=installed_repo
+    )
+    post = load_ledger_entry(installed_repo, job.id)
+    assert post is not None
+    assert post["run_link"]["experiment_id"] == "E042"
+
+
+def test_validator_no_run_store_fires_only_when_no_authority(
+    installed_repo: Path,
+) -> None:
+    """no_run_store warning only fires when no ledger, no store, no index."""
+    import shutil
+
+    kb = installed_repo / "kb"
+    _seed_h_e_artifacts(kb)
+    _write_finding_citing_missing_job(kb)
+
+    # 1) With local store (no ledger, no indexes) — should NOT emit no_run_store.
+    result_with_store = validate_repo(installed_repo, mode="runs-only")
+    assert not [
+        i for i in result_with_store.issues if i.code == "finding.no_run_store"
+    ], "no_run_store should not fire when local store is present"
+
+    # 2) Remove everything: no ledger, no store, no indexes → SHOULD emit.
+    shutil.rmtree(installed_repo / ".runs", ignore_errors=True)
+    shutil.rmtree(installed_repo / ".aexp" / "ledger", ignore_errors=True)
+    shutil.rmtree(installed_repo / ".aexp" / "runs-index", ignore_errors=True)
+    result_empty = validate_repo(installed_repo, mode="runs-only")
+    no_store = [
+        i for i in result_empty.issues if i.code == "finding.no_run_store"
+    ]
+    assert len(no_store) == 1, [i.code for i in result_empty.issues]
+    # 3) Add a ledger entry — no_run_store warning should disappear.
+    _write_ledger_entry(installed_repo, "e" * 32)
+    result_with_ledger = validate_repo(installed_repo, mode="runs-only")
+    assert not [
+        i for i in result_with_ledger.issues if i.code == "finding.no_run_store"
+    ]
+
+
+def test_promote_to_ledger_excludes_per_machine_debris(
+    installed_repo: Path,
+) -> None:
+    """Sanitization: ledger entry must not embed absolute paths or
+    tracker_log content even if the source doc had them."""
+    from aexp.ledger import load_ledger_entry
+    from aexp.runs import create_run, mark_status
+
+    job = create_run(
+        experiment_id="E001",
+        statepoint={"c": "f"},
+        repo_root=installed_repo,
+    )
+    # Pollute the doc with a fake absolute-path field — sanitization should drop it.
+    job.doc["__test_abs_path"] = str(installed_repo.absolute())
+    job.doc["tracker"] = {
+        "backend": "wandb",
+        "run_id": "abc123",
+        "url": "https://wandb.ai/foo/bar",
+        "group": "test-group",
+        "init_kwargs": {"dir": str(installed_repo.absolute())},  # <- abs path debris
+        "config": {"dir": str(installed_repo.absolute())},  # <- abs path debris
+    }
+    mark_status(job, "complete")
+    entry = load_ledger_entry(installed_repo, job.id)
+    assert entry is not None
+    # Tracker block: only pointer fields, no init_kwargs or config
+    assert "tracker" in entry
+    assert "init_kwargs" not in entry["tracker"]
+    assert "config" not in entry["tracker"]
+    # Top-level: no leaked absolute path through the test field
+    assert "__test_abs_path" not in entry
+    # Pointer fields preserved
+    assert entry["tracker"]["url"] == "https://wandb.ai/foo/bar"
+    assert entry["tracker"]["run_id"] == "abc123"
