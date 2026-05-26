@@ -904,6 +904,61 @@ def validate(
 
 
 # ---------------------------------------------------------------------------
+# runs-export-index — Phase 1B
+# ---------------------------------------------------------------------------
+
+
+@app.command("runs-export-index")
+def runs_export_index_cmd(
+    machine_label: str = typer.Option(
+        "",
+        "--as",
+        "--machine-label",
+        help=(
+            "Override the machine label for this export. Defaults to "
+            "`installed.json::machine_label` (typically short hostname). "
+            "Pass a stable name on HPC where per-node hostnames are noisy."
+        ),
+    ),
+    out: str = typer.Option(
+        "",
+        "--out",
+        help=(
+            "Output file path. Defaults to "
+            "`<repo>/.aexp/runs-index/<machine_label>.json`."
+        ),
+    ),
+) -> None:
+    """Export this machine's terminal-state runs to a JSON index file.
+
+    Each machine periodically runs this verb and commits the resulting
+    file. Other machines pull and the validator unions the indexes to
+    distinguish "registered elsewhere" (warning) from "broken" (error)
+    citations.
+
+    Phase 1B mechanism — superseded by `aexp ledger backfill` once
+    Phase 2's universal ledger lands. Deprecation window: one minor
+    version after Phase 2 ships.
+    """
+    from aexp.runs_index import export_index
+    from aexp.utils.paths import find_repo_root
+
+    root = find_repo_root()
+    target = Path(out).resolve() if out else None
+    label_override = machine_label or None
+
+    path = export_index(root, out=target, machine_label=label_override)
+    # Count entries for the summary line.
+    import json as _json
+    try:
+        entries = _json.loads(path.read_text(encoding="utf-8")).get("entries", [])
+        n = len(entries)
+    except Exception:
+        n = -1
+    console.print(f"[green][OK][/green] wrote {n} terminal-run entries to {path}")
+
+
+# ---------------------------------------------------------------------------
 # slash-command templates
 # ---------------------------------------------------------------------------
 
