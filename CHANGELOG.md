@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Daemonless work-stealing pool: `aexp.workpool.WorkPool` + `aexp.utils.linklease`.**
+  For N independently-launched workers that must drain one body of work sharing only a
+  filesystem, with no daemon/broker/scheduler and workers that churn (join late, die on
+  walltime) — the niche where redis/celery/dask (need a broker process) and SLURM job
+  arrays (static, scheduler-driven) don't apply. Each item is claimed with an NFS-safe
+  `LinkLease` (`os.link` + `st_nlink==2`, atomic across NFS versions where `flock`/
+  `O_EXCL` are not; TTL-lease + heartbeat refresh + CAS-style stale-break + token-checked
+  release). `WorkPool.run(process, on_error=...)` owns the claim → process → release
+  protocol and exits only when every item is globally done (block-and-retry, so a
+  dead-but-not-yet-stale worker's item is never stranded). `probe_exclusive_create()` is a
+  fail-closed startup check that refuses to run on a filesystem that can't do atomic
+  exclusive link-create. The lease is an **efficiency** optimization, not the correctness
+  mechanism — correctness rests on the caller's atomic output write (+ an idempotent
+  ledger where one exists), so occasional double-processing is safe by design. Opt-in
+  (not imported at package init), pure-stdlib (no new dependency). Validated by an
+  N-process spawn hammer (`tests/test_workpool.py`) asserting completeness + single
+  durable record + bounded duplicates + liveness under simulated NFS attribute-cache lag.
+  See `docs/workpool.md` (incl. a `workpool` vs `aexp.queue` disambiguation).
+
 ## [0.6.1] - 2026-05-26
 
 ### Fixed
