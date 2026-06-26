@@ -1,29 +1,19 @@
 # Airgapped relay (`aexp.airgapped`)
 
-> ## Do you need this?
->
-> **Only if** the machine running your Jupyter kernel / agent has
-> **no outbound internet**, but a sibling machine sharing `$HOME` *does*.
-> This is tooling for the airgapped-compute case — most commonly seen on
-> secure HPC clusters, but the pattern also shows up at regulated/clinical
-> sites, government/research labs, and any setup where one machine is
-> network-isolated by policy and a sibling reaches the internet.
->
-> If `git pull` works from where you run Jupyter — your local machine,
-> cloud VM, a cluster whose compute nodes have internet — **stop
-> reading. You don't need this**, and importing `aexp.airgapped` would
-> be dead weight. The
-> module is not imported by `aexp` at package init for exactly this
-> reason; nothing in your workflow changes if you ignore it.
->
-> If you *are* airgapped on compute but have a sibling node with
-> internet, read on.
+`aexp.airgapped` is a thin SSH bridge that runs whitelisted git / wandb commands
+on an internet-having sibling node on behalf of network-isolated compute. The
+agent (and this module) live on your **local machine** (the one you run Claude
+Code from); each relay op is one `ssh` call to the sibling node. It is opt-in
+(`from aexp.airgapped import RelayClient`) and is not imported at `aexp` package
+init, so it costs nothing if you never use it.
 
-`aexp.airgapped` is a thin SSH bridge that runs whitelisted git / wandb
-commands on the internet-having sibling node on behalf of the airgapped
-compute. The agent (and this module) live on your **local machine** (the
-machine you run Claude Code from); each relay op is one `ssh` call to
-the sibling node.
+**When to reach for it.** Only when the machine running your Jupyter kernel / agent
+has **no outbound internet** but a sibling machine sharing `$HOME` *does* — most
+commonly a secure HPC cluster, but also regulated/clinical sites, government or
+research labs, and anywhere one machine is network-isolated by policy while a
+sibling reaches the internet. If `git pull` already works from where you run
+Jupyter — your laptop, a cloud VM, a cluster whose compute nodes have internet —
+you don't need this.
 
 ## Two topologies — which one are you?
 
