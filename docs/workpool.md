@@ -1,20 +1,17 @@
 # Work-stealing pool (`aexp.workpool`)
 
-> ## Do you need this?
->
-> **Only if** several **already-running, independent** worker processes must
-> cooperatively drain *one* body of work, sharing **only a filesystem**, with
-> **no daemon/broker/scheduler** available and **workers that come and go**
-> (join late, die on walltime/VPN).
->
-> If a real scheduler fits — `sbatch --array`, a job queue, GNU parallel from a
-> single master, redis/celery/dask — **use that instead**; `aexp.workpool` is for
-> the niche where none of those apply because the workers are launched
-> independently (interactively, by an agent) and there is no broker process you're
-> allowed to run. Most commonly: agent-driven GPU jobs on a shared-filesystem HPC.
->
-> The module is **not** imported at `aexp` package init; nothing in your workflow
-> changes if you ignore it. Import it explicitly: `from aexp.workpool import WorkPool`.
+`WorkPool` lets several **already-running, independent** worker processes
+cooperatively drain *one* body of work over a **shared filesystem** — with no
+daemon, broker, or scheduler, and with workers free to join late or die mid-run.
+It is opt-in (`from aexp.workpool import WorkPool`) and is not imported at `aexp`
+package init, so it costs nothing if you never use it.
+
+**When to reach for it.** Only when a real scheduler doesn't fit. If `sbatch
+--array`, a job queue, GNU parallel from a single master, or redis/celery/dask
+works for you, use that instead. `aexp.workpool` is for the niche where none of
+them apply — because the workers are launched independently (interactively, or by
+an agent) and there is no broker process you're allowed to run. Most commonly:
+agent-driven GPU jobs on a shared-filesystem HPC.
 
 ## What it does
 
