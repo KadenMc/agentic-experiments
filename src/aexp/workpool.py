@@ -91,6 +91,26 @@ class WorkPool:
         is currently claimable but the work is not globally done. Default ``(1.0, 30.0)``.
     log : callable, optional
         ``log(message: str)`` ASCII-only sink for progress/diagnostics. Defaults silent.
+    max_attempts : int, optional
+        Bounded retry-on-failure (default ``1`` = off, i.e. today's behavior exactly:
+        a ``process`` exception routes straight to ``on_error``). When ``> 1``, a
+        retryable exception (see ``retryable``) writes no output, so ``is_done`` stays
+        false and the item is reclaimed and retried -- by any worker, so retry spans the
+        fleet (a heavy item that OOMs a small GPU can be re-run on a bigger one). After
+        ``max_attempts`` failures the item is exhausted (see ``on_exhausted``). Worker
+        *death* (no exception) is orthogonal -- always reclaimed via the stale lease,
+        never counted as an attempt.
+    on_exhausted : callable, optional
+        ``on_exhausted(item_id) -> None``, called once an item has failed
+        ``max_attempts`` times. **Required when ``max_attempts > 1``** and MUST make
+        ``is_done(item_id)`` true durably (e.g. write an excluded/void output) -- that is
+        what stops the item being reclaimed forever and lets the pool terminate (the same
+        role a successful ``process`` output plays). Should be idempotent (a rare
+        double-exhaust under lag must be safe), like ``process``.
+    retryable : exception type or tuple of types, optional
+        Restrict bounded retry to these exception types (default ``None`` = all
+        ``Exception``\\ s count once ``max_attempts > 1``). A non-retryable exception
+        falls through to ``on_error`` as usual.
 
     Notes
     -----
@@ -108,6 +128,9 @@ class WorkPool:
         heartbeat: float | None = None,
         backoff: tuple[float, float] = (1.0, 30.0),
         log: Callable[[str], None] | None = None,
+        max_attempts: int = 1,
+        on_exhausted: Callable[[str], None] | None = None,
+        retryable: type[BaseException] | tuple[type[BaseException], ...] | None = None,
     ) -> None:
         self._item_ids: list[str] = list(item_ids)
         self._validate_ids(self._item_ids)
@@ -118,6 +141,25 @@ class WorkPool:
         self._heartbeat = heartbeat if heartbeat is not None else ttl / 5.0
         self._backoff_min, self._backoff_max = backoff
         self._log = log
+
+        # Retry-on-failure (opt-in; max_attempts == 1 reproduces today exactly -- no
+        # attempt counting, no exhaustion, an exception routes straight to on_error).
+        if max_attempts < 1:
+            raise ValueError(f"max_attempts must be >= 1, got {max_attempts}")
+        if max_attempts > 1 and on_exhausted is None:
+            raise ValueError(
+                "max_attempts > 1 enables retry-on-failure, so on_exhausted is "
+                "required: when an item has failed max_attempts times the pool calls "
+                "on_exhausted(item), which MUST make is_done(item) true durably (e.g. "
+                "write an excluded/void output). Without it a permanently-failing item "
+                "would be reclaimed forever and the pool would never terminate."
+            )
+        self._max_attempts = max_attempts
+        self._on_exhausted = on_exhausted
+        self._retryable = retryable
+        # Per-item attempt tally lives beside the leases (its own dir so it never
+        # collides with <item>.lease). Created lazily on the first failure.
+        self._attempts_dir = Path(lease_dir).parent / "_attempts"
 
         self._active_item: str | None = None
         self._lock = threading.Lock()  # guards _active_item across the heartbeat thread
@@ -202,14 +244,71 @@ class WorkPool:
             while (item := self.claim_next()) is not None:
                 try:
                     process(item)
-                except Exception as exc:  # noqa: BLE001 -- routed to on_error by contract
-                    if on_error is None:
+                except Exception as exc:  # noqa: BLE001 -- routed by contract below
+                    if not self._handle_failure(item, exc, on_error):
                         raise
-                    on_error(item, exc)
                 finally:
                     self.mark_done(item)
                 worker_done += 1
                 self._log_progress(worker_done, total, t0)
+
+    def _handle_failure(
+        self,
+        item_id: str,
+        exc: Exception,
+        on_error: Callable[[str, Exception], None] | None,
+    ) -> bool:
+        """Route a ``process`` failure. Returns True if handled, False to propagate.
+
+        A *retryable* failure (see :meth:`_is_retryable`) writes NO output, so
+        ``is_done`` stays false and the item is reclaimed -- by this worker or a peer,
+        so retry is cross-worker for free. After ``max_attempts`` failures
+        ``on_exhausted`` makes the item terminal. A non-retryable failure goes to the
+        caller's ``on_error`` (or propagates if none).
+        """
+        if self._is_retryable(exc):
+            n = self._record_attempt(item_id)
+            if n >= self._max_attempts:
+                self._emit(
+                    f"workpool: {item_id} exhausted after {n} attempts "
+                    f"({type(exc).__name__}); calling on_exhausted"
+                )
+                assert self._on_exhausted is not None  # guaranteed by __init__
+                self._on_exhausted(item_id)
+            else:
+                self._emit(
+                    f"workpool: {item_id} attempt {n}/{self._max_attempts} failed "
+                    f"({type(exc).__name__}); will retry"
+                )
+            return True
+        if on_error is not None:
+            on_error(item_id, exc)
+            return True
+        return False
+
+    def _emit(self, msg: str) -> None:
+        if self._log is not None:
+            self._log(msg)
+
+    def _is_retryable(self, exc: Exception) -> bool:
+        """True iff retry is enabled (max_attempts > 1) and ``exc`` is in scope."""
+        if self._max_attempts <= 1:
+            return False
+        if self._retryable is None:
+            return True
+        return isinstance(exc, self._retryable)
+
+    def _record_attempt(self, item_id: str) -> int:
+        """Record one failed attempt and return the running count (cross-worker durable).
+
+        Each attempt is a uniquely-named marker under ``_attempts/<item_id>/`` -- so
+        counting is lag-tolerant and needs no read-modify-write (matching the pool's
+        NFS-safety model). Only reached when retry is enabled (max_attempts > 1).
+        """
+        d = self._attempts_dir / item_id
+        d.mkdir(parents=True, exist_ok=True)
+        (d / uuid.uuid4().hex).write_text(self._owner_id, encoding="ascii")
+        return sum(1 for _ in d.iterdir())
 
     def _log_progress(self, worker_done: int, total: int, t0: float) -> None:
         if self._log is None:
