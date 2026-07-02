@@ -121,6 +121,16 @@ WorkPool(
 ).run(process)
 ```
 
+**Heterogeneous-pool caveat.** Retry recovers a failure only if a *later* attempt can
+succeed. When failures are **capacity-bound** — an item too big for a small worker, so it
+fails *deterministically* on that worker — a heterogeneous pool can *false-exhaust* the item:
+undersized workers burn its attempts before a bigger one claims it. Keep the bound uniform
+(do **not** special-case it by worker size — that pushes root-cause awareness into the
+primitive); handle this operationally (size the pool so the work fits everywhere) or, as a
+future general extension, by capacity-aware routing (prefer re-running an item on a worker
+advertising more free memory — which stays uniform: an item that already exhausted the
+biggest worker correctly gives up).
+
 ## `workpool` vs `aexp.queue` — which one?
 
 They are **orthogonal and compose**; pick by granularity.
