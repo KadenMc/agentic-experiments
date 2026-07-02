@@ -93,6 +93,44 @@ failing item doesn't kill the sweep. Advanced callers can drive `claim_next()` /
 - `heartbeat` defaults to `ttl/5` (tolerate ~4 missed beats before a peer judges a lease
   stale). Set both larger if your items hold the GIL for long C calls.
 
+### Retry on failure (`max_attempts`)
+
+By default (`max_attempts=1`) a `process` exception routes straight to `on_error` and the
+item is left as today — unchanged behavior. Set `max_attempts > 1` to **bound-retry** a
+failing item instead:
+
+- A retryable exception writes **no output**, so `is_done` stays false and the item is
+  reclaimed and re-run — **by any worker**, so retry spans the fleet (a heavy item that
+  OOMs a small GPU can be re-run on a bigger one). Attempts are counted durably on the
+  shared filesystem (`_pool/_attempts/<item>/`), so the bound holds across workers.
+- After `max_attempts` failures the pool calls **`on_exhausted(item)`** — **required when
+  `max_attempts > 1`**. It MUST make `is_done(item)` true durably (e.g. write an
+  excluded/void output); that is what stops the item being reclaimed forever and lets the
+  pool terminate — the same role a successful output plays. Make it idempotent (a rare
+  double-exhaust under lag must be safe), like `process`.
+- `retryable=<ExcType>` (or a tuple of types) restricts which exceptions bound-retry;
+  anything else falls through to `on_error` as usual. Default `None` = all `Exception`s.
+- Worker **death** (no exception — walltime/VPN) is orthogonal: always reclaimed via the
+  stale lease, never counted as an attempt.
+
+```python
+WorkPool(
+    item_ids=items, is_done=is_done, lease_dir=OUT / "_pool" / "leases",
+    max_attempts=3,
+    on_exhausted=lambda item: atomic_write(OUT / f"{item}.json", EXCLUDED),  # makes is_done true
+).run(process)
+```
+
+**Heterogeneous-pool caveat.** Retry recovers a failure only if a *later* attempt can
+succeed. When failures are **capacity-bound** — an item too big for a small worker, so it
+fails *deterministically* on that worker — a heterogeneous pool can *false-exhaust* the item:
+undersized workers burn its attempts before a bigger one claims it. Keep the bound uniform
+(do **not** special-case it by worker size — that pushes root-cause awareness into the
+primitive); handle this operationally (size the pool so the work fits everywhere) or, as a
+future general extension, by capacity-aware routing (prefer re-running an item on a worker
+advertising more free memory — which stays uniform: an item that already exhausted the
+biggest worker correctly gives up).
+
 ## `workpool` vs `aexp.queue` — which one?
 
 They are **orthogonal and compose**; pick by granularity.

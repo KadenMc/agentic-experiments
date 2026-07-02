@@ -26,7 +26,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (not imported at package init), pure-stdlib (no new dependency). Validated by an
   N-process spawn hammer (`tests/test_workpool.py`) asserting completeness + single
   durable record + bounded duplicates + liveness under simulated NFS attribute-cache lag.
-  See `docs/workpool.md` (incl. a `workpool` vs `aexp.queue` disambiguation).
+  Optional **bounded retry** (`max_attempts > 1`, default `1` = off): a retryable
+  `process` failure writes no output, so the item is reclaimed and re-run -- by *any*
+  worker, so retry spans a heterogeneous fleet -- and after `max_attempts` failures a
+  required `on_exhausted(item)` makes the item terminal (must set `is_done` true durably),
+  which also fixes the tail-livelock a deterministic failure would otherwise cause.
+  Attempts are counted durably on the shared FS; worker death stays orthogonal
+  (stale-reclaim, never counted). See `docs/workpool.md` (incl. a `workpool` vs
+  `aexp.queue` disambiguation).
 
 ## [0.6.1] - 2026-05-26
 
