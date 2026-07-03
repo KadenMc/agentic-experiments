@@ -366,6 +366,10 @@ def probe_exclusive_create(run_dir: str | os.PathLike[str]) -> None:
     ``FileExistsError``. Raises :class:`LinkLeaseUnsupported` if either fails, so a
     caller can refuse to start rather than silently double-process every item.
 
+    Safe under concurrent startup: every probe path is per-call unique, so N workers
+    calling this simultaneously on the same ``run_dir`` (the normal fleet launch)
+    never touch each other's files.
+
     Honest limit: this proves the filesystem supports atomic link-create *at all* (it
     catches a grossly misconfigured mount); it cannot prove cross-node server-side
     exclusivity from a single process. The real cross-node proof is a multi-worker
@@ -384,10 +388,15 @@ def probe_exclusive_create(run_dir: str | os.PathLike[str]) -> None:
     """
     probe_dir = Path(run_dir) / "_pool" / ".probe"
     probe_dir.mkdir(parents=True, exist_ok=True)
-    src = probe_dir / f".src_{uuid.uuid4().hex}"
-    src2 = probe_dir / f".src2_{uuid.uuid4().hex}"
-    target = probe_dir / "probe.lease"
-    _unlink(target)
+    # Every path is per-call unique: N workers starting concurrently on one run_dir
+    # (the normal WorkPool fleet launch) each self-test their OWN target. A shared
+    # target made peers collide -- one worker's link hit another's in-flight target
+    # (FileExistsError misread as "unsupported"), or a peer's cleanup unlinked ours
+    # mid-test (second link falsely succeeded -> "NOT enforced").
+    nonce = uuid.uuid4().hex
+    src = probe_dir / f".src_{nonce}"
+    src2 = probe_dir / f".src2_{nonce}"
+    target = probe_dir / f".probe_{nonce}.lease"
     try:
         src.write_text("probe", encoding="ascii")
         try:
