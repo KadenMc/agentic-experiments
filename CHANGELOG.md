@@ -35,6 +35,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (stale-reclaim, never counted). See `docs/workpool.md` (incl. a `workpool` vs
   `aexp.queue` disambiguation).
 
+### Fixed
+
+- **`probe_exclusive_create` is now safe under concurrent worker startup.** The probe's
+  link-create self-test used one fixed target path (`_pool/.probe/probe.lease`) shared by
+  every caller, so N workers starting simultaneously on the same run dir — the normal
+  `WorkPool` fleet launch — raced on it and could kill a healthy worker with a false
+  `LinkLeaseUnsupported` (a peer's in-flight target made `os.link` raise
+  `FileExistsError`, misreported as "os.link is unsupported"; a peer's cleanup could also
+  unlink our target mid-test, making the second link falsely succeed as "not enforced").
+  Observed in production: 1 of 6 pooled workers died at startup on a healthy NFS mount.
+  All probe paths are now per-call unique, so concurrent probes never touch each other's
+  files; the fail-closed contract on genuinely unsupported filesystems is unchanged.
+  Guarded by an N-process concurrent-startup regression test in `tests/test_linklease.py`.
+
 ## [0.6.1] - 2026-05-26
 
 ### Fixed

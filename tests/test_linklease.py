@@ -8,8 +8,10 @@ simulated).
 """
 from __future__ import annotations
 
+import multiprocessing as mp
 import os
 import time
+from pathlib import Path
 
 import pytest
 
@@ -118,6 +120,50 @@ def test_probe_rejects_fs_without_hardlinks(tmp_path, monkeypatch):
     monkeypatch.setattr(linklease.os, "link", fake_link)
     with pytest.raises(LinkLeaseUnsupported):
         probe_exclusive_create(tmp_path)
+
+
+def _probe_worker(barrier, run_dir: str, iterations: int, err_dir: str) -> None:
+    """Spawn target: hammer ``probe_exclusive_create`` on one shared run_dir."""
+    barrier.wait(timeout=30)
+    try:
+        for _ in range(iterations):
+            probe_exclusive_create(run_dir)
+    except LinkLeaseUnsupported as exc:
+        Path(err_dir, f"err_{os.getpid()}.txt").write_text(str(exc), encoding="ascii")
+        raise  # non-zero exit code signals the false failure to the parent
+
+
+def test_probe_is_safe_under_concurrent_startup(tmp_path):
+    """N processes probing the SAME run_dir concurrently must all pass.
+
+    This is the normal WorkPool fleet-startup path, not an edge case: every worker
+    calls the probe on the shared run_dir at launch. A probe whose link-create
+    self-test touches any shared path collides with its peers (a peer's in-flight
+    target makes ``os.link`` raise ``FileExistsError``, or a peer's cleanup deletes
+    ours mid-test) and gets misreported as ``LinkLeaseUnsupported`` on a perfectly
+    healthy filesystem.
+    """
+    n_procs, iterations = 8, 25
+    err_dir = tmp_path / "errs"
+    err_dir.mkdir()
+    ctx = mp.get_context("spawn")
+    barrier = ctx.Barrier(n_procs)  # maximize overlap: all start probing together
+    procs = [
+        ctx.Process(
+            target=_probe_worker, args=(barrier, str(tmp_path), iterations, str(err_dir))
+        )
+        for _ in range(n_procs)
+    ]
+    for p in procs:
+        p.start()
+    for p in procs:
+        p.join(timeout=120)
+    codes = [p.exitcode for p in procs]
+    for p in procs:  # don't leak a hung process
+        if p.is_alive():
+            p.terminate()
+    errors = [f.read_text(encoding="ascii") for f in err_dir.glob("err_*.txt")]
+    assert codes == [0] * n_procs, f"exit codes {codes}; false failures: {errors}"
 
 
 def test_probe_rejects_fs_without_exclusive_create(tmp_path, monkeypatch):
