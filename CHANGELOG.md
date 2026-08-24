@@ -26,14 +26,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (not imported at package init), pure-stdlib (no new dependency). Validated by an
   N-process spawn hammer (`tests/test_workpool.py`) asserting completeness + single
   durable record + bounded duplicates + liveness under simulated NFS attribute-cache lag.
-  Optional **bounded retry** (`max_attempts > 1`, default `1` = off): a retryable
-  `process` failure writes no output, so the item is reclaimed and re-run -- by *any*
-  worker, so retry spans a heterogeneous fleet -- and after `max_attempts` failures a
-  required `on_exhausted(item)` makes the item terminal (must set `is_done` true durably),
-  which also fixes the tail-livelock a deterministic failure would otherwise cause.
-  Attempts are counted durably on the shared FS; worker death stays orthogonal
-  (stale-reclaim, never counted). See `docs/workpool.md` (incl. a `workpool` vs
-  `aexp.queue` disambiguation).
+  **Every failure gets a budget and a terminal state.** `max_attempts` bounds how many
+  attempts a *retryable* failure gets (default `1` = no retry); it does not decide whether
+  a failure terminates. A retryable failure writes no output, so the item is reclaimed and
+  re-run -- by *any* worker, so retry spans a heterogeneous fleet. A non-retryable failure
+  has a budget of 1, since retrying it is pointless, but still ends the same way: through
+  `on_exhausted(item)`, which must make `is_done` true durably. `on_error` is a
+  *diagnostic* hook, not a terminal one -- so `run()` **rejects** an `on_error` passed
+  without an `on_exhausted`, a pairing that cannot terminate. The pool also **verifies**
+  the terminal promise (warn once, then raise on a second durable failure fleet-wide) and
+  **skips** the exhaust when a peer completed the item mid-failure, which would otherwise
+  overwrite a real result. Attempts are counted durably on the shared FS; worker death
+  stays orthogonal (stale-reclaim, never counted). See `docs/workpool.md` (incl. a
+  `workpool` vs `aexp.queue` disambiguation).
+
+  *Supersedes an earlier draft of this entry, which claimed bounded retry "also fixes the
+  tail-livelock a deterministic failure would otherwise cause." It fixed it on the
+  retryable path only: `_is_retryable` returns False at the default `max_attempts=1` and
+  for anything outside `retryable=`, and everything it declined fell to `on_error` with no
+  attempt recorded, no budget, and no terminality requirement -- so the item was reclaimed
+  forever. A consumer hit exactly that in production (a schema-validation error looped
+  one GPU every ~26s until the whole fleet converged on the same item and blocked). The
+  obligation was documented at length and enforced in the constructor for `on_exhausted`,
+  and neither documented nor enforced for `on_error`; it now is both.*
 
 ### Fixed
 

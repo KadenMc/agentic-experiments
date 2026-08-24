@@ -23,6 +23,7 @@ import json
 import multiprocessing as mp
 import os
 import random
+import threading
 import time
 from pathlib import Path
 
@@ -120,9 +121,95 @@ def _worker(args: tuple) -> None:
     pool.run(process)
 
 
+# --------------------------------------------------- worker entry: poisoned-item fleet
+def _poison_worker(args: tuple) -> None:
+    """A worker whose pool contains one item that ALWAYS raises a non-retryable error.
+
+    Deliberately a separate entry point from :func:`_worker`: no lag shim, no simulated
+    death, no randomness. The property under test is termination of the whole fleet, and
+    mixing it with the hammer's chaos would make a hang ambiguous between the two.
+    """
+    (widx, item_ids, out_dir, lease_dir, poison) = args
+    out = Path(out_dir)
+
+    def is_done(item: str) -> bool:
+        return (out / f"{item}.json").exists()
+
+    def process(item: str) -> None:
+        if item == poison:
+            raise ValueError("deterministic, non-retryable, every worker, every time")
+        atomic_write(out / f"{item}.json", json.dumps({"item": item, "by": widx}))
+
+    def on_error(item: str, exc: Exception) -> None:
+        # The realistic shape, and the one that caused the production livelock: a
+        # diagnostic sidecar that is NOT the file `is_done` checks.
+        atomic_write(out / f"{item}.err.{widx}", f"{type(exc).__name__}: {exc}")
+
+    def on_exhausted(item: str) -> None:
+        # Idempotent: several workers can legitimately reach this for the same item.
+        atomic_write(out / f"{item}.json", json.dumps({"item": item, "excluded": True}))
+
+    WorkPool(
+        item_ids=item_ids, is_done=is_done, lease_dir=lease_dir,
+        ttl=5.0, heartbeat=1.0, backoff=(0.05, 0.3),
+        # `retryable` is load-bearing here. Left unset, EVERY exception is retryable once
+        # max_attempts > 1, so the poison would take the retry path and `on_error` would
+        # never fire -- the test would pass while exercising the wrong branch entirely.
+        # Naming a type the poison is not puts it on the non-retryable path, which is the
+        # one that livelocked.
+        max_attempts=2, retryable=Transient, on_exhausted=on_exhausted,
+    ).run(process, on_error=on_error)
+
+
+@pytest.mark.slow
+def test_a_poisoned_item_does_not_strand_the_fleet(tmp_path):
+    """THE production shape, across real processes -- the one a single-process test cannot show.
+
+    In the incident this fixes, a deterministically-failing item was reclaimed forever. The
+    cost was not one stuck worker: once the peers drained everything else they each claimed
+    the same poisoned item and blocked too, under block-and-retry termination. A whole fleet
+    sat on one item while the run hung just short of complete.
+
+    Every other new test here runs one pool in one process, so each proves only that *a*
+    worker terminates. This asserts the fleet property directly: three independent processes,
+    one item none of them can ever complete, and all three must exit.
+
+    Uses real process exit codes rather than a thread join, because the failure being guarded
+    is an infinite loop -- a hung child must fail the assertion, not silently outlive it.
+    """
+    out = tmp_path / "out"
+    lease_dir = tmp_path / "_pool" / "leases"
+    out.mkdir(parents=True)
+    lease_dir.mkdir(parents=True)
+
+    items = [f"item_{i:02d}" for i in range(9)]
+    poison = items[4]                       # mid-list, so workers reach it at different times
+
+    ctx = mp.get_context("spawn")
+    args = [(w, items, str(out), str(lease_dir), poison) for w in range(3)]
+    codes = _run_wave(ctx, args, join_timeout=90.0, target=_poison_worker)
+
+    assert codes == [0, 0, 0], (
+        f"worker exit codes {codes} -- None means the process was still running at the "
+        "timeout, i.e. the fleet livelocked on the poisoned item"
+    )
+    for item in items:                      # completeness: nothing stranded, poison included
+        assert (out / f"{item}.json").exists(), f"{item} never became done"
+    assert json.loads((out / f"{poison}.json").read_text())["excluded"] is True
+    # on_error still fired, and its sidecar is still not what made the item terminal.
+    assert list(out.glob(f"{poison}.err.*")), "on_error never ran for the poisoned item"
+
+
 # ------------------------------------------------------------------ harness
-def _run_wave(ctx, worker_args_list, join_timeout: float) -> list[int | None]:
-    procs = [ctx.Process(target=_worker, args=(a,)) for a in worker_args_list]
+def _run_wave(ctx, worker_args_list, join_timeout: float, target=None) -> list[int | None]:
+    """Spawn one process per arg tuple and join with a timeout.
+
+    ``target`` defaults to the hammer's :func:`_worker`; the poisoned-item test passes its
+    own entry point. An exit code of ``None`` means the process was still alive at the
+    timeout, which every caller treats as a failure -- that is how a livelock surfaces here
+    instead of hanging the suite.
+    """
+    procs = [ctx.Process(target=target or _worker, args=(a,)) for a in worker_args_list]
     for p in procs:
         p.start()
     for p in procs:
@@ -322,15 +409,52 @@ def test_exhausts_and_terminates_on_permanent_failure(tmp_path):
     assert len(list((tmp_path / "_pool" / "_attempts" / "b").iterdir())) == 2  # bounded
 
 
-def test_non_retryable_exception_routes_to_on_error(tmp_path):
-    """With `retryable` set, an out-of-scope exception goes to on_error, not the retry
-    path (attempt count untouched)."""
+class Transient(Exception):
+    """An in-scope-for-retry exception, for the `retryable=` tests below."""
+
+
+def _run_bounded(pool: WorkPool, process, *, on_error=None, timeout: float = 20.0) -> None:
+    """`pool.run(...)` on a worker thread, failing the test if it does not return.
+
+    Every termination test goes through this. The defect these tests guard is a LIVELOCK,
+    so the natural regression is an infinite loop -- and a test that regresses by hanging
+    tells you nothing and blocks CI. This turns it into an assertion that fails in seconds.
+    """
+    box: dict[str, BaseException] = {}
+
+    def target() -> None:
+        try:
+            pool.run(process, on_error=on_error)
+        except BaseException as exc:  # noqa: BLE001 -- re-raised on the main thread below
+            box["exc"] = exc
+
+    t = threading.Thread(target=target, daemon=True)
+    t.start()
+    t.join(timeout)
+    assert not t.is_alive(), (
+        f"pool.run() did not return within {timeout}s -- the item is being reclaimed "
+        "forever (livelock). This is the regression these tests exist to catch."
+    )
+    if "exc" in box:
+        raise box["exc"]
+
+
+def test_non_retryable_terminates_via_on_exhausted(tmp_path):
+    """A non-retryable failure is reported to on_error AND terminated by on_exhausted.
+
+    This test used to be `test_non_retryable_exception_routes_to_on_error`, and it passed
+    for the wrong reason: its `on_error` wrote `out/{i}.json`, the exact file `is_done`
+    checks, so the item terminated by accident and the livelock never manifested. Deleting
+    that one `atomic_write` made it hang forever. It is the only test that ever exercised
+    this path, which is why the defect survived.
+
+    The sentinel here is deliberately a NON-done file, mirroring the real consumer
+    (an error log beside the output file `is_done` checks): `on_error` is a diagnostic hook,
+    and terminality is `on_exhausted`'s job alone.
+    """
     out, lease_dir = _retry_dirs(tmp_path)
-
-    class Transient(Exception):
-        pass
-
     errors: list[tuple[str, str]] = []
+    exhausted: list[str] = []
 
     def is_done(i: str) -> bool:
         return (out / f"{i}.json").exists()
@@ -340,14 +464,204 @@ def test_non_retryable_exception_routes_to_on_error(tmp_path):
 
     def on_error(i: str, exc: Exception) -> None:
         errors.append((i, type(exc).__name__))
-        atomic_write(out / f"{i}.json", json.dumps({"item": i, "errored": True}))
+        atomic_write(out / f"ERROR_{i}.txt", f"{type(exc).__name__}: {exc}")  # NOT is_done
+
+    def on_exhausted(i: str) -> None:
+        exhausted.append(i)
+        atomic_write(out / f"{i}.json", json.dumps({"item": i, "excluded": True}))
 
     pool = WorkPool(
         item_ids=["a"], is_done=is_done, lease_dir=str(lease_dir),
         ttl=5.0, heartbeat=1.0, backoff=(0.01, 0.05),
-        max_attempts=3, on_exhausted=lambda i: None, retryable=Transient,
+        max_attempts=3, on_exhausted=on_exhausted, retryable=Transient,
     )
-    pool.run(process, on_error=on_error)
+    _run_bounded(pool, process, on_error=on_error)
 
-    assert errors == [("a", "ValueError")]                      # routed to on_error
-    assert not (tmp_path / "_pool" / "_attempts").exists()      # retry path never touched
+    assert errors == [("a", "ValueError")]          # on_error still fires, unchanged
+    assert (out / "ERROR_a.txt").exists()           # and its sentinel survives
+    assert exhausted == ["a"]                       # exactly one exhaust
+    assert is_done("a")                             # terminal, so the pool could exit
+
+
+def test_non_retryable_gets_exactly_one_attempt(tmp_path):
+    """Retrying a non-retryable failure is pointless, so its budget is 1 -- not
+    `max_attempts`. Retryable-vs-not decides HOW MANY attempts, never bounded-vs-unbounded."""
+    out, lease_dir = _retry_dirs(tmp_path)
+    calls: list[str] = []
+
+    def process(i: str) -> None:
+        calls.append(i)
+        raise ValueError("fatal")
+
+    pool = WorkPool(
+        item_ids=["a"], is_done=lambda i: (out / f"{i}.json").exists(),
+        lease_dir=str(lease_dir), ttl=5.0, heartbeat=1.0, backoff=(0.01, 0.05),
+        max_attempts=5, retryable=Transient,
+        on_exhausted=lambda i: atomic_write(out / f"{i}.json", "{}"),
+    )
+    _run_bounded(pool, process, on_error=lambda i, e: None)
+
+    assert calls == ["a"]  # one attempt, despite max_attempts=5
+    assert len(list((tmp_path / "_pool" / "_attempts" / "a").iterdir())) == 1
+
+
+def test_soft_failures_then_hard_failure_terminates(tmp_path):
+    """The attempt counter is shared, so a mixed history composes into one budget.
+
+    Two retryable failures then a non-retryable one: the third failure's budget is 1, it is
+    already at 3 attempts, so it exhausts rather than consuming the remaining retry.
+    """
+    out, lease_dir = _retry_dirs(tmp_path)
+    seen: list[str] = []
+
+    def process(i: str) -> None:
+        seen.append(i)
+        raise Transient("soft") if len(seen) <= 2 else ValueError("hard")
+
+    pool = WorkPool(
+        item_ids=["a"], is_done=lambda i: (out / f"{i}.json").exists(),
+        lease_dir=str(lease_dir), ttl=5.0, heartbeat=1.0, backoff=(0.01, 0.05),
+        max_attempts=5, retryable=Transient,
+        on_exhausted=lambda i: atomic_write(out / f"{i}.json", "{}"),
+    )
+    _run_bounded(pool, process, on_error=lambda i, e: None)
+
+    assert len(seen) == 3  # 2 soft (retried) + 1 hard (exhausts immediately)
+
+
+def test_max_attempts_one_with_on_error_still_terminates(tmp_path):
+    """`max_attempts=1` is the library default AND the configuration that livelocked.
+
+    With retry off, `_is_retryable` returns False for EVERY exception -- including one the
+    caller named in `retryable=` -- so the default configuration routed everything down the
+    unterminated path. That is the shape that hung a GPU every ~26s in production.
+    """
+    out, lease_dir = _retry_dirs(tmp_path)
+
+    def process(i: str) -> None:
+        raise Transient("even an in-scope exception is not retryable at max_attempts=1")
+
+    pool = WorkPool(
+        item_ids=["a", "b"], is_done=lambda i: (out / f"{i}.json").exists(),
+        lease_dir=str(lease_dir), ttl=5.0, heartbeat=1.0, backoff=(0.01, 0.05),
+        max_attempts=1, retryable=Transient,
+        on_exhausted=lambda i: atomic_write(out / f"{i}.json", "{}"),
+    )
+    _run_bounded(pool, process, on_error=lambda i, e: None)
+
+    assert (out / "a.json").exists() and (out / "b.json").exists()
+
+
+def test_on_error_without_on_exhausted_is_rejected(tmp_path):
+    """Fail closed at startup rather than looping forever.
+
+    `on_error` cannot be validated in `__init__` -- it is a `run()` parameter -- so the
+    check lives at the top of `run()`, before any item is claimed. The pairing it rejects
+    is precisely what `docs/workpool.md`'s quickstart used to recommend.
+    """
+    out, lease_dir = _retry_dirs(tmp_path)
+    pool = WorkPool(item_ids=["a"], is_done=lambda i: (out / f"{i}.json").exists(),
+                    lease_dir=str(lease_dir))
+
+    with pytest.raises(ValueError, match="on_exhausted"):
+        pool.run(lambda i: None, on_error=lambda i, e: None)
+
+    assert not any(lease_dir.iterdir())  # rejected before claiming anything
+
+
+def test_default_config_exception_still_propagates(tmp_path):
+    """With neither callback, a hard exception kills the worker exactly as before.
+
+    The terminalization path must not fire when the caller declared no terminal handler:
+    calling a `None` `on_exhausted` would raise TypeError from inside an except block and
+    mask the real exception, which is strictly worse than the behaviour it replaced.
+    """
+    out, lease_dir = _retry_dirs(tmp_path)
+    pool = WorkPool(item_ids=["a"], is_done=lambda i: (out / f"{i}.json").exists(),
+                    lease_dir=str(lease_dir), ttl=5.0, heartbeat=1.0, backoff=(0.01, 0.05))
+
+    def process(i: str) -> None:
+        raise ValueError("boom")
+
+    with pytest.raises(ValueError, match="boom"):   # the ORIGINAL exception, not TypeError
+        _run_bounded(pool, process)
+
+    assert not (tmp_path / "_pool" / "_attempts").exists()  # no attempt recorded
+
+
+def test_exhaust_skipped_when_peer_completed_the_item(tmp_path):
+    """A done-marker appearing mid-failure cancels the exhaust.
+
+    The pool permits occasional double-processing by design, so a slow worker can be
+    failing on an item a peer has already finished. Both terminal writers in the wild
+    OVERWRITE rather than skip -- one to the identical path a success writes -- so
+    exhausting here would destroy a real result. The guard is the same TOCTOU re-check
+    `_scan_once` already performs after winning a lease.
+    """
+    out, lease_dir = _retry_dirs(tmp_path)
+    exhausted: list[str] = []
+
+    def process(i: str) -> None:
+        atomic_write(out / f"{i}.json", json.dumps({"item": i, "real": True}))  # "the peer"
+        raise ValueError("crashed after the peer finished")
+
+    pool = WorkPool(
+        item_ids=["a"], is_done=lambda i: (out / f"{i}.json").exists(),
+        lease_dir=str(lease_dir), ttl=5.0, heartbeat=1.0, backoff=(0.01, 0.05),
+        max_attempts=2, retryable=Transient,
+        on_exhausted=lambda i: exhausted.append(i),
+    )
+    _run_bounded(pool, process, on_error=lambda i, e: None)
+
+    assert exhausted == []                                             # never called
+    assert json.loads((out / "a.json").read_text())["real"] is True    # result intact
+
+
+def test_on_exhausted_that_never_terminates_is_surfaced(tmp_path):
+    """A terminal handler that does not make `is_done` true is caught, not trusted.
+
+    Tolerant once -- NFS attribute-cache lag produces stale negatives and the module's
+    whole termination proof rests on those being safe. But the confirmation marker is
+    durable and fleet-wide, not per-process: these workers join late and die on walltime,
+    so a per-process set would warn once per process forever and never escalate. Two pool
+    instances here stand in for two workers sharing the filesystem.
+    """
+    out, lease_dir = _retry_dirs(tmp_path)
+    logs: list[str] = []
+    done = {"a": False}
+
+    def process(i: str) -> None:
+        raise ValueError("boom")
+
+    def make_pool(on_exhausted) -> WorkPool:
+        return WorkPool(
+            item_ids=["a"], is_done=lambda i: done[i],
+            lease_dir=str(lease_dir), ttl=5.0, heartbeat=1.0, backoff=(0.01, 0.05),
+            log=logs.append, max_attempts=1, on_exhausted=on_exhausted,
+        )
+
+    # First worker: on_exhausted writes nothing the first time (the bug), so verification
+    # fails and drops one marker. It relents on the second exhaust purely so this worker
+    # can finish -- a genuinely broken handler would loop, which is the designed tolerance
+    # and not what is under test here.
+    exhausts: list[str] = []
+
+    def relents_on_second(i: str) -> None:
+        exhausts.append(i)
+        if len(exhausts) >= 2:
+            done[i] = True
+
+    _run_bounded(make_pool(relents_on_second), process, on_error=lambda i, e: None)
+
+    markers = [p for p in (tmp_path / "_pool" / "_attempts" / "a").iterdir()
+               if p.name.startswith("exhausted_")]
+    assert len(markers) == 1                                    # warned once, wrote once
+    assert any("is_done still false" in m for m in logs)        # and said so
+    assert not any("MUST write" in m for m in logs)             # but did not raise
+
+    # A second worker on the same filesystem -- a fresh process in production -- finds the
+    # first worker's marker and escalates. A per-process set could not do this: these
+    # workers die on walltime, so each new one would warn once and exit forever.
+    done["a"] = False
+    with pytest.raises(RuntimeError, match="MUST write the durable output"):
+        _run_bounded(make_pool(lambda i: None), process, on_error=lambda i, e: None)

@@ -45,15 +45,20 @@ lease) is explicitly **acceptable and safe** — the lease only makes it rare. T
 guarantees **completeness and liveness**, *not* zero-duplicate processing. Do not build a
 caller that breaks if an item is processed twice.
 
-Two invariants the type signature can't express:
+Three invariants the type signature can't express:
 
 1. **`is_done(item)` must be monotonic** — once true it stays true — and become true only
-   as a **durable effect of a completed `process(item)`** (canonically: an atomically
-   written output file exists). This is what makes block-and-retry termination safe. An
-   `is_done` that can flip back to false (a lock, a rolled-back row, a cleaned temp)
-   breaks termination.
+   as a **durable effect of a completed `process(item)`, or of `on_exhausted(item)`**
+   (canonically: an atomically written output file exists). This is what makes
+   block-and-retry termination safe. An `is_done` that can flip back to false (a lock, a
+   rolled-back row, a cleaned temp) breaks termination.
 2. **`item_id` must be a filesystem-safe basename** (no `/` or `\`, not `.`/`..`) — it
    names a lease file.
+3. **`on_exhausted` is the only terminal handler.** Every item that stops being worked on
+   goes through it, and it must make `is_done` true. `on_error` is a *diagnostic* hook —
+   whatever it writes, the pool still exhausts the item. Writing a sidecar from `on_error`
+   and expecting the pool to move on is the mistake this module used to permit silently:
+   the sidecar isn't what `is_done` checks, so the item was reclaimed forever.
 
 ## Minimal usage
 
@@ -81,9 +86,16 @@ WorkPool(item_ids=items, is_done=is_done, lease_dir=OUT / "_pool" / "leases").ru
 
 `run(process, on_error=...)` owns the load-bearing protocol — claim, release in a
 `finally` (a failing item is reclaimed, not stranded), heartbeat the active lease, and
-exit only when **every** item is done. Pass `on_error=lambda item, exc: ...` so one
-failing item doesn't kill the sweep. Advanced callers can drive `claim_next()` /
+exit only when **every** item is done. Advanced callers can drive `claim_next()` /
 `mark_done()` manually (use the pool as a context manager so the heartbeat thread stops).
+
+> **A failing item is not finished by `on_error`.** Because the pool exits only when every
+> item is done, the *only* thing that lets it move past a failure is `on_exhausted` writing
+> the durable output `is_done` checks. `on_error` is a diagnostic hook — a place to record
+> what went wrong — and an error sentinel written there is, by construction, not the
+> done-marker. So `run()` **rejects** an `on_error` without an `on_exhausted`: that pairing
+> looks like "don't let one bad item kill the sweep" and behaves like an infinite reclaim.
+> See [Retry on failure](#retry-on-failure-max_attempts) for the full lifecycle.
 
 ### Tuning
 
@@ -95,21 +107,30 @@ failing item doesn't kill the sweep. Advanced callers can drive `claim_next()` /
 
 ### Retry on failure (`max_attempts`)
 
-By default (`max_attempts=1`) a `process` exception routes straight to `on_error` and the
-item is left as today — unchanged behavior. Set `max_attempts > 1` to **bound-retry** a
-failing item instead:
+**Every failure gets a budget and a terminal state.** `max_attempts` sets how many attempts
+a *retryable* failure gets; it does not decide whether a failure terminates. A
+non-retryable failure has a budget of 1 — retrying it is pointless — but a budget of 1 is
+still a budget, and it still ends in `on_exhausted`.
 
 - A retryable exception writes **no output**, so `is_done` stays false and the item is
   reclaimed and re-run — **by any worker**, so retry spans the fleet (a heavy item that
   OOMs a small GPU can be re-run on a bigger one). Attempts are counted durably on the
   shared filesystem (`_pool/_attempts/<item>/`), so the bound holds across workers.
-- After `max_attempts` failures the pool calls **`on_exhausted(item)`** — **required when
-  `max_attempts > 1`**. It MUST make `is_done(item)` true durably (e.g. write an
-  excluded/void output); that is what stops the item being reclaimed forever and lets the
-  pool terminate — the same role a successful output plays. Make it idempotent (a rare
-  double-exhaust under lag must be safe), like `process`.
-- `retryable=<ExcType>` (or a tuple of types) restricts which exceptions bound-retry;
-  anything else falls through to `on_error` as usual. Default `None` = all `Exception`s.
+- Once an item spends its budget the pool calls **`on_exhausted(item)`**. It MUST make
+  `is_done(item)` true durably (e.g. write an excluded/void output); that is what stops the
+  item being reclaimed forever and lets the pool terminate — the same role a successful
+  output plays. Make it idempotent (a rare double-exhaust under lag must be safe), like
+  `process`. Required when `max_attempts > 1`, and whenever you pass `on_error`.
+- The pool **verifies** that promise rather than trusting it. If `is_done` is still false
+  after `on_exhausted`, it warns and records a durable marker; a second such marker
+  *anywhere in the fleet* raises. One stale-negative read is tolerated (NFS lag); a
+  genuinely wrong marker name — the classic version of this bug — is not.
+- If a peer completed the item while you were failing, the exhaust is **skipped**. The pool
+  permits occasional double-processing, and a terminal writer run over a finished item
+  would overwrite a real result.
+- `retryable=<ExcType>` (or a tuple of types) restricts which exceptions get *retried*;
+  an out-of-scope exception is still reported to `on_error` and still terminates through
+  `on_exhausted`, it just gets one attempt. Default `None` = all `Exception`s.
 - Worker **death** (no exception — walltime/VPN) is orthogonal: always reclaimed via the
   stale lease, never counted as an attempt.
 

@@ -34,17 +34,24 @@ falsely-broken stale lease) is explicitly acceptable and safe -- the lease only 
 rare. The pool therefore guarantees **completeness and liveness**, not zero-duplicate
 processing.
 
-Two caller invariants the signature cannot express:
+Three caller invariants the signature cannot express:
 
 1. ``is_done(item)`` MUST be **monotonic** -- once true it stays true -- and become true
-   only as a **durable effect of a completed** ``process(item)`` (canonically: an
-   atomically-written output file exists). This is what makes block-and-retry
-   termination safe: a stale-*negative* ``is_done`` only delays exit (safe), and a
-   stale-*positive* cannot happen because outputs are never deleted. An ``is_done`` that
-   can flip back to false (a lock, a rolled-back row, a cleaned temp file) breaks the
-   termination proof.
+   only as a **durable effect of a completed** ``process(item)`` **or of**
+   ``on_exhausted(item)`` (canonically: an atomically-written output file exists). This is
+   what makes block-and-retry termination safe: a stale-*negative* ``is_done`` only delays
+   exit (safe), and a stale-*positive* cannot happen because outputs are never deleted. An
+   ``is_done`` that can flip back to false (a lock, a rolled-back row, a cleaned temp
+   file) breaks the termination proof.
 2. ``item_id`` MUST be a **filesystem-safe basename** (no ``/`` or ``\\``, not ``.``/
    ``..``) -- it names a lease file.
+3. ``on_exhausted`` is the **only** terminal handler, and every item that stops being
+   worked on goes through it. ``on_error`` is a diagnostic hook, not a terminal one:
+   whatever it writes, the pool still exhausts the item. Writing a *sidecar* from
+   ``on_error`` and expecting the pool to move on is the mistake this module used to
+   permit silently -- the sidecar is not what ``is_done`` checks, so the item was reclaimed
+   forever. ``run`` now refuses an ``on_error`` without an ``on_exhausted``, and
+   ``on_exhausted``'s promise is verified rather than trusted.
 """
 from __future__ import annotations
 
@@ -92,25 +99,28 @@ class WorkPool:
     log : callable, optional
         ``log(message: str)`` ASCII-only sink for progress/diagnostics. Defaults silent.
     max_attempts : int, optional
-        Bounded retry-on-failure (default ``1`` = off, i.e. today's behavior exactly:
-        a ``process`` exception routes straight to ``on_error``). When ``> 1``, a
-        retryable exception (see ``retryable``) writes no output, so ``is_done`` stays
-        false and the item is reclaimed and retried -- by any worker, so retry spans the
-        fleet (a heavy item that OOMs a small GPU can be re-run on a bigger one). After
-        ``max_attempts`` failures the item is exhausted (see ``on_exhausted``). Worker
-        *death* (no exception) is orthogonal -- always reclaimed via the stale lease,
-        never counted as an attempt.
+        Retry budget for a **retryable** failure (default ``1`` = no retry). A retryable
+        exception (see ``retryable``) writes no output, so ``is_done`` stays false and the
+        item is reclaimed and retried -- by any worker, so retry spans the fleet (a heavy
+        item that OOMs a small GPU can be re-run on a bigger one). This bounds retries
+        only; it does **not** decide whether a failure terminates. A *non*-retryable
+        failure has a budget of 1 and exhausts on first occurrence, whatever this is set
+        to. Worker *death* (no exception) is orthogonal -- always reclaimed via the stale
+        lease, never counted as an attempt.
     on_exhausted : callable, optional
-        ``on_exhausted(item_id) -> None``, called once an item has failed
-        ``max_attempts`` times. **Required when ``max_attempts > 1``** and MUST make
-        ``is_done(item_id)`` true durably (e.g. write an excluded/void output) -- that is
+        ``on_exhausted(item_id) -> None``, called once an item has spent its budget --
+        ``max_attempts`` retryable failures, or a single non-retryable one. It MUST make
+        ``is_done(item_id)`` true durably (e.g. write an excluded/void output); that is
         what stops the item being reclaimed forever and lets the pool terminate (the same
-        role a successful ``process`` output plays). Should be idempotent (a rare
-        double-exhaust under lag must be safe), like ``process``.
+        role a successful ``process`` output plays), and :meth:`_verify_terminal` checks
+        that it did. Should be idempotent (a rare double-exhaust under lag must be safe),
+        like ``process``. **Required when ``max_attempts > 1``** (enforced here) and
+        whenever ``run`` is given an ``on_error`` (enforced in :meth:`run`).
     retryable : exception type or tuple of types, optional
-        Restrict bounded retry to these exception types (default ``None`` = all
-        ``Exception``\\ s count once ``max_attempts > 1``). A non-retryable exception
-        falls through to ``on_error`` as usual.
+        Restrict *retrying* to these exception types (default ``None`` = every
+        ``Exception`` is retryable once ``max_attempts > 1``). An out-of-scope exception
+        is still reported to ``on_error`` and still terminates through ``on_exhausted`` --
+        it simply gets one attempt instead of ``max_attempts``.
 
     Notes
     -----
@@ -234,9 +244,30 @@ class WorkPool:
             else re-raised. ``KeyboardInterrupt``/``SystemExit`` always propagate (after
             the lease is released) so the worker can be stopped.
         on_error : callable, optional
-            ``on_error(item_id, exc)`` -- e.g. write an error sentinel so one failing item
-            does not kill the sweep. If ``None``, an exception aborts ``run``.
+            ``on_error(item_id, exc)`` -- a place to record a diagnostic, e.g. an error
+            sentinel naming the exception. It is **not** a terminal handler: whatever it
+            writes, the item is then exhausted through ``on_exhausted``, which is what
+            makes ``is_done`` true. Supplying ``on_error`` without ``on_exhausted`` is
+            therefore rejected (see Raises). If both are ``None``, an exception aborts
+            ``run`` unchanged.
+
+        Raises
+        ------
+        ValueError
+            If ``on_error`` is supplied without ``on_exhausted``. That pairing cannot
+            terminate: a failure routed only to ``on_error`` writes no done-marker, so
+            ``is_done`` stays false and the item is reclaimed forever. Deliberately
+            breaking -- it converts a silent infinite loop into a startup error naming the
+            fix. Callers driving :meth:`claim_next`/:meth:`mark_done` by hand handle their
+            own exceptions and are outside this mechanism entirely.
         """
+        if on_error is not None and self._on_exhausted is None:
+            raise ValueError(
+                "on_error is supplied but on_exhausted is not. A failure routed to "
+                "on_error writes no done-marker, so is_done stays false and the item is "
+                "reclaimed forever. Pass on_exhausted(item) -- it MUST make "
+                "is_done(item) true durably."
+            )
         with self:
             total = len(self._item_ids)
             t0 = time.time()
@@ -260,31 +291,111 @@ class WorkPool:
     ) -> bool:
         """Route a ``process`` failure. Returns True if handled, False to propagate.
 
-        A *retryable* failure (see :meth:`_is_retryable`) writes NO output, so
-        ``is_done`` stays false and the item is reclaimed -- by this worker or a peer,
-        so retry is cross-worker for free. After ``max_attempts`` failures
-        ``on_exhausted`` makes the item terminal. A non-retryable failure goes to the
-        caller's ``on_error`` (or propagates if none).
+        **Every** failure gets a budget and a terminal state. Retryable-vs-not decides *how
+        many attempts*, not *bounded vs unbounded*: retrying a non-retryable failure is
+        pointless, so its budget is 1 -- but a budget of 1 is still a budget, and it still
+        ends in ``on_exhausted``. Previously a non-retryable exception went to ``on_error``
+        and nothing else, which records no attempt, has no budget, and carries no
+        terminality requirement, so ``is_done`` stayed false and the item was reclaimed
+        forever. `75ea8ff` believed it had closed that livelock; it closed it only on the
+        retryable path.
+
+        A retryable failure still writes NO output, so the item is reclaimed and re-run --
+        by this worker or a peer, so retry stays cross-worker for free.
+
+        Preserved exactly: ``on_error`` still fires for non-retryable failures (callers
+        keep their diagnostic sentinel) and still does not fire for retryable ones; worker
+        *death* remains orthogonal (stale lease, never an attempt); and with neither
+        callback supplied a hard exception still propagates and kills the worker.
         """
-        if self._is_retryable(exc):
-            n = self._record_attempt(item_id)
-            if n >= self._max_attempts:
-                self._emit(
-                    f"workpool: {item_id} exhausted after {n} attempts "
-                    f"({type(exc).__name__}); calling on_exhausted"
-                )
-                assert self._on_exhausted is not None  # guaranteed by __init__
-                self._on_exhausted(item_id)
-            else:
-                self._emit(
-                    f"workpool: {item_id} attempt {n}/{self._max_attempts} failed "
-                    f"({type(exc).__name__}); will retry"
-                )
-            return True
-        if on_error is not None:
+        retryable = self._is_retryable(exc)
+
+        # Gate on on_exhausted, NOT on on_error. Without a terminal handler there is
+        # nothing to exhaust TO -- and ``on_exhausted`` is None in the default
+        # configuration, since __init__ only requires it once max_attempts > 1. Calling it
+        # unconditionally would raise TypeError from inside an except handler and mask the
+        # real exception. A caller who supplied on_exhausted has opted into
+        # terminalization; one who supplied neither keeps today's propagate-and-die.
+        if not retryable and self._on_exhausted is None:
+            # `run()` rejects this pairing up front, so the branch below is reachable only
+            # for a caller driving claim_next()/mark_done() by hand.
+            if on_error is not None:
+                on_error(item_id, exc)
+                return True
+            return False
+
+        if not retryable and on_error is not None:
             on_error(item_id, exc)
-            return True
-        return False
+
+        budget = self._max_attempts if retryable else 1
+        n = self._record_attempt(item_id)
+        if n >= budget:
+            # A peer may have completed this item while we were failing -- the pool
+            # explicitly permits occasional double-processing. Exhausting now would call a
+            # terminal writer over a real result, and the two shipped writers in the wild
+            # both overwrite rather than skip. Same TOCTOU re-check `_scan_once` already
+            # performs after winning a lease.
+            if self._is_done(item_id):
+                # Either a peer finished it, or this caller's own on_error wrote the
+                # done-marker. Both mean the item is terminal already and exhausting would
+                # write over it.
+                self._emit(f"workpool: {item_id} is already done (peer, or on_error wrote "
+                           "the output); skipping on_exhausted")
+                return True
+            self._emit(
+                f"workpool: {item_id} exhausted after {n} attempt(s) "
+                f"({type(exc).__name__}); calling on_exhausted"
+            )
+            # Non-None on both paths into here: a retryable failure implies
+            # ``max_attempts > 1``, which ``__init__`` refuses without ``on_exhausted``;
+            # a non-retryable one returned above when it was None.
+            assert self._on_exhausted is not None
+            self._on_exhausted(item_id)
+            self._verify_terminal(item_id)
+        else:
+            self._emit(
+                f"workpool: {item_id} attempt {n}/{budget} failed "
+                f"({type(exc).__name__}); will retry"
+            )
+        return True
+
+    def _verify_terminal(self, item_id: str) -> None:
+        """``on_exhausted`` promised ``is_done``; check that it delivered.
+
+        Nothing used to check, which is exactly how a consumer's earlier livelock went
+        silent: its exclusion marker was written under one filename while ``is_done``
+        globbed another, so the pool reclaimed an "excluded" item forever.
+
+        Raising immediately on a false ``is_done`` would be wrong for this filesystem --
+        NFS attribute-cache lag produces stale negatives, and the module's correctness
+        model is built on "a stale-negative ``is_done`` only delays exit (safe)". A hard
+        raise would turn benign lag into a dead worker.
+
+        So confirmation is **durable and fleet-wide** rather than per-process: a failed
+        verification drops an ``exhausted_<uuid>`` marker beside the attempt counters, and
+        the second one anywhere raises. A per-process set could not escalate here at all --
+        these workers join late and die on walltime, so each fresh process would warn once
+        and exit, and the livelock would return as warn-spam with a full ``process()`` run
+        burned per cycle.
+
+        Raising is the right terminal state once terminality is provably broken. Skipping
+        the item locally leaves ``_all_done`` false, so ``claim_next`` spins forever -- the
+        livelock renamed. Treating it as done locally lets the pool exit with items neither
+        produced nor excluded, which is a silent corpus shrink.
+        """
+        if self._is_done(item_id):
+            return
+        d = self._attempts_dir / item_id
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"exhausted_{uuid.uuid4().hex}").write_text(self._owner_id, encoding="ascii")
+        if sum(1 for p in d.iterdir() if p.name.startswith("exhausted_")) >= 2:
+            raise RuntimeError(
+                f"on_exhausted({item_id!r}) has run at least twice across the fleet and "
+                "is_done is still false; the pool would reclaim this item forever. "
+                "on_exhausted MUST write the durable output that is_done checks."
+            )
+        self._emit(f"workpool: WARNING {item_id} exhausted but is_done still false "
+                   "(filesystem lag, or on_exhausted did not write the done-marker)")
 
     def _emit(self, msg: str) -> None:
         if self._log is not None:
@@ -303,12 +414,17 @@ class WorkPool:
 
         Each attempt is a uniquely-named marker under ``_attempts/<item_id>/`` -- so
         counting is lag-tolerant and needs no read-modify-write (matching the pool's
-        NFS-safety model). Only reached when retry is enabled (max_attempts > 1).
+        NFS-safety model). Reached for **every** failure, retryable or not: a
+        non-retryable one simply has a budget of 1 (see :meth:`_handle_failure`).
+
+        ``exhausted_*`` markers share this directory but are :meth:`_verify_terminal`'s,
+        not attempts, and are excluded from the count -- otherwise a failed verification
+        would inflate the next attempt number and could retire a retry budget early.
         """
         d = self._attempts_dir / item_id
         d.mkdir(parents=True, exist_ok=True)
         (d / uuid.uuid4().hex).write_text(self._owner_id, encoding="ascii")
-        return sum(1 for _ in d.iterdir())
+        return sum(1 for p in d.iterdir() if not p.name.startswith("exhausted_"))
 
     def _log_progress(self, worker_done: int, total: int, t0: float) -> None:
         if self._log is None:
