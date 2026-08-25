@@ -132,8 +132,7 @@ def _poison_worker(args: tuple) -> None:
     (widx, item_ids, out_dir, lease_dir, poison) = args
     out = Path(out_dir)
 
-    def is_done(item: str) -> bool:
-        return (out / f"{item}.json").exists()
+    marker = _FileMarker(out)
 
     def process(item: str) -> None:
         if item == poison:
@@ -145,12 +144,13 @@ def _poison_worker(args: tuple) -> None:
         # diagnostic sidecar that is NOT the file `is_done` checks.
         atomic_write(out / f"{item}.err.{widx}", f"{type(exc).__name__}: {exc}")
 
-    def on_exhausted(item: str) -> None:
+    def on_exhausted(item: str, path: Path) -> None:
         # Idempotent: several workers can legitimately reach this for the same item.
-        atomic_write(out / f"{item}.json", json.dumps({"item": item, "excluded": True}))
+        # Writes to the PATH THE POOL SUPPLIED, not a name of its own devising.
+        atomic_write(path, json.dumps({"item": item, "excluded": True}))
 
     WorkPool(
-        item_ids=item_ids, is_done=is_done, lease_dir=lease_dir,
+        item_ids=item_ids, done=marker, lease_dir=lease_dir,
         ttl=5.0, heartbeat=1.0, backoff=(0.05, 0.3),
         # `retryable` is load-bearing here. Left unset, EVERY exception is retryable once
         # max_attempts > 1, so the poison would take the retry path and `on_error` would
@@ -345,7 +345,7 @@ def test_max_attempts_gt_one_requires_on_exhausted(tmp_path):
     with pytest.raises(ValueError, match="max_attempts"):
         WorkPool(item_ids=["a"], is_done=lambda i: False,
                  lease_dir=str(lease_dir), max_attempts=0,
-                 on_exhausted=lambda i: None)
+                 on_exhausted=lambda i, p: None)
 
 
 def test_retry_recovers_across_transient_failures(tmp_path):
@@ -365,9 +365,9 @@ def test_retry_recovers_across_transient_failures(tmp_path):
         atomic_write(out / f"{i}.json", json.dumps({"item": i}))
 
     pool = WorkPool(
-        item_ids=items, is_done=is_done, lease_dir=str(lease_dir),
+        item_ids=items, done=_FileMarker(out), lease_dir=str(lease_dir),
         ttl=5.0, heartbeat=1.0, backoff=(0.01, 0.05),
-        max_attempts=3, on_exhausted=exhausted.append,
+        max_attempts=3, on_exhausted=lambda i, p: exhausted.append(i),
     )
     pool.run(process)
 
@@ -393,12 +393,12 @@ def test_exhausts_and_terminates_on_permanent_failure(tmp_path):
             raise RuntimeError("permanent")
         atomic_write(out / f"{i}.json", json.dumps({"item": i}))
 
-    def on_exhausted(i: str) -> None:
+    def on_exhausted(i: str, path: Path) -> None:
         exhausted.append(i)
-        atomic_write(out / f"{i}.json", json.dumps({"item": i, "excluded": True}))
+        atomic_write(path, json.dumps({"item": i, "excluded": True}))
 
     pool = WorkPool(
-        item_ids=items, is_done=is_done, lease_dir=str(lease_dir),
+        item_ids=items, done=_FileMarker(out), lease_dir=str(lease_dir),
         ttl=5.0, heartbeat=1.0, backoff=(0.01, 0.05),
         max_attempts=2, on_exhausted=on_exhausted,
     )
@@ -411,6 +411,26 @@ def test_exhausts_and_terminates_on_permanent_failure(tmp_path):
 
 class Transient(Exception):
     """An in-scope-for-retry exception, for the `retryable=` tests below."""
+
+
+class _FileMarker:
+    """Minimal `DoneMarker`: one `<item>.json` per item, done iff it exists.
+
+    Its parameter is named `key`, not `item_id`, ON PURPOSE. The protocol declares its
+    members positional-only precisely so an implementation can use its own domain's word
+    (the real consumer says `stem`), and a helper that happened to match the protocol's
+    spelling would leave that untested — the mismatch is the case that breaks under
+    parameter-name compatibility checking, so it is the one worth exercising.
+    """
+
+    def __init__(self, out: Path) -> None:
+        self.out = out
+
+    def exists(self, key: str) -> bool:
+        return (self.out / f"{key}.json").exists()
+
+    def new_path(self, key: str) -> Path:
+        return self.out / f"{key}.json"
 
 
 def _run_bounded(pool: WorkPool, process, *, on_error=None, timeout: float = 20.0) -> None:
@@ -466,12 +486,12 @@ def test_non_retryable_terminates_via_on_exhausted(tmp_path):
         errors.append((i, type(exc).__name__))
         atomic_write(out / f"ERROR_{i}.txt", f"{type(exc).__name__}: {exc}")  # NOT is_done
 
-    def on_exhausted(i: str) -> None:
+    def on_exhausted(i: str, path: Path) -> None:
         exhausted.append(i)
-        atomic_write(out / f"{i}.json", json.dumps({"item": i, "excluded": True}))
+        atomic_write(path, json.dumps({"item": i, "excluded": True}))
 
     pool = WorkPool(
-        item_ids=["a"], is_done=is_done, lease_dir=str(lease_dir),
+        item_ids=["a"], done=_FileMarker(out), lease_dir=str(lease_dir),
         ttl=5.0, heartbeat=1.0, backoff=(0.01, 0.05),
         max_attempts=3, on_exhausted=on_exhausted, retryable=Transient,
     )
@@ -494,10 +514,10 @@ def test_non_retryable_gets_exactly_one_attempt(tmp_path):
         raise ValueError("fatal")
 
     pool = WorkPool(
-        item_ids=["a"], is_done=lambda i: (out / f"{i}.json").exists(),
+        item_ids=["a"], done=_FileMarker(out),
         lease_dir=str(lease_dir), ttl=5.0, heartbeat=1.0, backoff=(0.01, 0.05),
         max_attempts=5, retryable=Transient,
-        on_exhausted=lambda i: atomic_write(out / f"{i}.json", "{}"),
+        on_exhausted=lambda i, path: atomic_write(path, "{}"),
     )
     _run_bounded(pool, process, on_error=lambda i, e: None)
 
@@ -519,10 +539,10 @@ def test_soft_failures_then_hard_failure_terminates(tmp_path):
         raise Transient("soft") if len(seen) <= 2 else ValueError("hard")
 
     pool = WorkPool(
-        item_ids=["a"], is_done=lambda i: (out / f"{i}.json").exists(),
+        item_ids=["a"], done=_FileMarker(out),
         lease_dir=str(lease_dir), ttl=5.0, heartbeat=1.0, backoff=(0.01, 0.05),
         max_attempts=5, retryable=Transient,
-        on_exhausted=lambda i: atomic_write(out / f"{i}.json", "{}"),
+        on_exhausted=lambda i, path: atomic_write(path, "{}"),
     )
     _run_bounded(pool, process, on_error=lambda i, e: None)
 
@@ -542,10 +562,10 @@ def test_max_attempts_one_with_on_error_still_terminates(tmp_path):
         raise Transient("even an in-scope exception is not retryable at max_attempts=1")
 
     pool = WorkPool(
-        item_ids=["a", "b"], is_done=lambda i: (out / f"{i}.json").exists(),
+        item_ids=["a", "b"], done=_FileMarker(out),
         lease_dir=str(lease_dir), ttl=5.0, heartbeat=1.0, backoff=(0.01, 0.05),
         max_attempts=1, retryable=Transient,
-        on_exhausted=lambda i: atomic_write(out / f"{i}.json", "{}"),
+        on_exhausted=lambda i, path: atomic_write(path, "{}"),
     )
     _run_bounded(pool, process, on_error=lambda i, e: None)
 
@@ -606,10 +626,10 @@ def test_exhaust_skipped_when_peer_completed_the_item(tmp_path):
         raise ValueError("crashed after the peer finished")
 
     pool = WorkPool(
-        item_ids=["a"], is_done=lambda i: (out / f"{i}.json").exists(),
+        item_ids=["a"], done=_FileMarker(out),
         lease_dir=str(lease_dir), ttl=5.0, heartbeat=1.0, backoff=(0.01, 0.05),
         max_attempts=2, retryable=Transient,
-        on_exhausted=lambda i: exhausted.append(i),
+        on_exhausted=lambda i, path: exhausted.append(i),
     )
     _run_bounded(pool, process, on_error=lambda i, e: None)
 
@@ -633,9 +653,24 @@ def test_on_exhausted_that_never_terminates_is_surfaced(tmp_path):
     def process(i: str) -> None:
         raise ValueError("boom")
 
+    class _DictMarker:
+        """A marker whose done-state is a dict the test drives directly.
+
+        `new_path` still returns a real path, and the handlers below deliberately ignore
+        it — which is the point: supplying the path makes the RIGHT write easy, it cannot
+        force a handler to perform one. That residual is exactly what `_verify_terminal`
+        exists to catch, so this test drives the seam and the backstop together.
+        """
+
+        def exists(self, key: str) -> bool:
+            return done[key]
+
+        def new_path(self, key: str) -> Path:
+            return out / f"{key}.json"
+
     def make_pool(on_exhausted) -> WorkPool:
         return WorkPool(
-            item_ids=["a"], is_done=lambda i: done[i],
+            item_ids=["a"], done=_DictMarker(),
             lease_dir=str(lease_dir), ttl=5.0, heartbeat=1.0, backoff=(0.01, 0.05),
             log=logs.append, max_attempts=1, on_exhausted=on_exhausted,
         )
@@ -646,7 +681,7 @@ def test_on_exhausted_that_never_terminates_is_surfaced(tmp_path):
     # and not what is under test here.
     exhausts: list[str] = []
 
-    def relents_on_second(i: str) -> None:
+    def relents_on_second(i: str, path: Path) -> None:
         exhausts.append(i)
         if len(exhausts) >= 2:
             done[i] = True
@@ -664,4 +699,174 @@ def test_on_exhausted_that_never_terminates_is_surfaced(tmp_path):
     # workers die on walltime, so each new one would warn once and exit forever.
     done["a"] = False
     with pytest.raises(RuntimeError, match="MUST write the durable output"):
-        _run_bounded(make_pool(lambda i: None), process, on_error=lambda i, e: None)
+        _run_bounded(make_pool(lambda i, path: None), process, on_error=lambda i, e: None)
+
+
+# =======================================================================================
+# The done-marker SEAM.
+#
+# The livelock these guard is not "no handler ran" (that is bounded already) but "the
+# handler ran and wrote a name `is_done` does not read". It has happened: a terminal
+# marker written under one filename token while the done-check globbed another -- the
+# right handler, the right kind of file, the wrong name, reclaimed forever.
+#
+# `is_done` alone can never prevent it, because the pool never learns the name. A marker
+# owns both halves, so the pool can hand the handler the path it must write.
+# =======================================================================================
+
+
+def test_a_terminal_handler_without_a_marker_is_rejected(tmp_path):
+    """Fail closed at construction rather than let a handler name its own output."""
+    out, lease_dir = _retry_dirs(tmp_path)
+
+    with pytest.raises(ValueError, match="on_exhausted requires done="):
+        WorkPool(item_ids=["a"], is_done=lambda i: (out / f"{i}.json").exists(),
+                 lease_dir=str(lease_dir), on_exhausted=lambda i, p: None)
+
+
+def test_exactly_one_of_is_done_or_done_is_required(tmp_path):
+    """Two answers to "is it done" is the shape this parameter exists to remove."""
+    _, lease_dir = _retry_dirs(tmp_path)
+
+    with pytest.raises(ValueError, match="exactly one"):
+        WorkPool(item_ids=["a"], lease_dir=str(lease_dir))
+    with pytest.raises(ValueError, match="exactly one"):
+        WorkPool(item_ids=["a"], lease_dir=str(lease_dir),
+                 is_done=lambda i: False, done=_FileMarker(Path(tmp_path)))
+
+
+def test_on_exhausted_is_handed_a_path_that_satisfies_the_done_check(tmp_path):
+    """The seam itself: the handler does not compute a name, it is given one.
+
+    Asserted against the MARKER rather than a hand-spelled filename -- spelling one here
+    would re-create at test level the very second derivation the change removes.
+    """
+    out, lease_dir = _retry_dirs(tmp_path)
+    marker = _FileMarker(out)
+    seen: list[Path] = []
+
+    def on_exhausted(item: str, path: Path) -> None:
+        seen.append(path)
+        atomic_write(path, "{}")
+
+    _run_bounded(
+        WorkPool(item_ids=["a"], done=marker, lease_dir=str(lease_dir),
+                 ttl=5.0, heartbeat=1.0, backoff=(0.01, 0.05),
+                 on_exhausted=on_exhausted),
+        lambda i: (_ for _ in ()).throw(ValueError("boom")),
+        on_error=lambda i, e: None,
+    )
+
+    assert seen == [marker.new_path("a")]
+    assert marker.exists("a")
+
+
+def test_a_marker_whose_halves_disagree_is_caught_not_looped(tmp_path):
+    """The production incident, reproduced through the seam.
+
+    A marker that mints one name and checks another is the residual the seam cannot rule
+    out -- supplying a path makes the right write easy, it cannot force one. What it must
+    NOT do is loop: `_verify_terminal` escalates on the second durable marker instead.
+    """
+    out, lease_dir = _retry_dirs(tmp_path)
+
+    class _DisagreeingMarker:
+        """Mints `<item>.new` but checks `<item>.json` -- the serial-livelock shape."""
+
+        def exists(self, key: str) -> bool:
+            return (out / f"{key}.json").exists()
+
+        def new_path(self, key: str) -> Path:
+            return out / f"{key}.new"
+
+    def process(i: str) -> None:
+        raise ValueError("boom")
+
+    logs: list[str] = []
+    pool = WorkPool(item_ids=["a"], done=_DisagreeingMarker(),
+                    lease_dir=str(lease_dir), ttl=5.0, heartbeat=1.0,
+                    backoff=(0.01, 0.05), max_attempts=1, log=logs.append,
+                    on_exhausted=lambda i, path: atomic_write(path, "{}"))
+
+    # ONE worker suffices, and that is the geometry again: the item stays undone and its
+    # lease is released, so the same worker re-claims it, exhausts a second time, and
+    # trips the durable escalation within seconds. Tolerance is still real -- the first
+    # exhaust only warns -- it is just spent fast rather than across the fleet.
+    with pytest.raises(RuntimeError, match="MUST write the durable output"):
+        _run_bounded(pool, process, on_error=lambda i, e: None, timeout=20.0)
+
+    assert any("is_done still false" in m for m in logs)     # warned before it raised
+    assert (out / "a.new").exists()                          # it DID write, just not where
+    assert not (out / "a.json").exists()
+
+
+# --------------------------------------------------------------------------- #
+# the THIRD writer: `process` itself
+# --------------------------------------------------------------------------- #
+
+def test_a_process_that_never_completes_its_item_raises_instead_of_looping(tmp_path):
+    """`process` is the only writer whose naming bug used to loop forever undetected.
+
+    It raises nothing, so no attempt is recorded, no budget spends, `on_exhausted` never
+    fires and `_verify_terminal` never runs. The item is simply reclaimed, at a full unit
+    of real work per cycle, with nothing in the pool noticing.
+
+    Note what this test asserts about the LOOP GEOMETRY, because the obvious spec is
+    wrong: `_scan_once` walks a fixed order and takes the first undone item, and the
+    failing item's lease was just released -- so the worker re-claims THE SAME item and
+    never reaches a second. A counter keyed on distinct items could never leave 1.
+
+    WHICH item it pins on is not predictable (`_start_offset` is derived from a per-process
+    uuid), so this asserts the shape -- exactly one item, whichever it is -- rather than a
+    name. Asserting `item_00` passes or fails by luck of the rotation.
+    """
+    out, lease_dir = _retry_dirs(tmp_path)
+    touched: list[str] = []
+
+    def process(item: str) -> None:
+        touched.append(item)
+        atomic_write(out / f"{item}.WRONG", "{}")     # never what the marker checks
+
+    with pytest.raises(RuntimeError, match="without is_done becoming true"):
+        _run_bounded(
+            WorkPool(item_ids=[f"item_{i:02d}" for i in range(4)], done=_FileMarker(out),
+                     lease_dir=str(lease_dir), ttl=5.0, heartbeat=1.0, backoff=(0.01, 0.05)),
+            process,
+        )
+
+    assert len(set(touched)) == 1, (
+        f"expected the worker to pin on ONE item, saw {sorted(set(touched))} -- if this "
+        "ever spreads across items, the consecutive-miss counter needs rethinking"
+    )
+    assert len(touched) == 3, f"expected exactly the miss limit, saw {len(touched)}"
+
+
+def test_one_lagged_done_check_is_tolerated_and_resets(tmp_path):
+    """A stale-negative `is_done` costs a re-process, not a raise.
+
+    The module's termination proof rests on stale negatives being safe, so the counter has
+    to distinguish "the filesystem is behind" from "your names disagree". One miss then a
+    success must leave no residue -- otherwise lag on a long run would eventually trip it.
+    """
+    out, lease_dir = _retry_dirs(tmp_path)
+    logs: list[str] = []
+    lag = {"pending": True}
+
+    class _LaggyMarker:
+        def exists(self, key: str) -> bool:
+            if lag["pending"] and (out / f"{key}.json").exists():
+                lag["pending"] = False        # one stale negative, then the truth
+                return False
+            return (out / f"{key}.json").exists()
+
+        def new_path(self, key: str) -> Path:
+            return out / f"{key}.json"
+
+    _run_bounded(
+        WorkPool(item_ids=["a", "b", "c"], done=_LaggyMarker(), lease_dir=str(lease_dir),
+                 ttl=5.0, heartbeat=1.0, backoff=(0.01, 0.05), log=logs.append),
+        lambda i: atomic_write(out / f"{i}.json", "{}"),
+    )
+
+    assert any("processed but is_done still false" in m for m in logs)   # warned once
+    assert all((out / f"{i}.json").exists() for i in ("a", "b", "c"))    # and finished

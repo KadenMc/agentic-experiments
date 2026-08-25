@@ -52,6 +52,18 @@ Three caller invariants the signature cannot express:
    permit silently -- the sidecar is not what ``is_done`` checks, so the item was reclaimed
    forever. ``run`` now refuses an ``on_error`` without an ``on_exhausted``, and
    ``on_exhausted``'s promise is verified rather than trusted.
+
+Invariant 1 is the one the signature *can* now help with. Pass a :class:`DoneMarker` as
+``done=`` rather than a bare ``is_done`` and the pool learns the output's **name**, so it
+can hand ``on_exhausted`` the exact path to write instead of trusting the handler to derive
+the same name a second time. That second derivation is where this has failed in practice --
+a terminal marker written under one filename token while the done-check globbed another --
+and it is required whenever a terminal handler is supplied.
+
+All three writers of the done-marker are now checked rather than trusted: ``process`` (see
+:meth:`WorkPool._verify_processed`), ``on_exhausted`` (see
+:meth:`WorkPool._verify_terminal`), and ``on_error``, which is structurally prevented from
+being one at all.
 """
 from __future__ import annotations
 
@@ -61,10 +73,57 @@ import time
 import uuid
 from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import Protocol, runtime_checkable
 
 from aexp.utils.linklease import LinkLease, probe_exclusive_create
 
-__all__ = ["WorkPool", "probe_exclusive_create"]
+__all__ = ["DoneMarker", "WorkPool", "probe_exclusive_create"]
+
+
+#: Consecutive post-``process`` verification misses before :meth:`WorkPool._verify_processed`
+#: raises. Small on purpose: a systemic naming bug pins one worker on one item (see that
+#: method), so the count is reached in seconds, while a stale-negative ``is_done`` costs one
+#: wasted re-process and resets. Three tolerates a lag burst without tolerating a livelock.
+_PROCESS_MISS_LIMIT = 3
+
+
+@runtime_checkable
+class DoneMarker(Protocol):
+    """The done-marker's **name**, owned by one object instead of derived twice.
+
+    ``is_done`` alone tells the pool whether an item is finished but never what its output
+    is *called*. The terminal handler has to name it again, independently, and nothing binds
+    the two -- the pool cannot check them because it never sees either name. When they
+    disagree the item never becomes done and is reclaimed forever, which has happened in
+    production: a terminal marker written under one filename token while the done-check
+    globbed another.
+
+    Passing a marker instead lets the pool hand ``on_exhausted`` the exact path it must
+    write, so agreement is structural rather than remembered. The two members must be
+    consistent with each other -- that is the one thing this cannot enforce, and
+    :meth:`WorkPool._verify_terminal` is the backstop for it -- but they now sit on one
+    object, derived from one identity, where a reader sees both.
+
+    Methods are **positional-only** so an implementation may name its parameter whatever
+    suits its own domain (``stem``, ``key``, ``shard``) without tripping protocol
+    parameter-name compatibility.
+    """
+
+    def exists(self, item_id: str, /) -> bool:
+        """True once the item's durable output exists. Must be monotonic (module docstring)."""
+        ...
+
+    def new_path(self, item_id: str, /) -> Path:
+        """A fresh path that, once written, WILL satisfy :meth:`exists`.
+
+        ``new_path`` rather than ``path`` because an output name is not always fixed: a
+        scheme that timestamps its filenames answers ``exists`` with a glob and mints a new
+        name per write. Returning a *new* path each call serves both -- and for the
+        timestamped kind it is load-bearing, since a consumer that resolves duplicates by
+        recency needs a terminal marker to sort after the run's real output rather than
+        collide with it.
+        """
+        ...
 
 
 class WorkPool:
@@ -81,9 +140,16 @@ class WorkPool:
     item_ids : sequence of str
         The full item universe (every worker passes the same list). Each must be a
         filesystem-safe basename (see the module docstring).
-    is_done : callable
+    is_done : callable, optional
         ``is_done(item_id) -> bool``, true once the item's durable output exists. Must be
-        monotonic (see the module docstring).
+        monotonic (see the module docstring). Sufficient only for callers with **no**
+        terminal handler; pass ``done`` instead if you supply ``on_exhausted``. Exactly one
+        of ``is_done`` / ``done`` is required.
+    done : DoneMarker, optional
+        The done-check AND the output's name, on one object (see :class:`DoneMarker`).
+        Required whenever ``on_exhausted`` is given, because the pool then hands that
+        handler ``done.new_path(item)`` to write -- which is what stops a terminal marker
+        landing where the done-check does not look.
     lease_dir : str or PathLike
         Directory on the shared filesystem for the ``<item_id>.lease`` files.
     ttl : float, optional
@@ -108,14 +174,16 @@ class WorkPool:
         to. Worker *death* (no exception) is orthogonal -- always reclaimed via the stale
         lease, never counted as an attempt.
     on_exhausted : callable, optional
-        ``on_exhausted(item_id) -> None``, called once an item has spent its budget --
-        ``max_attempts`` retryable failures, or a single non-retryable one. It MUST make
-        ``is_done(item_id)`` true durably (e.g. write an excluded/void output); that is
-        what stops the item being reclaimed forever and lets the pool terminate (the same
-        role a successful ``process`` output plays), and :meth:`_verify_terminal` checks
-        that it did. Should be idempotent (a rare double-exhaust under lag must be safe),
-        like ``process``. **Required when ``max_attempts > 1``** (enforced here) and
-        whenever ``run`` is given an ``on_error`` (enforced in :meth:`run`).
+        ``on_exhausted(item_id, path) -> None``, called once an item has spent its budget
+        -- ``max_attempts`` retryable failures, or a single non-retryable one. Write the
+        terminal record (an excluded/void output) **to the given path**, which comes from
+        ``done.new_path(item_id)`` and therefore satisfies ``done.exists`` by construction.
+        That is what stops the item being reclaimed forever and lets the pool terminate --
+        the same role a successful ``process`` output plays -- and :meth:`_verify_terminal`
+        checks that it happened. Should be idempotent (a rare double-exhaust under lag must
+        be safe), like ``process``. **Requires ``done``** (enforced here). Itself
+        **required when ``max_attempts > 1``** (enforced here) and whenever ``run`` is
+        given an ``on_error`` (enforced in :meth:`run`).
     retryable : exception type or tuple of types, optional
         Restrict *retrying* to these exception types (default ``None`` = every
         ``Exception`` is retryable once ``max_attempts > 1``). An out-of-scope exception
@@ -132,19 +200,30 @@ class WorkPool:
         self,
         *,
         item_ids: Sequence[str],
-        is_done: Callable[[str], bool],
+        is_done: Callable[[str], bool] | None = None,
+        done: DoneMarker | None = None,
         lease_dir: str | Path,
         ttl: float = 600.0,
         heartbeat: float | None = None,
         backoff: tuple[float, float] = (1.0, 30.0),
         log: Callable[[str], None] | None = None,
         max_attempts: int = 1,
-        on_exhausted: Callable[[str], None] | None = None,
+        on_exhausted: Callable[[str, Path], None] | None = None,
         retryable: type[BaseException] | tuple[type[BaseException], ...] | None = None,
     ) -> None:
         self._item_ids: list[str] = list(item_ids)
         self._validate_ids(self._item_ids)
-        self._is_done = is_done
+        # Exactly one source of "is it done". Accepting both would be two answers to one
+        # question -- the shape this parameter exists to remove.
+        if (is_done is None) == (done is None):
+            raise ValueError(
+                "pass exactly one of is_done= or done=. `done` is a DoneMarker, which owns "
+                "BOTH the done-check and the output's name, so the pool can hand "
+                "on_exhausted the exact path to write; `is_done` is the bare predicate and "
+                "is enough only for callers with no terminal handler."
+            )
+        self._done = done
+        self._is_done: Callable[[str], bool] = done.exists if done is not None else is_done  # type: ignore[assignment]
         self._owner_id = uuid.uuid4().hex
         self._lease = LinkLease(lease_dir, owner_id=self._owner_id, ttl=ttl, log=log)
         self._ttl = ttl
@@ -164,9 +243,23 @@ class WorkPool:
                 "write an excluded/void output). Without it a permanently-failing item "
                 "would be reclaimed forever and the pool would never terminate."
             )
+        # A terminal handler needs a marker, because the whole point of one is that the
+        # pool -- not the handler -- decides the name it writes. Fail closed at
+        # construction: the alternative is a handler naming its own file, disagreeing with
+        # the done-check, and the item being reclaimed forever.
+        if on_exhausted is not None and done is None:
+            raise ValueError(
+                "on_exhausted requires done= (a DoneMarker), not is_done=. The pool calls "
+                "on_exhausted(item, path) with a path from done.new_path(item), so the "
+                "terminal write lands where done.exists(item) looks. A handler that names "
+                "its own output can disagree with the done-check, and then the item is "
+                "reclaimed forever -- silently, because nothing raised."
+            )
         self._max_attempts = max_attempts
         self._on_exhausted = on_exhausted
         self._retryable = retryable
+        #: Consecutive post-`process` verification misses, ANY item (see `_verify_processed`).
+        self._process_misses = 0
         # Per-item attempt tally lives beside the leases (its own dir so it never
         # collides with <item>.lease). Created lazily on the first failure.
         self._attempts_dir = Path(lease_dir).parent / "_attempts"
@@ -273,13 +366,17 @@ class WorkPool:
             t0 = time.time()
             worker_done = 0
             while (item := self.claim_next()) is not None:
+                completed = False
                 try:
                     process(item)
+                    completed = True
                 except Exception as exc:  # noqa: BLE001 -- routed by contract below
                     if not self._handle_failure(item, exc, on_error):
                         raise
                 finally:
                     self.mark_done(item)
+                if completed:
+                    self._verify_processed(item)
                 worker_done += 1
                 self._log_progress(worker_done, total, t0)
 
@@ -350,7 +447,11 @@ class WorkPool:
             # ``max_attempts > 1``, which ``__init__`` refuses without ``on_exhausted``;
             # a non-retryable one returned above when it was None.
             assert self._on_exhausted is not None
-            self._on_exhausted(item_id)
+            # The path comes from the marker, so the terminal write cannot land somewhere
+            # `exists` does not look -- unless the handler ignores it, which is what
+            # `_verify_terminal` below is for.
+            assert self._done is not None  # guaranteed by __init__ when on_exhausted is set
+            self._on_exhausted(item_id, self._done.new_path(item_id))
             self._verify_terminal(item_id)
         else:
             self._emit(
@@ -358,6 +459,51 @@ class WorkPool:
                 f"({type(exc).__name__}); will retry"
             )
         return True
+
+    def _verify_processed(self, item_id: str) -> None:
+        """``process`` returned successfully; check that it actually made the item done.
+
+        The success path is the pool's THIRD writer of the done-marker and, until now, the
+        only one with no check at all. A failure raises and is routed; an exhausted item is
+        checked by :meth:`_verify_terminal`. But a ``process`` that returns normally having
+        written a name ``is_done`` does not read records no attempt, triggers no exhaust,
+        and simply gets reclaimed -- forever, silently, at a full unit of real work per
+        cycle. Nothing in the pool noticed.
+
+        **Consecutive misses on ANY item, not on distinct items.** That distinction is the
+        whole mechanism, and the intuitive version of it is wrong. :meth:`_scan_once` walks
+        a fixed rotated order and takes the first undone item; a miss leaves the item
+        undone and :meth:`mark_done` has already released its lease, so the very next scan
+        re-claims *the same item*. A worker with a systemic naming bug pins there and never
+        reaches a second item -- so a counter keyed on distinct items could never leave 1,
+        and this would have degraded into warn-spam around an unbroken livelock.
+
+        That same pinning is what makes an in-memory counter sufficient: one process
+        observes every miss, within seconds, so the count needs neither durability nor
+        fleet-wide visibility (unlike :meth:`_verify_terminal`, whose exhausts are spread
+        across churning workers).
+
+        One miss is tolerated and resets on the next verified success, because a
+        stale-negative ``is_done`` is explicitly safe here (module docstring) -- it costs a
+        wasted re-process, which is the same price the pool already pays for lag.
+        """
+        if self._is_done(item_id):
+            self._process_misses = 0
+            return
+        self._process_misses += 1
+        if self._process_misses >= _PROCESS_MISS_LIMIT:
+            raise RuntimeError(
+                f"process() returned successfully {self._process_misses} times in a row "
+                f"without is_done becoming true (most recently for {item_id!r}). The item "
+                "is being reclaimed each cycle, so the pool cannot terminate. process() "
+                "must write the durable output that is_done checks -- if it writes under a "
+                "different name, this is that bug."
+            )
+        self._emit(
+            f"workpool: WARNING {item_id} processed but is_done still false "
+            f"({self._process_misses}/{_PROCESS_MISS_LIMIT} consecutive; filesystem lag, "
+            "or process did not write the done-marker)"
+        )
 
     def _verify_terminal(self, item_id: str) -> None:
         """``on_exhausted`` promised ``is_done``; check that it delivered.

@@ -26,6 +26,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (not imported at package init), pure-stdlib (no new dependency). Validated by an
   N-process spawn hammer (`tests/test_workpool.py`) asserting completeness + single
   durable record + bounded duplicates + liveness under simulated NFS attribute-cache lag.
+  **The done-marker has one owner.** Pass a `DoneMarker` as `done=` — an object exposing
+  `exists(item)` and `new_path(item)` — instead of a bare `is_done` closure, and the pool
+  learns the output's *name*, not just whether it is there. It then hands `on_exhausted`
+  the exact path to write (`on_exhausted(item, path)`), so the terminal write lands where
+  the done-check looks by construction rather than by the caller deriving the same name a
+  second time. `run()` **requires** `done=` whenever `on_exhausted` is supplied; the bare
+  `is_done=` form remains for callers with no terminal handler. `new_path` rather than
+  `path` because a naming scheme may carry a timestamp — then `exists` is a glob, each
+  write mints a fresh name, and a terminal marker must sort after the run's real output
+  rather than collide with it. Marker members are positional-only, so an implementation may
+  name its parameter whatever its own domain calls it.
+
+  *Why: the second derivation is where this fails. A consumer wrote a terminal marker under
+  one filename token while its done-check globbed another — the right handler, the right
+  kind of file, the wrong name — and the item was reclaimed forever. Nothing could catch it,
+  because the pool never saw either name.*
+
+  **`process` is verified too, closing the last unchecked writer.** A `process` that returns
+  successfully without making `is_done` true raises no exception, so it records no attempt,
+  never exhausts, and was simply reclaimed — forever, silently, at a full unit of real work
+  per cycle. The pool now warns on a miss and raises after three **consecutive** misses.
+  Consecutive on *any* item rather than distinct ones, because the scan takes the first
+  undone item and a miss releases its lease: a worker whose writes land under the wrong name
+  re-claims the same item every cycle and never reaches a second, so a distinct-item counter
+  could never escalate.
+
   **Every failure gets a budget and a terminal state.** `max_attempts` bounds how many
   attempts a *retryable* failure gets (default `1` = no retry); it does not decide whether
   a failure terminates. A retryable failure writes no output, so the item is reclaimed and
