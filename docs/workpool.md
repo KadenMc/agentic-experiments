@@ -54,11 +54,12 @@ Three invariants the type signature can't express:
    rolled-back row, a cleaned temp) breaks termination.
 2. **`item_id` must be a filesystem-safe basename** (no `/` or `\`, not `.`/`..`) — it
    names a lease file.
-3. **`on_exhausted` is the only terminal handler.** Every item that stops being worked on
-   goes through it, and it must make `is_done` true. `on_error` is a *diagnostic* hook —
-   whatever it writes, the pool still exhausts the item. Writing a sidecar from `on_error`
-   and expecting the pool to move on is the mistake this module used to permit silently:
-   the sidecar isn't what `is_done` checks, so the item was reclaimed forever.
+3. **`on_exhausted` is the only terminal handler**, and with `done=` the pool gives it the
+   path to write. Every item that stops being worked on goes through it. `on_error` is a
+   *diagnostic* hook — whatever it writes, the pool still exhausts the item. Writing a
+   sidecar from `on_error` and expecting the pool to move on is the mistake this module
+   used to permit silently: the sidecar isn't what `is_done` checks, so the item was
+   reclaimed forever.
 
 ## Minimal usage
 
@@ -116,15 +117,22 @@ still a budget, and it still ends in `on_exhausted`.
   reclaimed and re-run — **by any worker**, so retry spans the fleet (a heavy item that
   OOMs a small GPU can be re-run on a bigger one). Attempts are counted durably on the
   shared filesystem (`_pool/_attempts/<item>/`), so the bound holds across workers.
-- Once an item spends its budget the pool calls **`on_exhausted(item)`**. It MUST make
-  `is_done(item)` true durably (e.g. write an excluded/void output); that is what stops the
-  item being reclaimed forever and lets the pool terminate — the same role a successful
-  output plays. Make it idempotent (a rare double-exhaust under lag must be safe), like
-  `process`. Required when `max_attempts > 1`, and whenever you pass `on_error`.
+- Once an item spends its budget the pool calls **`on_exhausted(item, path)`**, where
+  `path` comes from `done.new_path(item)`. Write the terminal record **there**: that is what
+  stops the item being reclaimed forever and lets the pool terminate — the same role a
+  successful output plays. Make it idempotent (a rare double-exhaust under lag must be
+  safe), like `process`. Requires `done=`; itself required when `max_attempts > 1`, and
+  whenever you pass `on_error`.
 - The pool **verifies** that promise rather than trusting it. If `is_done` is still false
   after `on_exhausted`, it warns and records a durable marker; a second such marker
   *anywhere in the fleet* raises. One stale-negative read is tolerated (NFS lag); a
   genuinely wrong marker name — the classic version of this bug — is not.
+- **`process` is checked too.** A `process` that returns successfully without making
+  `is_done` true would otherwise be reclaimed forever with nothing raised — it throws no
+  exception, so no attempt is recorded and `on_exhausted` never runs. The pool warns on a
+  miss and raises after three **consecutive** misses. Consecutive on *any* item, not on
+  distinct ones: a worker whose writes land under the wrong name re-claims the same item
+  every cycle and never reaches a second, so a distinct-item counter could never escalate.
 - If a peer completed the item while you were failing, the exhaust is **skipped**. The pool
   permits occasional double-processing, and a terminal writer run over a finished item
   would overwrite a real result.
@@ -134,13 +142,37 @@ still a budget, and it still ends in `on_exhausted`.
 - Worker **death** (no exception — walltime/VPN) is orthogonal: always reclaimed via the
   stale lease, never counted as an attempt.
 
+### The marker (`done=`)
+
+Once you have a terminal handler, pass a **`DoneMarker`** instead of a bare `is_done` — an
+object owning both the done-check and the output's *name*:
+
 ```python
+class Outputs:                                   # your naming, in one place
+    def exists(self, item):   return (OUT / f"{item}.json").exists()
+    def new_path(self, item): return OUT / f"{item}.json"
+
 WorkPool(
-    item_ids=items, is_done=is_done, lease_dir=OUT / "_pool" / "leases",
+    item_ids=items, done=Outputs(), lease_dir=OUT / "_pool" / "leases",
     max_attempts=3,
-    on_exhausted=lambda item: atomic_write(OUT / f"{item}.json", EXCLUDED),  # makes is_done true
+    on_exhausted=lambda item, path: atomic_write(path, EXCLUDED),   # writes where exists() looks
 ).run(process)
 ```
+
+`run()` **rejects** `on_exhausted` without `done=`, because the alternative is the handler
+naming its own file. That is not hypothetical: a terminal marker written under one filename
+token while the done-check globbed another cost a production run — the right handler, the
+right kind of file, the wrong name, and an item reclaimed forever. Handing the handler
+`done.new_path(item)` makes the two agree by construction.
+
+`new_path`, not `path`: if your names carry a timestamp or other per-write component,
+`exists` is a glob and each write mints a fresh name. Returning a new path each call serves
+both shapes — and if you resolve duplicates by recency, it is what keeps a terminal marker
+sorting *after* the run's real output instead of colliding with it.
+
+The bare `is_done=` form remains for callers with no terminal handler, like the quickstart
+above. Marker methods are matched structurally and positionally, so name the parameter
+whatever your domain calls it.
 
 **Heterogeneous-pool caveat.** Retry recovers a failure only if a *later* attempt can
 succeed. When failures are **capacity-bound** — an item too big for a small worker, so it
