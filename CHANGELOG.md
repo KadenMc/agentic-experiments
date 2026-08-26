@@ -78,6 +78,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`atomic_write` no longer corrupts a destination that two processes write at once.**
+  The temp file was named from the destination alone (`dest.name + ".tmp"`), so every
+  concurrent writer of one destination shared a single temp: each opened it `O_TRUNC`,
+  wrote at its own offset, and each then `replace`d it into place. `replace` being atomic
+  makes the *publish* indivisible and nothing more — the interleaving it exists to prevent
+  simply moved one file upstream, from `dest` to `dest.tmp`, and published a file holding
+  one writer's payload spliced onto another's. Measured A/B against the old body on one
+  Linux host (xfs and NFS, 2 and 4 writers, three payload-flush shapes, 1350 destinations
+  per leg): **751 of 1350 destinations torn, in every configuration**, plus a lost write
+  in essentially every trial as one writer's `replace` hit the temp its peer had already
+  renamed away. NFS is not immune — four concurrent writers tore 48% and 77% of
+  destinations in two runs of the plain `write_text` path. Windows never tore, because its
+  mandatory file sharing refuses the concurrent open outright, but that is still a lost
+  write. Each call now stages into `<dest>.<pid>.<nonce>.tmp` and unlinks it if the write
+  or the replace raises, so the two failure modes collapse into the behaviour callers
+  already expect: last writer wins, whole. Post-fix: 0 of 1350 torn, no exceptions, no
+  orphaned temps.
+
+  This is load-bearing for `WorkPool`, which explicitly permits occasional
+  double-processing of an item and rests its whole termination proof on the caller's
+  output write being atomic — a torn output drives `is_done` true over corrupt content,
+  monotonically and irreversibly. Giving each writer its own temp moves the last Windows
+  collision from the open to the rename (`PermissionError [WinError 5]`), so the replace
+  is wrapped in this module's own `doc_op_with_retry`, which is a no-op on POSIX.
+  Guarded by a cross-process concurrent-writer test plus a deterministic temp-name-uniqueness
+  test in `tests/test_utils.py`, which had no coverage for either.
+
+  Third instance of this exact class in the codebase, and the pattern was already
+  understood in two of them: `linklease._candidate_path` carries a uuid nonce with a
+  comment giving this reason, the `probe_exclusive_create` entry below is the same
+  shared-fixed-path bug, and `atomic_write` was the one that never followed it — while a
+  downstream caller's docstring said outright that its temp name "is a fixed `.tmp`
+  sibling, which K concurrent workers would collide on".
+
 - **`probe_exclusive_create` is now safe under concurrent worker startup.** The probe's
   link-create self-test used one fixed target path (`_pool/.probe/probe.lease`) shared by
   every caller, so N workers starting simultaneously on the same run dir — the normal
