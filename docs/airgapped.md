@@ -127,7 +127,7 @@ Two values must be set — the SSH host and the remote repo path:
 hostname — that way all of the auth detail (identity file, user, port,
 MFA, connection multiplexing) lives in your SSH config, and this module
 stays a thin wrapper. `remote_repo` is the absolute path of the git clone
-on the login node (e.g. `~/electricrag`).
+on the login node (e.g. `~/my-project`).
 
 When both env vars are set, `RelayClient()` needs no arguments.
 
@@ -138,7 +138,7 @@ The recommended entry point is `aexp.airgapped.RelayClient`:
 ```python
 from aexp.airgapped import RelayClient
 
-relay = RelayClient(ssh_host="cluster-login", remote_repo="~/electricrag")
+relay = RelayClient(ssh_host="cluster-login", remote_repo="~/my-project")
 r = relay.pull()
 print(r.returncode, r.stdout)
 ```
@@ -177,7 +177,7 @@ from aexp.airgapped import request
 result = request(
     "git_status",
     ssh_host="cluster-login",
-    remote_repo="~/electricrag",
+    remote_repo="~/my-project",
     timeout=30.0,
 )
 ```

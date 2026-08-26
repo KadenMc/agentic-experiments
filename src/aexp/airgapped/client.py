@@ -18,7 +18,7 @@ client (and agent) run on the user's local machine (where Claude Code runs).
 Recommended usage::
 
     from aexp.airgapped import RelayClient
-    relay = RelayClient(ssh_host="cluster-login", remote_repo="~/electricrag")
+    relay = RelayClient(ssh_host="cluster-login", remote_repo="~/my-project")
     r = relay.pull()
     print(r.returncode, r.stdout)
 

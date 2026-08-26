@@ -1303,7 +1303,7 @@ def test_run_queued_streams_output_live_to_parent_stdout(
     ``subprocess.run(..., capture_output=True)`` which buffers stdout/stderr
     in memory until process exit, then dumps the whole thing. For a
     15-25 minute interactive run that broke live observability completely
-    (the electricrag F.1 session: 4 hours of debugging, multiple
+    (reported by a consumer: 4 hours of debugging, multiple
     panic-kills of healthy jobs that were just silent).
 
     Strategy: spawn ``run_queued`` in a thread under a runner that writes
@@ -1809,7 +1809,7 @@ def _commit_one_file_change(repo: Path, filename: str = "tickle.txt") -> None:
 def test_add_to_queue_dedupes_on_recommit_returns_existing_job(
     installed_repo: Path,
 ) -> None:
-    """The exact electricrag failure mode: queue, commit, queue again.
+    """The exact failure mode a consumer hit: queue, commit, queue again.
 
     Without dedupe, the second queueing creates a parallel signac job
     (different ``code_commit`` in sp). With the v0.2.1 default, the

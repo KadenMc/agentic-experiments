@@ -139,7 +139,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Now the batch-resolution path also builds an `(experiment_id,
   condition) -> [job_ids]` index from ledger entries and counts those
   matches before falling through to the empty/elsewhere paths. Closes
-  the gap surfaced during the electricrag laptop validate at 0.6.0:
+  the gap surfaced during a consumer's laptop validate at 0.6.0:
   after the cluster backfilled, F005 batch citations correctly resolve.
   Regression test: `tests/test_validate_cross_machine.py::test_validator_batch_citation_resolves_via_ledger_only`.
 
@@ -455,7 +455,7 @@ call so identity beliefs cannot go stale silently.
 
 ### Release summary
 
-Two new surfaces lifted out of the 2026-05-10 electricrag prompt-
+Two new surfaces lifted out of a 2026-05-10 consumer prompt-
 brittleness session:
 
 - **`aexp.sandbox`** — scaffolding for exploratory notebook work that
@@ -596,7 +596,7 @@ behavior. The 0.2.1 surfaces and discipline are unchanged.
   `relay-list-pending` shell scripts into `<queue>/_bin/`. Recommended
   launch under `tmux` on the login node.
 - **Protocol guarantees** (preserved verbatim from the upstream
-  electricrag reference implementation):
+  consumer reference implementation):
   - Atomic rename via `.tmp` sibling for all queue writes (POSIX-atomic,
     NTFS-atomic for non-shared opens).
   - 5-second heartbeat (`~/.relay/heartbeat`); client raises
@@ -618,20 +618,19 @@ behavior. The 0.2.1 surfaces and discipline are unchanged.
   cwd-allowlist hook, `RelayClient` constructor defaults + overrides,
   method dispatch via mocked `request`, F7/F8 designed-out behavior
   verification. The full daemon-lifecycle + consent-state-machine + GC
-  + stale-recovery spec is the 56-test suite at
-  `electricrag/tests/dev/test_relay.py` upstream — the aexp port's
-  test file is a port-level smoke over the public surface.
+  + stale-recovery spec is the consumer's own 56-test relay suite
+  upstream — the aexp port's test file is a port-level smoke over the
+  public surface.
 
 ### Provenance
 
-Both surfaces were designed in the 2026-05-10 electricrag session that
-kicked off a prompt-brittleness characterization experiment. The
-session note (`electricrag/sessions/2026-05-10_first-jupyter-experiment-
-kickoff.md`) captures the friction catalogue (F1–F12) that motivated
+Both surfaces were designed in a 2026-05-10 consumer session that
+kicked off a prompt-brittleness characterization experiment. That
+session's note captures the friction catalogue (F1–F12) that motivated
 the design choices — especially F4 (kernel-cwd path doubling on remote
 Jupyter), F7 (raw `git_push` rejected without args), and F8
 (`git_push` arg interpreted as remote not branch). The reference
-implementation lives at `electricrag/dev/relay.py` upstream and is
+implementation lives in the consumer repo upstream and is
 preserved alongside this port for the exhaustive daemon-lifecycle
 test suite.
 
@@ -640,7 +639,7 @@ test suite.
 ### Release summary
 
 0.2.1 is a queue-layer bugfix release driven by early-adopter findings
-from the electricrag F.1 inference session of 2026-04-26 → 2026-04-27.
+from a consumer's inference session of 2026-04-26 → 2026-04-27.
 The 0.2.0 queue layer worked end-to-end but had three discrete design
 gaps that surfaced under real interactive cluster use; this release
 closes all three plus three smaller pieces of side friction the same
@@ -653,7 +652,7 @@ The 0.2.0 implementation invoked the runner via
 stderr in memory until process exit then dumps them at once. For
 interactive consumers (notebook runners, terminal `aexp run-queued`
 calls) a 15-25 minute training run appeared totally silent until the
-end. During the electricrag F.1 session this caused multiple
+end. During that session this caused multiple
 panic-kills of healthy jobs because the user couldn't tell whether
 the work was alive vs hung.
 
@@ -726,7 +725,7 @@ The 0.2.0 `{sp_json}` placeholder emits raw JSON without shell
 escaping. Templates that wrap it in shell quotes
 (`runner_command: "python foo.py '{sp_json}'"`) break for any sp
 value containing the same quote character — apostrophes in
-sp.notes were the actual electricrag failure mode.
+sp.notes were the actual failure mode reported.
 
 New `{sp_json_shell}` placeholder applies `shlex.quote` to the
 JSON payload. Drop it in the template *unquoted* (the shell quoting
@@ -743,7 +742,7 @@ points consumers at `{sp_json_shell}` for any shell-quoted context.
 at start of `run_lifecycle` and updated only on terminal transition.
 Consumers using doc mtime as a liveness signal got false-stale
 readings while jobs were working hard (no doc writes during inference
-loops). The electricrag F.1 session lost real time to this.
+loops). A consumer lost real time to this.
 
 `run_lifecycle` now starts a daemon heartbeat thread that touches
 `doc["heartbeat_at"]` (ISO-8601 UTC) every `heartbeat_s` seconds
@@ -956,8 +955,8 @@ into an actually-usable research harness. Major themes, top-down:
 - **Wandb init-ownership decoupled.** Three first-class modes:
   `tracked_run` (managed), `prepare_tracker` (bring your own
   `wandb.init`), and the existing `bind_tracker` adapter path.
-  Consumers with pre-existing `wandb.init` sites (e.g. electricrag's
-  `loop.py`) can adopt aexp's discipline without refactoring.
+  Consumers with pre-existing `wandb.init` sites in their own training
+  loops can adopt aexp's discipline without refactoring.
 
 - **Validator strictness.** `kb_validate` now enforces template-
   header presence (`missing_template_header`) and a
@@ -995,12 +994,11 @@ below.
 
 ### Changed (thread docs — refinements from the first real use)
 
-Reports back from the electricrag-side agent after salvaging two
-threads under the new schema (commit `906809e` in electricrag on
-2026-04-25). The schema held up; three doc-level clarifications
+Reports back from a consumer-side agent after salvaging two
+threads under the new schema (2026-04-25). The schema held up; three doc-level clarifications
 landed based on friction encountered:
 
-- **Status semantics made stricter + explicit.** The electricrag
+- **Status semantics made stricter + explicit.** The consumer-side
   agent defaulted to ``EXPLORING`` for salvaged drafts because "the
   work had been thought about before parking." Kaden corrected to
   ``PROPOSED``. The distinction: ``PROPOSED`` means the thread
@@ -1013,7 +1011,7 @@ landed based on friction encountered:
   "Default to PROPOSED on creation"), and in the
   ``/aexp-new-thread`` slash command's flow guidance.
 - **Cross-linked-artifact create-then-link ordering documented.**
-  The electricrag agent hit a ``kb_write_guard`` block when T001's
+  The consumer-side agent hit a ``kb_write_guard`` block when T001's
   first write included ``[[T002]]`` before T002 existed. Fixed
   easily in practice (write both skeletons first, then add the
   cross-links in a second pass) but undocumented. New section in
@@ -1036,7 +1034,7 @@ No code changes. Template + docs + one slash command.
 - **`T###` artifact kind**, parallel to H/E/F. A thread is a
   forward-looking research concern broader than a single hypothesis
   — exploration that may spawn 2–5 ``H###`` over its lifetime.
-  Solves the gap reported by the electricrag-side agent on
+  Solves the gap reported by the consumer-side agent on
   2026-04-24: H/E/F assume you already know which hypothesis to
   write; threads capture the upstream exploration without rotting in
   session notes or going off-graph in external trackers.
@@ -1102,7 +1100,7 @@ Total slash commands: 14 → **18**. Total artifact kinds: 6 → **7**.
   always read vendored. When local templates fell behind shipped
   (which is the default state any time package templates evolve),
   creation rendered the old skeleton while validation rejected it
-  for missing the new shipped headers. Reported by the electricrag-
+  for missing the new shipped headers. Reported by the consumer-
   side agent on 2026-04-24 after `mcp__aexp__new_experiment` and
   `mcp__aexp__new_finding` produced skeletons missing `## Caveats` /
   `## Intent` / `## Outcome Summary` and the PostToolUse hook
@@ -1138,7 +1136,7 @@ Total slash commands: 14 → **18**. Total artifact kinds: 6 → **7**.
   parsed from `src/aexp/vendor/limina/templates/<kind>.md` once and
   cached. ``## Links`` excluded (covered comprehensively by the
   existing `validate_links`). Currently enforced for H / E / F; L /
-  CR / SR not yet checked. Reported by the electricrag-side agent on
+  CR / SR not yet checked. Reported by the consumer-side agent on
   2026-04-24 after deleting `## Expected Outcome` and `## Analysis`
   from an experiment file passed validation cleanly.
 - **Experiment template gains `## Caveats`** between `## Procedure`
@@ -1172,7 +1170,7 @@ Total slash commands: 14 → **18**. Total artifact kinds: 6 → **7**.
   experiment-level observations (*what happened in this specific
   run*); generalizable claims belong in the linked Finding's prose,
   not the experiment. Resolves the semantic overlap the
-  electricrag-side agent flagged where E's Analysis and F's claim
+  consumer-side agent flagged where E's Analysis and F's claim
   prose competed for the same content.
 
 ### Changed (slash commands)
@@ -1198,7 +1196,7 @@ Total slash commands: 14 → **18**. Total artifact kinds: 6 → **7**.
   `kb/mission/CHALLENGE.md`, `kb/ACTIVE.md`, `kb/DASHBOARD.md`, or any
   `templates/*.md` and then re-ran install to refresh a slash command
   would silently lose that content back to the blank default. Reported
-  by the electricrag-side agent on 2026-04-24 after a committed
+  by the consumer-side agent on 2026-04-24 after a committed
   `CHALLENGE.md` was reverted to `{What should the agent research?}`.
 
   Fix: the scaffold trees (`_TREES_VERBATIM = ("kb", "templates")`) now

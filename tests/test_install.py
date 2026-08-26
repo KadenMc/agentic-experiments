@@ -274,7 +274,7 @@ def test_install_preserves_user_modified_kb_content_even_under_force(
 ) -> None:
     """Under ``--force``, user-authored ``kb/`` scaffold files still survive.
 
-    This is the regression guard for the 2026-04-24 electricrag CHALLENGE.md
+    This is the regression guard for the 2026-04-24 consumer-side CHALLENGE.md
     clobber: `aexp install --yes --force --dev` had overwritten a committed
     mission file back to the blank stub. `--force` should refresh pinned
     tooling (slash commands, skills, hooks) — not destroy user-authored

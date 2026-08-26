@@ -297,8 +297,8 @@ def test_run_lifecycle_writes_heartbeat_during_run(
 
     Liveness probes outside the runner process can use this field to
     distinguish "still working" (heartbeat advancing) from "wedged"
-    (heartbeat stuck > N intervals ago). The electricrag F.1 session
-    lost real time because the v0.2.0 doc only had ``status='running'``
+    (heartbeat stuck > N intervals ago). A consumer lost real time to this
+    because the v0.2.0 doc only had ``status='running'``
     set once at start — there was no advancing field to probe.
 
     ``iso_utc_now()`` is second-precision, so two heartbeats within

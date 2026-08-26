@@ -152,7 +152,7 @@ is the notebook's directory, *not* the repo root. Naive
 `Path("notebooks/...").resolve()` from a notebook one sandbox dir deep
 doubles the path (`<root>/notebooks/_sandbox/<x>/notebooks/_sandbox/<x>`)
 and fails silently. `setup_sandbox_notebook` was the friction-design
-fix for that gotcha (logged as F4 in the upstream electricrag session
+fix for that gotcha (logged as a friction item in the consumer session
 that motivated this surface).
 
 ## What gets scaffolded
@@ -229,13 +229,12 @@ having a free-form workspace.
 
 ## Provenance
 
-The sandbox surface was crystallized during the 2026-05-10 electricrag
-session that motivated the agentic-experiments AFK port. The original
-scaffold lived in electricrag-local Python before being lifted into
-`aexp.sandbox`. The notebook first-cell convention
-(`setup_sandbox_notebook`) was designed to close the F4 friction
-documented in `electricrag/docs/reference/process/environment.md` —
-naive path resolution on remote Jupyter doubling the sandbox path.
+The sandbox surface was crystallized during a 2026-05-10 consumer session
+that motivated the agentic-experiments AFK port. The original scaffold
+lived in consumer-local Python before being lifted into `aexp.sandbox`.
+The notebook first-cell convention (`setup_sandbox_notebook`) was designed
+to close the friction that session documented — naive path resolution on
+remote Jupyter doubling the sandbox path.
 
 The directional-statement template — no fabricated thresholds, ≥3
 shortcut risks, explicit "Mode: exploratory" framing — mirrors the
