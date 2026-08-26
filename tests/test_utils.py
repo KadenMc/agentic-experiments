@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import multiprocessing as mp
 import subprocess
 from pathlib import Path
 
@@ -56,6 +57,117 @@ def test_atomic_write_leaves_no_tmp_on_success(tmp_path: Path) -> None:
     atomic_write(target, "ok")
     siblings = {p.name for p in tmp_path.iterdir()}
     assert siblings == {"x.txt"}
+
+
+def test_atomic_write_cleans_up_tmp_when_the_write_fails(tmp_path: Path) -> None:
+    """A failed write leaves no orphan.
+
+    The temp name carries a nonce, so it is no longer self-clobbering: the old shared
+    name was simply overwritten by the next attempt, whereas a unique name would
+    accumulate one stranded file per failure without this cleanup.
+
+    The failure used here is a real one this codebase already cares about -- content the
+    target encoding cannot represent, the same class as the cp1252 problem that made
+    ``encoding="utf-8"`` explicit here in the first place. ``open`` creates the temp
+    before ``write`` raises, so there genuinely is an orphan to clean up.
+    """
+    target = tmp_path / "y.txt"
+    with pytest.raises(UnicodeEncodeError):
+        atomic_write(target, "lone surrogate: \udc80", encoding="utf-8")
+    assert list(tmp_path.iterdir()) == [], "a failed write stranded a temp file"
+
+
+# -- concurrent writers -------------------------------------------------------------
+# `replace` being atomic only makes the *publish* indivisible. It says nothing about who
+# filled the file being published, so a temp path derived from the destination alone lets
+# the interleaving move upstream from `dest` to `dest.tmp`. Pre-nonce these two tests
+# failed: on Linux with a spliced file (measured 1.3-98% of destinations across xfs/NFS,
+# 2-4 writers and three flush shapes), on Windows with PermissionError on the concurrent
+# open. The rate is load- and shape-dependent, which is why the behavioural test below
+# repeats trials and why the name test beside it fails deterministically instead.
+
+_SIZES = {"A": 200_000, "B": 40_000}
+
+
+def _payload(tag: str) -> str:
+    return json.dumps({"writer": tag, "data": tag * _SIZES[tag]})
+
+
+def _concurrent_writer(args: tuple[str, str]) -> None:
+    """Spawn entry point: one writer, one write, into a destination it shares."""
+    dest, tag = args
+    from aexp.utils.atomic import atomic_write as _aw
+
+    _aw(Path(dest), _payload(tag))
+
+
+def test_atomic_write_is_safe_under_concurrent_writers(tmp_path: Path) -> None:
+    """Two processes writing one destination publish one writer's payload, whole.
+
+    This is the property `aexp.workpool.WorkPool` rests its termination proof on: the
+    pool permits occasional double-processing of an item, so two workers can end up
+    writing one output path, and `is_done` going true over a spliced file would be
+    monotone and irreversible. Which writer wins is unspecified; that exactly one does
+    is not.
+
+    Payloads are large (many write() syscalls) and of different lengths, so a splice is
+    detectable rather than coincidentally valid. Trials repeat because the race is
+    timing-dependent -- one pass is a weak probe of a few-percent event.
+    """
+    ctx = mp.get_context("spawn")
+    expected = {_payload(t).encode() for t in _SIZES}
+    torn: list[str] = []
+
+    for trial in range(12):
+        dest = tmp_path / f"item_{trial}.json"
+        procs = [ctx.Process(target=_concurrent_writer, args=((str(dest), t),))
+                 for t in _SIZES]
+        for pr in procs:
+            pr.start()
+        for pr in procs:
+            pr.join(timeout=60)
+
+        codes = [pr.exitcode for pr in procs]
+        for pr in procs:
+            if pr.is_alive():
+                pr.terminate()
+        assert codes == [0] * len(procs), (
+            f"trial {trial}: writer exit codes {codes} -- a non-zero code means the write "
+            "itself raised (pre-nonce: FileNotFoundError on POSIX once the peer renamed "
+            "the shared temp away, PermissionError on Windows on the concurrent open)"
+        )
+
+        assert dest.exists(), f"trial {trial}: neither writer published anything"
+        raw = dest.read_bytes()
+        if raw not in expected:
+            torn.append(f"trial {trial}: {len(raw)}B, expected one of "
+                        f"{sorted(len(e) for e in expected)}")
+
+    assert not torn, "published file was a splice of both writers: " + "; ".join(torn)
+
+
+def test_atomic_write_temp_name_is_unique_per_call(tmp_path: Path) -> None:
+    """The nonce is what makes concurrent writers independent -- pin it directly.
+
+    The behavioral test above can only fail probabilistically. This one fails
+    deterministically the moment the temp path goes back to being derived from the
+    destination alone.
+    """
+    seen: list[str] = []
+    target = tmp_path / "z.txt"
+    real_replace = Path.replace
+
+    def _capture(self: Path, other):  # noqa: ANN001, ANN202
+        seen.append(self.name)
+        return real_replace(self, other)
+
+    with pytest.MonkeyPatch.context() as patcher:
+        patcher.setattr(Path, "replace", _capture)
+        for _ in range(5):
+            atomic_write(target, "ok")
+
+    assert len(set(seen)) == len(seen), f"temp name was reused across calls: {seen}"
+    assert all(n.startswith("z.txt.") and n.endswith(".tmp") for n in seen), seen
 
 
 # ---------------------------------------------------------------------------
