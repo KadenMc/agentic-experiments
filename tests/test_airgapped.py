@@ -174,8 +174,8 @@ def test_validate_shell_injection_in_push_arg_raises() -> None:
 
 
 def test_build_remote_command_basic() -> None:
-    cmd = _build_remote_command("/home/me/electricrag", "git_pull", [])
-    assert cmd == "cd /home/me/electricrag && git pull --ff-only"
+    cmd = _build_remote_command("/home/me/my-project", "git_pull", [])
+    assert cmd == "cd /home/me/my-project && git pull --ff-only"
 
 
 def test_build_remote_command_quotes_repo_with_spaces() -> None:
@@ -199,7 +199,7 @@ def test_request_constructs_expected_ssh_argv(tmp_path: Path) -> None:
         request(
             "git_pull",
             ssh_host="cluster-login",
-            remote_repo="/home/me/electricrag",
+            remote_repo="/home/me/my-project",
             audit_log=tmp_path / "audit.log",
         )
     argv = mock_run.call_args.args[0]
@@ -208,7 +208,7 @@ def test_request_constructs_expected_ssh_argv(tmp_path: Path) -> None:
     assert "BatchMode=yes" in argv
     assert "ConnectTimeout=10" in argv
     assert argv[-2] == "cluster-login"
-    assert argv[-1] == "cd /home/me/electricrag && git pull --ff-only"
+    assert argv[-1] == "cd /home/me/my-project && git pull --ff-only"
     assert mock_run.call_args.kwargs.get("stdin") == subprocess.DEVNULL
 
 
@@ -400,9 +400,9 @@ def test_request_writes_audit_log(tmp_path: Path) -> None:
 
 
 def test_relayclient_stores_ssh_host_and_remote_repo() -> None:
-    c = RelayClient(ssh_host="cluster-login", remote_repo="/home/me/electricrag")
+    c = RelayClient(ssh_host="cluster-login", remote_repo="/home/me/my-project")
     assert c.ssh_host == "cluster-login"
-    assert c.remote_repo == "/home/me/electricrag"
+    assert c.remote_repo == "/home/me/my-project"
 
 
 def test_relayclient_default_timeout_is_60s() -> None:

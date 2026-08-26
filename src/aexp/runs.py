@@ -347,8 +347,8 @@ def run_lifecycle(
     whether this run is alive vs. wedged?" Without it, ``status='running'``
     is set once and never updated; consumers using the doc's mtime as a
     liveness signal get false-stale readings during jobs that are
-    working hard (no doc writes during inference loops). The electricrag
-    F.1 session lost real time to this misunderstanding.
+    working hard (no doc writes during inference loops). A consumer lost
+    real time to this misunderstanding while debugging a long inference run.
 
     Parameters
     ----------

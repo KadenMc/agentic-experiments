@@ -189,9 +189,9 @@ that triggered this experiment._
 
 ## Statement (directional — no thresholds; refine via calibration)
 
-_What's the claim? Keep it directional, not threshold-locked. F003 in
-electricrag is the precedent: predict an ordering (e.g., ``A > B > C``)
-without committing to magnitudes until calibration data is in hand._
+_What's the claim? Keep it directional, not threshold-locked: predict an
+ordering (e.g., ``A > B > C``) without committing to magnitudes until
+calibration data is in hand._
 
 ## Mechanism
 

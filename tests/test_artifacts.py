@@ -253,7 +253,7 @@ def test_new_hypothesis_ignores_local_template_override(
     bundled template — same source the validator uses. Otherwise
     creation produces a skeleton that immediately fails validation.
 
-    The 2026-04-24 electricrag report described exactly this failure:
+    A 2026-04-24 consumer report described exactly this failure:
     install-preserve correctly kept stale local templates, but
     ``new_experiment`` then rendered the old shape while the validator
     expected the new one.

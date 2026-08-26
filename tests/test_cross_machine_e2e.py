@@ -1,8 +1,7 @@
 """End-to-end smoke tests for the cross-machine ledger workflow.
 
-Simulates the exact scenario from
-``electricrag/docs/reference/process/aexp_friction_cross_machine_run_ledger.md``
-TL;DR: a laptop validator citing cluster-side runs.
+Simulates the exact scenario a consumer reported as the cross-machine run-ledger
+friction: a laptop validator citing cluster-side runs.
 
 Sets up two consumer repos sharing a bare remote (mimicking the
 laptop ↔ cluster topology), runs the actual git push/pull cycle, and

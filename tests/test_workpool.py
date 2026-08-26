@@ -14,8 +14,8 @@ Real files on the local FS back the leases (so `os.link` arbitration uses truth)
 lag is injected ONLY on the read seams (`linklease._stat_mtime/_read_token/_exists`)
 and the test's own `is_done` (stale-negative), modelling that *reads* lag while *writes*
 are authoritative. Worker "death" is simulated with `os._exit` mid-item (holding a
-lease) to exercise stale-reclaim + block-and-retry. Mirrors the spawn structure of
-electricrag's `tests/test_probe_ledger.py`.
+lease) to exercise stale-reclaim + block-and-retry. Mirrors the spawn structure of a
+consumer's own cross-process ledger test.
 """
 from __future__ import annotations
 

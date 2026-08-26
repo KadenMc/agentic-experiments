@@ -629,8 +629,8 @@ def _jupyter_mcp_entries() -> dict[str, Any]:
     integration is built on the *runtime* ``connect_to_jupyter(
     jupyter_url, jupyter_token)`` call, which the pre-auth 0.23.0 line
     supports cleanly. 0.23.0 is the last release before the
-    mandatory-auth change and is the version verified against the
-    electricrag deployment (2026-05-15).
+    mandatory-auth change and is the version verified against a live
+    consumer deployment (2026-05-15).
 
     The pin is load-bearing: an *unpinned* ``jupyter-mcp-server``
     resolves to "latest" via ``uvx`` — currently v1.0.x — so an unpinned
