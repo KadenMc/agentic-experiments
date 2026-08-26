@@ -554,12 +554,12 @@ def _write_mcp_json(path: Path, *, aexp_env: dict | None = None) -> None:
 def test_init_mcp_config_adds_env_keys(tmp_path: Path) -> None:
     cfg = tmp_path / ".mcp.json"
     _write_mcp_json(cfg)
-    result = init_mcp_config(cfg, ssh_host="h4h", remote_repo="/r")
+    result = init_mcp_config(cfg, ssh_host="cluster-login", remote_repo="/r")
     assert result["already_correct"] is False
     assert len(result["changes"]) == 2
     data = json.loads(cfg.read_text(encoding="utf-8"))
     env = data["mcpServers"]["aexp"]["env"]
-    assert env["AEXP_RELAY_SSH_HOST"] == "h4h"
+    assert env["AEXP_RELAY_SSH_HOST"] == "cluster-login"
     assert env["AEXP_RELAY_REMOTE_REPO"] == "/r"
     # Pre-existing env keys preserved.
     assert env["PYTHONUNBUFFERED"] == "1"
@@ -568,8 +568,8 @@ def test_init_mcp_config_adds_env_keys(tmp_path: Path) -> None:
 def test_init_mcp_config_is_idempotent(tmp_path: Path) -> None:
     cfg = tmp_path / ".mcp.json"
     _write_mcp_json(cfg)
-    init_mcp_config(cfg, ssh_host="h4h", remote_repo="/r")
-    result = init_mcp_config(cfg, ssh_host="h4h", remote_repo="/r")
+    init_mcp_config(cfg, ssh_host="cluster-login", remote_repo="/r")
+    result = init_mcp_config(cfg, ssh_host="cluster-login", remote_repo="/r")
     assert result["already_correct"] is True
     assert result["changes"] == []
 
@@ -614,11 +614,11 @@ def test_cli_init_writes_env_and_prints_next_steps(tmp_path: Path) -> None:
     _write_mcp_json(cfg)
     result = CliRunner().invoke(
         airgapped_app,
-        ["init", "--ssh-host", "h4h", "--remote-repo", "/r",
+        ["init", "--ssh-host", "cluster-login", "--remote-repo", "/r",
          "--mcp-config", str(cfg)],
     )
     assert result.exit_code == 0
-    assert "Host h4h" in result.output
+    assert "Host cluster-login" in result.output
     assert "passwordless SSH" in result.output
     assert "/mcp" in result.output
     assert "aexp airgapped status" in result.output
@@ -626,7 +626,7 @@ def test_cli_init_writes_env_and_prints_next_steps(tmp_path: Path) -> None:
     # never has to leave the CLI output to figure it out.
     assert "ssh-keygen -t ed25519" in result.output
     data = json.loads(cfg.read_text(encoding="utf-8"))
-    assert data["mcpServers"]["aexp"]["env"]["AEXP_RELAY_SSH_HOST"] == "h4h"
+    assert data["mcpServers"]["aexp"]["env"]["AEXP_RELAY_SSH_HOST"] == "cluster-login"
 
 
 def test_cli_init_idempotent_run_is_concise(tmp_path: Path) -> None:
@@ -635,13 +635,13 @@ def test_cli_init_idempotent_run_is_concise(tmp_path: Path) -> None:
     _write_mcp_json(
         cfg,
         aexp_env={
-            "AEXP_RELAY_SSH_HOST": "h4h",
+            "AEXP_RELAY_SSH_HOST": "cluster-login",
             "AEXP_RELAY_REMOTE_REPO": "/r",
         },
     )
     result = CliRunner().invoke(
         airgapped_app,
-        ["init", "--ssh-host", "h4h", "--remote-repo", "/r",
+        ["init", "--ssh-host", "cluster-login", "--remote-repo", "/r",
          "--mcp-config", str(cfg)],
     )
     assert result.exit_code == 0
