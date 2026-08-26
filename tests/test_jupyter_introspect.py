@@ -73,10 +73,10 @@ def test_probe_slurm_full_chain_populates_fields(
     """When cgroup reveals the job + squeue + scontrol return data, every
     field is populated."""
     monkeypatch.delenv("SLURM_JOB_ID", raising=False)
-    squeue_out = "train|RUNNING|01:23:45|04:00:00|node136|gpu|alice\n"
+    squeue_out = "train|RUNNING|01:23:45|04:00:00|testnode01|gpu|alice\n"
     scontrol_out = (
         "JobId=12345 JobName=train UserId=alice(1001) Partition=gpu "
-        "NodeList=node136 SubmitTime=2026-05-14T08:00:00 "
+        "NodeList=testnode01 SubmitTime=2026-05-14T08:00:00 "
         "StartTime=2026-05-14T08:01:00\n"
     )
 
@@ -96,7 +96,7 @@ def test_probe_slurm_full_chain_populates_fields(
     assert ctx.state == "RUNNING"
     assert ctx.runtime == "01:23:45"
     assert ctx.time_limit == "04:00:00"
-    assert ctx.nodelist == "node136"
+    assert ctx.nodelist == "testnode01"
     assert ctx.partition == "gpu"
     assert ctx.user == "alice"
     assert ctx.submit_time == "2026-05-14T08:00:00"
@@ -280,8 +280,8 @@ def test_init_inside_jupyter_inside_slurm_full_population(
 ) -> None:
     monkeypatch.setenv("JPY_PARENT_PID", "111")
     monkeypatch.delenv("SLURM_JOB_ID", raising=False)
-    current = _server_entry(111, 3618, host="node136")
-    sibling = _server_entry(222, 8562, host="node136")
+    current = _server_entry(111, 3618, host="testnode01")
+    sibling = _server_entry(222, 8562, host="testnode01")
 
     def fake_http(url: str, token: str | None, *, timeout: float = 3.0) -> Any:
         if url.endswith("/api/sessions"):
@@ -302,7 +302,7 @@ def test_init_inside_jupyter_inside_slurm_full_population(
         info = init()
     assert info.jupyter_pid == 111
     assert info.jupyter_port == 3618
-    assert info.jupyter_url == "http://node136:3618/"
+    assert info.jupyter_url == "http://testnode01:3618/"
     assert info.slurm is not None
     assert info.slurm.job_id == "12345"
     assert info.kernel_id == "kernel-uuid"

@@ -15,7 +15,7 @@ by hand or remember the alias / frontmatter rules.
 Flow:
 
 1. Ask the user for the hypothesis title — a short falsifiable claim, e.g.
-   *"An ontology-backed reasoning layer prevents confident wrong ECG
+   *"An ontology-backed reasoning layer prevents confident wrong
    interpretations from a tool-using LLM."* Keep it under ~80 characters;
    it will become both the H1 heading and the filename slug.
 2. Ask whether there are any extra targets to include in the ``## Links``

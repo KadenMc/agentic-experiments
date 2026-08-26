@@ -89,8 +89,8 @@ ctx = prepare_tracker(job, project="my-project", offline=True)
 
 run = wandb.init(
     **ctx.init_kwargs,                # project, group, tags, config, notes, dir, mode, reinit
-    name=f"ecg-{ecg_id}-{seed}",      # caller-owned
-    job_type="per-ecg-eval",          # caller-owned
+    name=f"item-{item_id}-{seed}",    # caller-owned
+    job_type="per-item-eval",         # caller-owned
     # resume=..., settings=...        # caller-owned
 )
 ctx.bind(run)                         # stamps job.doc["tracker"]
@@ -218,15 +218,15 @@ afterward. Because `tracked_run` / `prepare_tracker` / the adapter all set
 Managed:
 
 ```python
-with tracked_run(job, project="ecg-inquiry-eval", offline=True) as run:
+with tracked_run(job, project="my-eval", offline=True) as run:
     ...
 ```
 
 BYO-init:
 
 ```python
-ctx = prepare_tracker(job, project="ecg-inquiry-eval", offline=True)
-run = wandb.init(**ctx.init_kwargs, name=f"ecg-{i}")
+ctx = prepare_tracker(job, project="my-eval", offline=True)
+run = wandb.init(**ctx.init_kwargs, name=f"item-{i}")
 ctx.bind(run)
 # ... work ...
 run.finish()
@@ -236,7 +236,7 @@ CLI (adapter path):
 
 ```powershell
 aexp new-run --experiment E018 --hypothesis H012 --sp condition=full,seed=0
-aexp bind-tracker <job_id> --backend wandb --project ecg-inquiry-eval --offline
+aexp bind-tracker <job_id> --backend wandb --project my-eval --offline
 ```
 
 ### Login-node side

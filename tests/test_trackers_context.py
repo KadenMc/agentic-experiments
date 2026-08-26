@@ -290,14 +290,14 @@ def test_tracked_run_merges_caller_name_and_job_type(
     with tracked_run(
         job,
         project="p",
-        name="ecg-0123",
-        job_type="per-ecg-eval",
+        name="item-0123",
+        job_type="per-item-eval",
         repo_root=installed_repo,
     ):
         pass
     kw = fake_wandb.last_init_kwargs
-    assert kw["name"] == "ecg-0123"
-    assert kw["job_type"] == "per-ecg-eval"
+    assert kw["name"] == "item-0123"
+    assert kw["job_type"] == "per-item-eval"
     # aexp-owned keys still in force
     assert kw["project"] == "p"
     assert kw["group"].startswith("_/E001/")
