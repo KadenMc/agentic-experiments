@@ -336,7 +336,7 @@ Network/DNS issue. Check VPN is up, the cluster hostname is reachable (`ping`), 
 
 ### `RelayValidationError: ssh_host is required` from CLI / Python API
 
-You didn't pass `--ssh-host` and `$AEXP_RELAY_SSH_HOST` isn't set in this shell. Either pass `--ssh-host <alias>` explicitly, or export the env var (`$env:AEXP_RELAY_SSH_HOST = "h4h"` in PowerShell). The MCP tools read this from the `.mcp.json` `env` block instead — different code path.
+You didn't pass `--ssh-host` and `$AEXP_RELAY_SSH_HOST` isn't set in this shell. Either pass `--ssh-host <alias>` explicitly, or export the env var (`$env:AEXP_RELAY_SSH_HOST = "cluster-login"` in PowerShell). The MCP tools read this from the `.mcp.json` `env` block instead — different code path.
 
 ### MCP tools return `{ok: false, code: "RelayValidationError"}`
 
@@ -373,7 +373,7 @@ One command + a few manual steps. Assuming you've already run
 `aexp install --dev` in your consumer repo (so a `.mcp.json` exists):
 
 ```bash
-aexp airgapped init --ssh-host h4h --remote-repo /cluster/home/USER/myrepo
+aexp airgapped init --ssh-host cluster-login --remote-repo /cluster/home/USER/myrepo
 ```
 
 This:
