@@ -51,7 +51,7 @@ def installed_repo(tmp_path: Path) -> Path:
 
 
 def test_slugify_basic() -> None:
-    assert slugify("Aligned 32-ECG ablation") == "aligned-32-ecg-ablation"
+    assert slugify("Aligned 32-Sample ablation") == "aligned-32-sample-ablation"
 
 
 def test_slugify_punctuation_stripped() -> None:

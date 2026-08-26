@@ -284,7 +284,7 @@ def install(
             "string (default) keeps the previous marker's value if any, "
             "else falls back to short hostname (e.g. `kaden-thinkpad`). "
             "On HPC, pass an explicit name (`--machine-label cluster`) "
-            "so per-node hostnames (`gpu023`, `h4huhnlogin2`) don't "
+            "so per-node hostnames (`gpu023`, `login02`) don't "
             "proliferate index files."
         ),
     ),

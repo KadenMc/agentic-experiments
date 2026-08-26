@@ -23,14 +23,14 @@ def test_emits_directive_with_url_on_typical_payload() -> None:
     surfaces a directive that names the URL and references the recipe."""
     payload = {
         "tool_name": "mcp__jupyter__connect_to_jupyter",
-        "tool_input": {"jupyter_url": "http://node136:3618/?token=abc"},
+        "tool_input": {"jupyter_url": "http://testnode01:3618/?token=abc"},
         "tool_response": {
             "content": [{"type": "text", "text": "Connected to ws://..."}]
         },
     }
     res = _run(payload)
     assert res.returncode == 0
-    assert "http://node136:3618" in res.stdout
+    assert "http://testnode01:3618" in res.stdout
     assert "aexp.jupyter" in res.stdout
     assert "jupyter_parse_introspection" in res.stdout
 

@@ -16,8 +16,8 @@ patches the parent hypothesis's ``## Links`` section with ``- [[E###]]`` so
 Flow:
 
 1. Ask the user for:
-   - **Title** — short, e.g. *"Aligned 32-ECG ablation across full vs
-     classify-only"*. Becomes the H1 heading + filename slug.
+   - **Title** — short, e.g. *"Aligned 32-sample ablation across full vs
+     retrieval-only"*. Becomes the H1 heading + filename slug.
    - **Parent hypothesis** — the ``H###`` this experiment tests. If the user
      doesn't know, run
      `python -m aexp validate --kb-only` (or ``ls kb/research/hypotheses/``)

@@ -60,7 +60,7 @@ commit for replay by passing `code_commit="abc1234"` yourself.
     "backend":  "wandb",
     "run_id":   "abcdef12",
     "url":      "https://wandb.ai/...",
-    "project":  "ecg-inquiry-eval",
+    "project":  "my-eval",
     "group":    "H012/E018/full",
   },
   "summary_metrics": { "accuracy": 0.83, "n": 32 },
