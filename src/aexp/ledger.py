@@ -229,12 +229,32 @@ def load_ledger_entry(repo_root: str | Path, job_id: str) -> LedgerEntry | None:
 
 
 def list_ledger_job_ids(repo_root: str | Path) -> set[str]:
-    """Return the set of job_ids currently in ``.aexp/ledger/``.
+    """Return the set of job_ids currently in ``.aexp/ledger/`` — by file presence.
 
     The validator uses this as the cross-machine equivalent of
     ``known_job_ids = set(j.id for j in project)`` — once the ledger
     is the source of truth, a citation resolves iff the ledger entry
     file exists.
+
+    **Presence, not committed-ness, and that is deliberate — do not "fix" it.**
+    This globs the directory and never asks git whether an entry is committed,
+    which resembles the defect where a reader mistakes local state for shared
+    evidence. It is not that, because the only consumer never relies on this set
+    alone: :func:`aexp.validate` resolves against
+    ``known_job_ids = ledger_ids | local_ids``, and the union is the point — the
+    local store is additive, since a freshly-promoted run lives locally before it
+    makes the next git push. A citation resolving on the machine that produced the
+    run, before the entry is pushed, is intended tolerance for an ordinary
+    mid-work state. What it permits is a warning not yet raised, never a result
+    asserted.
+
+    The distinction worth preserving: a reader that unions in local state may read
+    by presence; a reader whose answer must be identical on every machine — one
+    describing an artifact the other machines cannot inspect for themselves — must
+    read the blob out of git ``HEAD``, because presence there lets one machine
+    assert something no other machine can verify. If this function ever gains a
+    consumer of the second kind, that consumer needs the ``HEAD`` read; this one
+    does not.
     """
     ledger_dir = Path(repo_root) / LEDGER_DIR_REL
     if not ledger_dir.is_dir():
