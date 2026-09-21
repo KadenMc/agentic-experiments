@@ -13,6 +13,7 @@ comment on that constant.
 """
 from __future__ import annotations
 
+import importlib.util
 import os
 import subprocess
 import sys
@@ -85,6 +86,13 @@ def test_capping_threads_actually_shrinks_the_import() -> None:
     and only assert if there is a reservation here worth asserting about.
     """
     pytest.importorskip("psutil")
+    if importlib.util.find_spec("numpy") is None:
+        pytest.skip(
+            "numpy is not installed, so no BLAS arena is ever reserved and there is "
+            "nothing to measure. signac does not require numpy, so a minimal install "
+            "-- including CI -- never reproduces this. It is the numerical runtime "
+            "environment the server actually runs in that does."
+        )
 
     uncapped = _import_cost_mb(capped=False)
     if uncapped < 200:

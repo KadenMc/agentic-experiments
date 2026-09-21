@@ -48,7 +48,11 @@ an isolated environment.
         "agentic-experiments[mcp]",
         "aexp-mcp-server"
       ],
-      "env": {"PYTHONUNBUFFERED": "1"}
+      "env": {
+        "PYTHONUNBUFFERED": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "OMP_NUM_THREADS": "1"
+      }
     }
   }
 }
@@ -67,6 +71,16 @@ What's happening:
   `aexp.mcp_server:main()` which calls `mcp.run()` over stdio.
 - `PYTHONUNBUFFERED=1` ensures stdio isn't buffered, preventing JSON-RPC
   framing delays.
+- `OPENBLAS_NUM_THREADS=1` and `OMP_NUM_THREADS=1` cap the BLAS thread pool.
+  OpenBLAS reserves a per-thread buffer pool sized to the machine's core count
+  and charges it as *committed* address space the moment numpy is imported,
+  before any work happens -- ~490 MB on a 16-core machine, for a server that
+  runs no numerical kernels. Capping it takes this process from ~532 MB of
+  private commit to ~50 MB. It only bites where numpy is installed (signac does
+  not require it), which is the usual case in a research environment. The caps
+  have to be set *here* rather than inside `aexp.mcp_server`: OpenBLAS reads
+  them once when it loads, and the `aexp` package -- which pulls numpy
+  transitively -- is imported before any line of that module runs.
 
 This pattern is canonical: every Python reference server under
 [modelcontextprotocol/servers](https://github.com/modelcontextprotocol/servers)
@@ -155,7 +169,11 @@ interpreter directly instead of going through `uvx`:
     "aexp": {
       "command": "<absolute-path-to-your-env-python>",
       "args": ["-m", "aexp.mcp_server"],
-      "env": {"PYTHONUNBUFFERED": "1"}
+      "env": {
+        "PYTHONUNBUFFERED": "1",
+        "OPENBLAS_NUM_THREADS": "1",
+        "OMP_NUM_THREADS": "1"
+      }
     }
   }
 }
