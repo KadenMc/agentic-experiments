@@ -546,6 +546,46 @@ def _merge_or_write_mcp_json(
     return InstallAction("merged_json", rel)
 
 
+# Environment applied to the ``aexp`` MCP server process, both launch forms.
+#
+# ``PYTHONUNBUFFERED`` is belt + suspenders for stdio flushing on Windows.
+#
+# The BLAS thread caps are a *memory* fix, not a performance knob. OpenBLAS
+# reserves a per-thread buffer pool sized to the machine's core count, and that
+# reservation is committed address space charged at import time, before any work
+# happens. Measured on a 16-core machine: importing ``aexp.mcp_server`` costs
+# 532 MB of private commit against 58 MB of working set -- i.e. ~490 MB of it is
+# reserved-and-never-touched. Claude Code spawns one of these servers per
+# session, so a handful of concurrent sessions can exhaust the commit limit.
+# Capping the pool takes that import to ~50 MB, a 10.6x reduction.
+#
+# An MCP server does no numerical work -- it is a stdio JSON dispatcher -- so one
+# thread is *correct* here, not merely cheap. Nothing measurable gets slower.
+#
+# Why this lives in the launcher env and NOT at the top of ``aexp/mcp_server.py``
+# (this was tried, measured, and does nothing -- do not "simplify" it back):
+# OpenBLAS reads these variables once, when it loads, so they must be set before
+# numpy is first imported. Both launch forms import the ``aexp`` package before a
+# single line of ``mcp_server.py`` executes -- ``-m aexp.mcp_server`` initializes
+# the parent package during module resolution, and the ``aexp-mcp-server``
+# console script resolves ``aexp.mcp_server:main`` the same way -- and
+# ``aexp/__init__.py`` imports ``aexp.runs`` -> ``signac`` -> ``numpy`` at module
+# scope. An ``os.environ.setdefault`` inside ``mcp_server.py`` therefore runs
+# after OpenBLAS has already reserved: still 532 MB, verified. Setting it in the
+# spawned process's environment is immune to import order.
+#
+# ``OPENBLAS_NUM_THREADS`` and ``OMP_NUM_THREADS`` are each independently
+# sufficient; both are set because which one applies depends on how numpy was
+# built. ``MKL_NUM_THREADS`` is deliberately absent -- measured to have no effect
+# on an OpenBLAS-backed numpy, so shipping it would only imply a guarantee we
+# have not verified.
+_MCP_SERVER_ENV = {
+    "PYTHONUNBUFFERED": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "OMP_NUM_THREADS": "1",
+}
+
+
 def _build_mcp_server_entry(repo_root: Path, *, dev: bool = False) -> dict[str, Any]:
     """Compose the ``mcpServers.aexp`` entry for ``.mcp.json``.
 
@@ -578,15 +618,18 @@ def _build_mcp_server_entry(repo_root: Path, *, dev: bool = False) -> dict[str, 
     ``.mcp.json`` hard-codes your machine's Python path, so it is
     **not** safe to commit as-is — gitignore it while iterating.
 
-    ``PYTHONUNBUFFERED=1`` is set on both forms as belt + suspenders for
-    stdio flushing on Windows.
+    Both forms get the same ``env`` block (``_MCP_SERVER_ENV``):
+    ``PYTHONUNBUFFERED=1`` for stdio flushing on Windows, plus BLAS
+    thread caps that cut this process's private commit from ~532 MB to
+    ~50 MB. See the comment on ``_MCP_SERVER_ENV`` for why the caps have
+    to be set here rather than inside ``aexp/mcp_server.py``.
     """
     if dev:
         import sys as _sys
         return {
             "command": _sys.executable,
             "args": ["-m", "aexp.mcp_server"],
-            "env": {"PYTHONUNBUFFERED": "1"},
+            "env": dict(_MCP_SERVER_ENV),
         }
     return {
         "command": "uvx",
@@ -595,7 +638,7 @@ def _build_mcp_server_entry(repo_root: Path, *, dev: bool = False) -> dict[str, 
             "agentic-experiments[mcp]",
             "aexp-mcp-server",
         ],
-        "env": {"PYTHONUNBUFFERED": "1"},
+        "env": dict(_MCP_SERVER_ENV),
     }
 
 

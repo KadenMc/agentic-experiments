@@ -78,6 +78,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **MCP server no longer reserves ~490 MB of commit per session.** The generated
+  `.mcp.json` entry for the `aexp` server now sets `OPENBLAS_NUM_THREADS=1` and
+  `OMP_NUM_THREADS=1` on both launch forms (`uvx` and `--dev`). OpenBLAS reserves a
+  per-thread buffer pool sized to the machine's core count and charges it as *committed*
+  address space the moment numpy is imported -- before any work happens. Measured on a
+  16-core machine: importing `aexp.mcp_server` cost **532 MB of private commit against
+  58 MB of working set**, i.e. ~490 MB reserved and never touched. Since one server is
+  spawned per editor session, a handful of concurrent sessions could exhaust the machine's
+  commit limit. With the caps the same import costs **50 MB -- a 10.6x reduction, ~482 MB
+  saved per session**. An MCP server is a stdio JSON dispatcher that runs no numerical
+  kernels, so capping its BLAS pool is *correct*, not a speed/memory trade: there is no
+  functional or performance change. Re-run `aexp install` to pick this up.
+
+  The caps must live in the **launcher environment**, not at the top of
+  `aexp/mcp_server.py`. OpenBLAS reads the variables once, when it loads, so they have to
+  be set before numpy is first imported -- and both launch forms import the `aexp` package
+  (`aexp/__init__.py` -> `aexp.runs` -> `signac` -> `numpy`) before a single line of
+  `mcp_server.py` executes: `-m aexp.mcp_server` initializes the parent package during
+  module resolution, and the `aexp-mcp-server` console script resolves
+  `aexp.mcp_server:main` the same way. An `os.environ.setdefault` inside `mcp_server.py`
+  was tried and measured at **532 MB -- no improvement at all**. `MKL_NUM_THREADS` is
+  deliberately not set: measured to have no effect on an OpenBLAS-backed numpy.
+  `tests/test_mcp_server_memory.py` guards both the shipped env and, on machines where the
+  reservation is measurable, the actual reduction.
+
+
 - **`atomic_write` no longer corrupts a destination that two processes write at once.**
   The temp file was named from the destination alone (`dest.name + ".tmp"`), so every
   concurrent writer of one destination shared a single temp: each opened it `O_TRUNC`,
