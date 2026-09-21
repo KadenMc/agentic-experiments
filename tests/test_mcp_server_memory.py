@@ -89,8 +89,10 @@ def test_capping_threads_actually_shrinks_the_import() -> None:
     uncapped = _import_cost_mb(capped=False)
     if uncapped < 200:
         pytest.skip(
-            f"no measurable BLAS reservation on this build/machine "
-            f"(uncapped import = {uncapped} MB); nothing for the cap to save"
+            f"no measurable BLAS reservation here: uncapped import = {uncapped} MB "
+            f"on {os.cpu_count()} cores. The reservation scales with core count, so a "
+            f"small CI runner lands here legitimately -- on those machines the shipped-env "
+            f"test above is what guards the fix."
         )
 
     capped = _import_cost_mb(capped=True)
