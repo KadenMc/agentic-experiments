@@ -88,6 +88,9 @@ dev = [
     "pytest-cov (>=5.0,<7.0)",
     "ruff (>=0.6,<1.0)",
     "mypy (>=1.11,<2.0)",
+    # Reads a process's committed memory. Only tests/test_mcp_server_memory.py
+    # needs it, but undeclared it silently turned that test into a no-op in CI.
+    "psutil (>=5.9,<8.0)",
 ]
 
 [tool.poetry]

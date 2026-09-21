@@ -554,6 +554,31 @@ def test_install_dev_mcp_entry_uses_current_interpreter(fresh_git_repo: Path) ->
     assert entry["env"].get("PYTHONUNBUFFERED") == "1"
 
 
+def test_install_mcp_entry_caps_blas_threads(fresh_git_repo: Path) -> None:
+    """Both MCP launch forms ship BLAS thread caps in their launcher ``env``.
+
+    OpenBLAS reserves a per-thread buffer pool sized to the core count and
+    charges it as committed address space at numpy import time -- ~490 MB per
+    process on a 16-core machine, for a server that does no numerical work.
+    Claude Code runs one of these per session.
+
+    The caps have to be in the launcher ``env`` and NOT at the top of
+    ``aexp/mcp_server.py``: both launch forms import the ``aexp`` package
+    (-> ``aexp.runs`` -> signac -> numpy) before a single line of that module
+    runs, so an in-module ``os.environ.setdefault`` fires after OpenBLAS has
+    already reserved and measurably does nothing. If someone relocates the caps
+    there, this test is what fails.
+    """
+    for dev in (False, True):
+        install_scaffold(fresh_git_repo, dev=dev, force=True)
+        mcp = json.loads((fresh_git_repo / ".mcp.json").read_text("utf-8"))
+        env = mcp["mcpServers"]["aexp"]["env"]
+        assert env["OPENBLAS_NUM_THREADS"] == "1", f"missing cap (dev={dev})"
+        assert env["OMP_NUM_THREADS"] == "1", f"missing cap (dev={dev})"
+        # Stdio guard must survive alongside the new keys.
+        assert env["PYTHONUNBUFFERED"] == "1"
+
+
 def test_install_dev_flag_can_be_toggled_on_reinstall(fresh_git_repo: Path) -> None:
     """Running install without --dev after a dev install rewrites back to uvx."""
     install_scaffold(fresh_git_repo, dev=True)
