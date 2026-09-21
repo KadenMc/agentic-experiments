@@ -120,7 +120,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the full package-init cost: `kb_write_guard` **506 MB -> 6 MB**, `session_start`
   **506 MB -> 4 MB**, `stop_validate` **506 MB -> 6 MB**. Hooks have no launcher
   environment, so a BLAS thread cap cannot reach them -- and this takes them to zero heavy
-  imports rather than merely to a capped numpy. `tests/test_lazy_init.py` pins that.
+  imports rather than merely to a capped numpy. `tests/test_lazy_init.py` pins that by
+  *discovering* the modules in `aexp/hooks/` rather than listing them, so a newly added
+  hook is covered without anyone remembering to register it, and `aexp/hooks/__init__.py`
+  now documents the constraint where a hook author will actually see it.
 
   It does not help the MCP server or the CLI, both of which import `aexp.runs` directly
   and so bypass the package init. What it removes elsewhere is a trap: a consumer

@@ -13,6 +13,7 @@ with core count, so a size assertion would be machine-dependent and flaky.
 """
 from __future__ import annotations
 
+import pkgutil
 import subprocess
 import sys
 import textwrap
@@ -20,7 +21,18 @@ import textwrap
 import pytest
 
 import aexp
+import aexp.hooks
 from aexp import _LAZY, _LAZY_EXPORTS
+
+# Discovered, never hardcoded. Every hook is a `python -m aexp.hooks.<mod>`
+# process, and kb_write_guard is wired to Write|Edit|MultiEdit -- one process
+# per file edit. A hand-maintained list would silently miss the next hook
+# somebody adds, which is precisely how the cost this test guards got in.
+_HOOK_MODULES = sorted(
+    f"aexp.hooks.{m.name}"
+    for m in pkgutil.iter_modules(aexp.hooks.__path__)
+    if not m.name.startswith("_")
+)
 
 # Resolving these needs the optional [wandb] extra installed.
 _WANDB_NAMES = frozenset(_LAZY_EXPORTS["aexp.trackers.wandb_adapter"])
@@ -39,19 +51,7 @@ def _in_fresh_interpreter(body: str) -> str:
 
 @pytest.mark.parametrize(
     "module",
-    [
-        "aexp",
-        "aexp.utils.atomic",
-        "aexp.utils.paths",
-        "aexp.schema",
-        # The hooks matter most: they run as ``python -m aexp.hooks.<mod>``, and
-        # kb_write_guard is wired to Write|Edit|MultiEdit -- a fresh process per
-        # file edit. They have no launcher env, so an env-var cap cannot reach
-        # them; not importing the numerical stack at all is the only fix.
-        "aexp.hooks.kb_write_guard",
-        "aexp.hooks.session_start",
-        "aexp.hooks.stop_validate",
-    ],
+    ["aexp", "aexp.utils.atomic", "aexp.utils.paths", "aexp.schema", *_HOOK_MODULES],
 )
 def test_importing_does_not_pull_the_numerical_stack(module: str) -> None:
     """The actual contract. ``aexp.utils.atomic`` is the motivating case."""
@@ -64,6 +64,17 @@ def test_importing_does_not_pull_the_numerical_stack(module: str) -> None:
         """
     )
     assert loaded == "", f"importing {module} pulled in: {loaded}"
+
+
+def test_hook_discovery_actually_found_the_hooks() -> None:
+    """Guard the guard: an empty discovery would make the test above vacuous.
+
+    ``kb_write_guard`` is named explicitly because it is the load-bearing one --
+    it runs on every Write/Edit/MultiEdit. If a refactor moves or renames it,
+    fail here loudly rather than quietly covering nothing.
+    """
+    assert _HOOK_MODULES, "no hook modules discovered; the import guard is vacuous"
+    assert "aexp.hooks.kb_write_guard" in _HOOK_MODULES
 
 
 # ---------------------------------------------------------------------------
