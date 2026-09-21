@@ -554,13 +554,19 @@ def add_many_to_queue(
 
 
 def _job_to_queue_entry(job: signac.job.Job) -> QueueEntry:
-    q = dict(job.doc.get("queue") or {})
-    link = read_run_link(job.doc)
+    # One doc snapshot instead of three separate `job.doc` round trips
+    # (queue, aexp/run-link, status) -- cuts I/O and Windows heartbeat-race
+    # surface, at the cost of the three groups of fields reflecting one
+    # coherent instant instead of three independently-timed reads (fine
+    # for a listing projection like this).
+    doc = doc_op_with_retry(lambda: job.doc())
+    q = dict(doc.get("queue") or {})
+    link = read_run_link(doc)
     return QueueEntry(
         job_id=job.id,
         experiment_id=link.get("experiment_id") or job.sp.get("experiment_id"),
         hypothesis_id=link.get("hypothesis_id") or job.sp.get("hypothesis_id"),
-        status=job.doc.get("status"),
+        status=doc.get("status"),
         tag=q.get("tag"),
         queued_at=q.get("queued_at"),
         sp=dict(job.sp),
@@ -888,8 +894,14 @@ def _proc_create_time(pid: int) -> float | None:
 def _record_running_proc(
     job: signac.job.Job, *, pid: int, pgid: int | None, host: str
 ) -> None:
-    """Stamp ``job.doc["queue"]["proc"]`` so :func:`stop_queued` can find us."""
-    queue_doc = dict(job.doc.get("queue") or {})
+    """Stamp ``job.doc["queue"]["proc"]`` so :func:`stop_queued` can find us.
+
+    Called right after spawning the subprocess -- the heartbeat thread
+    started by ``run_lifecycle`` is already live at this point, so both
+    the read and the write here race it on Windows (see
+    :func:`doc_op_with_retry`).
+    """
+    queue_doc = dict(doc_op_with_retry(lambda: job.doc.get("queue")) or {})
     proc_info: dict[str, Any] = {
         "pid": pid,
         "host": host,
@@ -901,7 +913,7 @@ def _record_running_proc(
     if fingerprint is not None:
         proc_info["start_fingerprint"] = fingerprint
     queue_doc["proc"] = proc_info
-    job.doc["queue"] = queue_doc
+    doc_op_with_retry(lambda: job.doc.__setitem__("queue", queue_doc))
 
 
 def _clear_running_proc(job: signac.job.Job) -> None:
@@ -912,14 +924,36 @@ def _clear_running_proc(job: signac.job.Job) -> None:
     targeting a live process. We blow away ``proc`` on every exit path
     so the only time it's present is between Popen-spawn and wait-return.
 
-    Tolerates Windows doc-store rename races: if a concurrent writer
-    (typically ``stop_queued``'s ``_finalize_stopped``) wins the
-    atomic-write race, our cleanup is redundant — they've already
-    cleared ``proc`` in the same write that flipped status. Catching
-    and dropping the ``PermissionError`` here keeps run_queued's
-    ``finally``-block from raising over a benign loss-of-race.
+    Guards against clobbering a concurrent operator-stop record
+    -------------------------------------------------------------
+    This function reads the whole ``queue`` subdict, mutates one field
+    (``proc``), and writes the whole subdict back. If ``stop_queued``'s
+    ``_finalize_stopped`` stamps ``last_error.cause = "operator_stop"``
+    in between our read and our write, writing our stale snapshot back
+    silently reverts that record — no exception is raised anywhere,
+    because both individual operations succeed; the only problem is
+    that our copy of ``queue`` is out of date. This was observed
+    happening in practice, not merely theorised. ``doc_op_with_retry``
+    cannot help here: it only retries an operation that *raises*
+    ``PermissionError``, and a stale-but-successful read never raises.
+
+    The fix mirrors ``run_queued``'s post-failure write: re-read fresh,
+    check whether an operator stop is already recorded, and skip the
+    write entirely when it is — ``_finalize_stopped`` has already
+    cleared ``proc`` itself in that same write, so there's nothing left
+    for us to do. This narrows the race window (the read is now as
+    close to the write as this function can get it) but doesn't
+    eliminate it outright; a real fix needs either a single atomic
+    multi-field update or a per-job lock, which is out of scope here.
     """
-    queue_doc = dict(job.doc.get("queue") or {})
+    queue_doc = dict(doc_op_with_retry(lambda: job.doc.get("queue")) or {})
+    last_error = queue_doc.get("last_error")
+    prior_cause = last_error.get("cause") if isinstance(last_error, dict) else None
+    if prior_cause == "operator_stop":
+        # An operator stop already recorded the terminal state and
+        # cleared `proc` itself in that same write. Writing our stale
+        # snapshot back here would silently revert that record.
+        return
     queue_doc.pop("proc", None)
     try:
         doc_op_with_retry(lambda: job.doc.__setitem__("queue", queue_doc))
@@ -1067,19 +1101,25 @@ def run_queued(
                 # The whole "read existing doc, check cause, write back"
                 # cycle can race against ``stop_queued``'s atomic rename
                 # on Windows — both the load AND the rename can raise
-                # PermissionError. We tolerate both: if we can't read,
-                # assume the concurrent writer is already doing the
-                # right thing; if we can't write, their record stands.
+                # PermissionError. The read goes through doc_op_with_retry
+                # so a transient collision doesn't silently drop this
+                # forensic record; only once retries are exhausted do we
+                # fall back to assuming the concurrent writer is already
+                # doing the right thing (and if the write below can't
+                # land either, their record stands).
                 try:
-                    existing = dict(job.doc.get("queue") or {})
+                    existing = dict(
+                        doc_op_with_retry(lambda: job.doc.get("queue")) or {}
+                    )
                     prior_cause = (
                         existing.get("last_error", {}).get("cause")
                         if isinstance(existing.get("last_error"), dict)
                         else None
                     )
                 except PermissionError:
-                    # Concurrent writer is mid-rename. Their last_error
-                    # record will reflect their cause; ours is skipped.
+                    # Concurrent writer is mid-rename and retries were
+                    # exhausted. Their last_error record will reflect
+                    # their cause; ours is skipped.
                     prior_cause = "operator_stop"
                     existing = None
                 if prior_cause != "operator_stop" and existing is not None:
@@ -1449,7 +1489,11 @@ def stop_queued(
         If the job id doesn't exist in the run store.
     """
     job = open_run(job_id, repo_root=repo_root)
-    queue_doc = dict(job.doc.get("queue") or {})
+    # This function exists to act on a job that may still be live -- the
+    # heartbeat thread from a concurrently running `run_queued` can be
+    # rewriting the same doc file at this exact instant, which collides
+    # with this read on Windows (see doc_op_with_retry).
+    queue_doc = dict(doc_op_with_retry(lambda: job.doc.get("queue")) or {})
     proc_info = queue_doc.get("proc")
 
     # Path A: no live process recorded. Either the job never ran, or it
@@ -1566,7 +1610,7 @@ def _finalize_stopped(
     the same instant and Windows raises ``PermissionError`` on whichever
     one loses. Retrying with backoff resolves the race transparently.
     """
-    queue_doc = dict(job.doc.get("queue") or {})
+    queue_doc = dict(doc_op_with_retry(lambda: job.doc.get("queue")) or {})
     queue_doc["last_error"] = {
         "returncode": returncode,
         "stderr_tail": f"stopped via `aexp queue stop`: {note}",

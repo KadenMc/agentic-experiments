@@ -42,7 +42,7 @@ from typing import Any, TypedDict
 
 from aexp.runs import TERMINAL_STATUSES, RunStoreNotInitialized, get_run_store
 from aexp.schema import iso_utc_now, read_run_link
-from aexp.utils.atomic import atomic_write
+from aexp.utils.atomic import atomic_write, doc_op_with_retry
 from aexp.utils.paths import find_repo_root, read_machine_label
 
 INDEX_DIR_REL = Path(".aexp") / "runs-index"
@@ -69,12 +69,24 @@ class IndexFile(TypedDict):
 
 
 def _index_entry_for_job(job: Any) -> IndexEntry | None:
-    """Project a signac job into an index entry, or None if non-terminal."""
-    status = job.doc.get("status")
+    """Project a signac job into an index entry, or None if non-terminal.
+
+    Takes one doc snapshot up front rather than three separate
+    ``job.doc.get(...)`` calls. Only the status check can land during a
+    live window (this walks every job in the store, including running
+    ones); once status is confirmed terminal, the remaining fields can't
+    race a heartbeat that has already stopped. A single ``job.doc()``
+    snapshot still beats reading status alone and then re-reading for
+    the rest: it costs one disk round trip either way, and folding the
+    (race-free) later fields into that same read is free, not extra
+    wrapping of reads that don't need it.
+    """
+    doc = doc_op_with_retry(lambda: job.doc())
+    status = doc.get("status")
     if status not in TERMINAL_STATUSES:
         return None
 
-    link = read_run_link(job.doc)
+    link = read_run_link(doc)
     entry: IndexEntry = {
         "job_id": job.id,
         "status": status,
@@ -92,7 +104,7 @@ def _index_entry_for_job(job: Any) -> IndexEntry | None:
     if condition:
         entry["condition"] = str(condition)
 
-    registered_at = job.doc.get("created_at") or job.doc.get("started_at")
+    registered_at = doc.get("created_at") or doc.get("started_at")
     if registered_at:
         entry["registered_at"] = str(registered_at)
 

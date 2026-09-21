@@ -106,6 +106,7 @@ from aexp.runs import (
 )
 from aexp.trackers import NoopAdapter, TrackerInitError
 from aexp.trackers import bind_tracker as _bind_tracker
+from aexp.utils.atomic import doc_op_with_retry
 from aexp.validate import validate_repo as _validate_repo
 
 mcp = FastMCP("aexp")
@@ -797,7 +798,11 @@ def queue_list(
 def queue_remove(job_id: str) -> dict[str, Any]:
     """Mark one queued job ``abandoned`` without executing it."""
     job = _remove_from_queue(job_id)
-    return {"job_id": job.id, "status": job.doc.get("status")}
+    # The job being removed may still be live (a queued-but-not-yet-run job
+    # has no heartbeat, but nothing stops an operator from calling this on
+    # one that is), so this status read can race the heartbeat thread's
+    # writes on Windows.
+    return {"job_id": job.id, "status": doc_op_with_retry(lambda: job.doc.get("status"))}
 
 
 # ---------------------------------------------------------------------------

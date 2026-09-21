@@ -43,7 +43,7 @@ from typing import Any, TypedDict
 
 from aexp.runs import TERMINAL_STATUSES, get_run_store
 from aexp.schema import iso_utc_now, read_run_link
-from aexp.utils.atomic import atomic_write
+from aexp.utils.atomic import atomic_write, doc_op_with_retry
 from aexp.utils.paths import find_repo_root, read_machine_label
 
 LEDGER_DIR_REL = Path(".aexp") / "ledger"
@@ -127,8 +127,19 @@ def project_to_ledger_entry(
         Override for the ``registered_machine`` field. Defaults to
         whatever :func:`aexp.utils.paths.read_machine_label` returns
         for the job's project (typically the install's machine_label).
+
+    Notes
+    -----
+    Reads the doc once via ``job.doc()`` (signac's unsynced-plain-dict
+    snapshot) rather than six separate ``job.doc.get(...)`` round trips.
+    Auto-promotion fires from ``mark_status``'s terminal-transition hook,
+    which can run while ``run_lifecycle``'s heartbeat thread is still
+    winding down -- one snapshot is both cheaper and narrower race
+    surface than six, at the cost of every field reflecting one instant
+    instead of six independently-timed ones (fine for this projection).
     """
-    status = job.doc.get("status")
+    doc = doc_op_with_retry(lambda: job.doc())
+    status = doc.get("status")
     if status not in TERMINAL_STATUSES:
         raise ValueError(
             f"refusing to promote job {job.id}: status={status!r} is not terminal "
@@ -143,20 +154,20 @@ def project_to_ledger_entry(
         "promoted_at": iso_utc_now(),
     }
 
-    link = read_run_link(job.doc)
+    link = read_run_link(doc)
     if link:
         entry["run_link"] = dict(link)
 
     for k in ("started_at", "ended_at"):
-        v = job.doc.get(k)
+        v = doc.get(k)
         if v is not None:
             entry[k] = str(v)  # type: ignore[literal-required]
 
-    wallclock = job.doc.get("wallclock_s")
+    wallclock = doc.get("wallclock_s")
     if isinstance(wallclock, (int, float)):
         entry["wallclock_s"] = float(wallclock)
 
-    tracker = _tracker_projection(job.doc)
+    tracker = _tracker_projection(doc)
     if tracker:
         entry["tracker"] = tracker
 

@@ -289,9 +289,17 @@ def find_runs(
 
     results: list[signac.job.Job] = []
     for job in candidates:
-        # Apply status filter via the job document.
-        if status is not None and job.doc.get("status") != status:
-            continue
+        # Apply status filter via the job document. Guarded because
+        # `--status running` targets exactly the jobs whose heartbeat
+        # thread is live and rewriting this same doc.
+        if status is not None:
+            # doc_op_with_retry calls this closure before `job` is rebound
+            # by the next iteration, so the loop-variable capture is safe;
+            # the lambda-default-arg workaround for B023 would instead
+            # trip up mypy's lambda inference.
+            job_status = doc_op_with_retry(lambda: job.doc.get("status"))  # noqa: B023
+            if job_status != status:
+                continue
         # Back-compat fallback when sp doesn't carry the link but doc does.
         if experiment_id is not None and job.sp.get("experiment_id") != experiment_id:
             link = read_run_link(job.doc)
@@ -376,8 +384,16 @@ def run_lifecycle(
     the main path than mask it with a heartbeat-thread crash.
     """
     if mark_started:
-        job.doc["status"] = "running"
-        job.doc.setdefault("started_at", iso_utc_now())
+        # Guarded like every other write in this module: the heartbeat
+        # thread below isn't started yet, but an external reader (a
+        # status poll, `aexp list-runs`, a dashboard) can still open
+        # this doc for read while these writes are mid-rename on
+        # Windows. The threat model is "anything else can touch this
+        # document concurrently", not only "the heartbeat thread".
+        doc_op_with_retry(lambda: job.doc.__setitem__("status", "running"))
+        doc_op_with_retry(
+            lambda: job.doc.setdefault("started_at", iso_utc_now())
+        )
 
     interval = _resolve_heartbeat_interval(heartbeat_s)
     stop_event = threading.Event() if interval > 0 else None
