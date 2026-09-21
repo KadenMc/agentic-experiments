@@ -38,9 +38,7 @@ import time
 from collections import deque
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Literal
-
-import signac
+from typing import TYPE_CHECKING, Any, Literal
 
 from aexp.kb_io import ArtifactNotFoundError, load_experiment
 from aexp.runs import (
@@ -54,6 +52,9 @@ from aexp.schema import MaterializeResult, QueueEntry, iso_utc_now, read_run_lin
 from aexp.utils.atomic import atomic_write, doc_op_with_retry
 from aexp.utils.git import get_dirty_diff_summary
 from aexp.utils.paths import find_repo_root
+
+if TYPE_CHECKING:
+    import signac
 
 # ---------------------------------------------------------------------------
 # Errors

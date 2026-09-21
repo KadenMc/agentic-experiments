@@ -2,7 +2,7 @@
 
 Claude Code invokes this with ``cwd`` set to the consumer repo root. We read
 the two reference files (if present) and print them to stdout wrapped in
-``=== <label> ===`` headers — Claude Code surfaces stdout from SessionStart
+``=== <label> ===`` headers -- Claude Code surfaces stdout from SessionStart
 hooks as additional context for the session.
 """
 from __future__ import annotations
@@ -14,7 +14,7 @@ from pathlib import Path
 def emit_file(label: str, path: Path) -> None:
     """Print ``=== label ===`` followed by file contents.
 
-    Silently no-ops when the file is absent — consumer repos may legitimately
+    Silently no-ops when the file is absent -- consumer repos may legitimately
     defer authoring ``kb/mission/CHALLENGE.md`` until they have a mission
     statement worth writing down. ``aexp validate`` surfaces the same fact as
     a structured issue when it actually matters.

@@ -23,9 +23,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
-
-import signac
+from typing import TYPE_CHECKING, Any, Literal
 
 from aexp import __version__
 from aexp.utils.atomic import atomic_write
@@ -34,6 +32,9 @@ from aexp.utils.paths import (
     read_installed_marker,
     write_installed_marker,
 )
+
+if TYPE_CHECKING:
+    import signac
 
 
 class InstallRefused(RuntimeError):
@@ -1209,6 +1210,8 @@ def install_scaffold(
 
 def _ensure_signac_project(path: Path) -> signac.Project:
     """Idempotently initialize a signac project rooted at ``path``."""
+    import signac
+
     path.mkdir(parents=True, exist_ok=True)
     try:
         return signac.get_project(path=str(path))

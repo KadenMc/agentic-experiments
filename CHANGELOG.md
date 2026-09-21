@@ -98,6 +98,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still dropped and the next interval carries on. Unrelated `job.doc` access elsewhere in
   the package remains unguarded and is not addressed here.
 
+- **`aexp.cli` no longer imports signac or numpy at load time.** The previous lazy-init
+  pass on `aexp/__init__.py` explicitly called out that it "does not help ... the CLI,
+  which imports `aexp.runs` directly and so bypasses the package init" -- this closes
+  that gap. Five leaf modules imported `signac` at module scope purely to spell type
+  annotations (`linking.py`, `queue.py`, `trackers/base.py`): that import now lives under
+  `if TYPE_CHECKING:`, safe because every one of them already has
+  `from __future__ import annotations`, so the annotations are strings and were never
+  evaluated at runtime anyway. The remaining two (`runs.py`'s `init_run_store` /
+  `get_run_store`, `install.py`'s `_ensure_signac_project`) call real signac functions, so
+  each keeps a `TYPE_CHECKING` import for its annotations plus a plain `import signac`
+  inside the function body that uses it. `tests/test_lazy_init.py` now parametrizes
+  `aexp.cli` alongside the existing no-signac/no-numpy cases.
+
+  **No public API change** -- every import path (`from aexp.runs import create_run`,
+  `from aexp.linking import summarize_run`, `import aexp`, ...) behaves identically.
+
+  **Error timing shifts for a broken install specifically.** signac is a mandatory
+  dependency (`signac (>=2.3.0,<3.0.0)` in `pyproject.toml`, not an extra), so a valid
+  install is unaffected. But if an install were ever missing or had a broken signac (e.g.
+  a corrupted venv), `import aexp.cli` -- and so every `aex` invocation, including
+  `--help` -- used to fail immediately with the resulting `ModuleNotFoundError`. Now that
+  failure is deferred to the first call that actually touches the run store
+  (`init_run_store`, `get_run_store`, `install_scaffold`'s signac step, or anything that
+  imports one of these five modules and calls into signac), so a signac-independent verb
+  would run fine and the error would surface later and from a different place than before.
+
+- **`aexp/hooks/*.py` is now enforced ASCII-only, closing a gap the repo had already been
+  bitten by once.** Hooks run as `python -m aexp.hooks.<name>` subprocesses, and on
+  Windows a plain `print()` to a pipe defaults to the console's cp1252 encoding rather
+  than UTF-8 -- any character outside ASCII (an emoji, box-drawing, a curly quote, an
+  en/em dash) raises `UnicodeEncodeError` the moment it would be written. The rule existed
+  only as a convention nobody had written down, checked previously only by
+  `tests/test_jupyter_connect_postuse.py` after one hook hit it at runtime.
+  `tests/test_hooks_ascii.py` now discovers every `.py` file under `src/aexp/hooks/` and
+  asserts each decodes as plain ASCII, so the rule is enforced repo-wide instead of
+  per-incident. Fixed the pre-existing em-dashes (U+2014) this test found: three in
+  `aexp/hooks/__init__.py`'s docstring plus six more spread across `_parse_hook_input.py`,
+  `jupyter_connect_postuse.py`, `session_start.py` and `stop_validate.py` -- all in prose
+  (docstrings/comments), none previously reachable at runtime, converted to `--`.
+
 
 - **MCP server no longer reserves a per-core BLAS thread-pool arena.** The generated
   `.mcp.json` entry for the `aexp` server now sets `OPENBLAS_NUM_THREADS=1` and

@@ -1,9 +1,9 @@
-"""Claude Code hooks — shipped inside the ``aexp`` package.
+"""Claude Code hooks -- shipped inside the ``aexp`` package.
 
 Each hook is a small ``python -m aexp.hooks.<name>`` entry point referenced
 from the ``.claude/settings.json`` that :func:`aexp.install.install_scaffold`
 writes into a consumer repo. The hook scripts **do not** get copied into the
-repo — they live here and upgrade with ``pip install -U agentic-experiments``.
+repo -- they live here and upgrade with ``pip install -U agentic-experiments``.
 
 Design notes
 ------------
@@ -13,7 +13,7 @@ Design notes
   is used as a fallback when that assumption does not hold.
 - Hooks never subprocess into ``scripts/`` files. Validation calls
   :func:`aexp.kb_validate.validate_kb` in-process.
-- The upstream harness's telemetry has been intentionally stripped — ``aexp``
+- The upstream harness's telemetry has been intentionally stripped -- ``aexp``
   does not emit to any external sink.
 - **Keep hooks cheap to import.** ``kb_write_guard`` is wired to
   ``Write|Edit|MultiEdit``, so one of these processes is spawned on *every file
