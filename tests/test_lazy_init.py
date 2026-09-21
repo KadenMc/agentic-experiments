@@ -39,7 +39,19 @@ def _in_fresh_interpreter(body: str) -> str:
 
 @pytest.mark.parametrize(
     "module",
-    ["aexp", "aexp.utils.atomic", "aexp.utils.paths", "aexp.schema"],
+    [
+        "aexp",
+        "aexp.utils.atomic",
+        "aexp.utils.paths",
+        "aexp.schema",
+        # The hooks matter most: they run as ``python -m aexp.hooks.<mod>``, and
+        # kb_write_guard is wired to Write|Edit|MultiEdit -- a fresh process per
+        # file edit. They have no launcher env, so an env-var cap cannot reach
+        # them; not importing the numerical stack at all is the only fix.
+        "aexp.hooks.kb_write_guard",
+        "aexp.hooks.session_start",
+        "aexp.hooks.stop_validate",
+    ],
 )
 def test_importing_does_not_pull_the_numerical_stack(module: str) -> None:
     """The actual contract. ``aexp.utils.atomic`` is the motivating case."""

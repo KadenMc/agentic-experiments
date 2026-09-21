@@ -114,10 +114,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and bare `import aexp` from **506 MB to 5 MB**, with neither pulling signac or numpy at
   all.
 
-  This is a dependency-graph fix, not a second memory fix -- the separate BLAS thread cap
-  on the MCP server launcher already reclaims the bulk of those megabytes there. What it removes is a
-  trap: a consumer importing one file-write helper no longer has to either pay for the
-  numerical stack or independently know to set an OpenBLAS environment variable.
+  **The installed hooks are the biggest beneficiary.** They run as
+  `python -m aexp.hooks.<mod>`, and `kb_write_guard` is wired to `Write|Edit|MultiEdit`,
+  so it fires on every file edit an agent makes. Each of those short-lived processes paid
+  the full package-init cost: `kb_write_guard` **506 MB -> 6 MB**, `session_start`
+  **506 MB -> 4 MB**, `stop_validate` **506 MB -> 6 MB**. Hooks have no launcher
+  environment, so a BLAS thread cap cannot reach them -- and this takes them to zero heavy
+  imports rather than merely to a capped numpy. `tests/test_lazy_init.py` pins that.
+
+  It does not help the MCP server or the CLI, both of which import `aexp.runs` directly
+  and so bypass the package init. What it removes elsewhere is a trap: a consumer
+  importing one file-write helper no longer has to either pay for the numerical stack or
+  independently know to set an OpenBLAS environment variable.
 
   **No API change.** `from aexp import create_run`, `import aexp; aexp.create_run`,
   `aexp.runs` as a submodule attribute, `from aexp.runs import create_run`, `dir(aexp)`
