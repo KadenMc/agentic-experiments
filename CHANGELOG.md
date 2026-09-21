@@ -103,6 +103,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tests/test_mcp_server_memory.py` guards both the shipped env and, on machines where the
   reservation is measurable, the actual reduction.
 
+- **`import aexp` no longer drags in signac and numpy.** `aexp/__init__.py` imported the
+  run-store layer at module scope, and `aexp.runs` -> `signac` -> `synced_collections` ->
+  `numpy`. Python initializes a parent package before any of its submodules, so that cost
+  landed on *every* caller of *every* submodule -- including someone who only wanted
+  `from aexp.utils.atomic import atomic_write`. Every submodule cost the same ~506 MB of
+  private commit; there was no cheap corner of the package. Public names are now resolved
+  on first attribute access (PEP 562), following the lazy-table pattern already used in
+  `aexp/trackers/__init__.py`. Importing `aexp.utils.atomic` went from **506 MB to 4 MB**,
+  and bare `import aexp` from **506 MB to 5 MB**, with neither pulling signac or numpy at
+  all.
+
+  This is a dependency-graph fix, not a second memory fix -- the separate BLAS thread cap
+  on the MCP server launcher already reclaims the bulk of those megabytes there. What it removes is a
+  trap: a consumer importing one file-write helper no longer has to either pay for the
+  numerical stack or independently know to set an OpenBLAS environment variable.
+
+  **No API change.** `from aexp import create_run`, `import aexp; aexp.create_run`,
+  `aexp.runs` as a submodule attribute, `from aexp.runs import create_run`, `dir(aexp)`
+  and `__all__` all behave exactly as before; a `TYPE_CHECKING` block preserves strict
+  typing and IDE autocomplete. Error timing is preserved too: a genuinely missing optional
+  dependency (`wandb`) still raises `ImportError` rather than being flattened into a
+  misleading `AttributeError`, which `tests/test_lazy_init.py` pins along with the
+  no-signac/no-numpy contract. That contract is asserted as "these modules are not
+  imported" rather than as a megabyte ceiling, which would be machine-dependent.
+
+
 
 - **`atomic_write` no longer corrupts a destination that two processes write at once.**
   The temp file was named from the destination alone (`dest.name + ".tmp"`), so every
