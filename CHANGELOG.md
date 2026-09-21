@@ -78,16 +78,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **MCP server no longer reserves ~490 MB of commit per session.** The generated
+- **MCP server no longer reserves a per-core BLAS thread-pool arena.** The generated
   `.mcp.json` entry for the `aexp` server now sets `OPENBLAS_NUM_THREADS=1` and
   `OMP_NUM_THREADS=1` on both launch forms (`uvx` and `--dev`). OpenBLAS reserves a
   per-thread buffer pool sized to the machine's core count and charges it as *committed*
-  address space the moment numpy is imported -- before any work happens. Measured on a
-  16-core machine: importing `aexp.mcp_server` cost **532 MB of private commit against
-  58 MB of working set**, i.e. ~490 MB reserved and never touched. Since one server is
-  spawned per editor session, a handful of concurrent sessions could exhaust the machine's
-  commit limit. With the caps the same import costs **50 MB -- a 10.6x reduction, ~482 MB
-  saved per session**. An MCP server is a stdio JSON dispatcher that runs no numerical
+  address space the moment numpy is imported -- before any work happens, and almost none of
+  it is ever touched. One server is spawned per editor session, so with several sessions
+  open the reservation can consume a large share of the system commit limit while the
+  processes sit idle. An MCP server is a stdio JSON dispatcher that runs no numerical
   kernels, so capping its BLAS pool is *correct*, not a speed/memory trade: there is no
   functional or performance change. Re-run `aexp install` to pick this up.
 
@@ -102,6 +100,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   deliberately not set: measured to have no effect on an OpenBLAS-backed numpy.
   `tests/test_mcp_server_memory.py` guards both the shipped env and, on machines where the
   reservation is measurable, the actual reduction.
+
+  *How large the saving is depends entirely on the environment, and the figures here come
+  from a single development machine* (Windows 11, 16 cores, Python 3.12, numpy installed):
+  importing `aexp.mcp_server` cost 532 MB of private commit against 58 MB of working set,
+  and 50 MB with the caps applied. The arena is sized from the core count, so a machine
+  with fewer cores reserves proportionally less. An environment **without numpy installed
+  pays nothing at all** -- signac does not require numpy, so a minimal install never
+  reproduces this. Treat the mechanism as the claim and the numbers as one observation of
+  it.
+
+- **`import aexp` no longer drags in signac and numpy.** `aexp/__init__.py` imported the
+  run-store layer at module scope, and `aexp.runs` -> `signac` -> `synced_collections` ->
+  `numpy`. Python initializes a parent package before any of its submodules, so that cost
+  landed on *every* caller of *every* submodule -- including someone who only wanted
+  `from aexp.utils.atomic import atomic_write`. Every submodule cost the same; there was
+  no cheap corner of the package. Public names are now resolved on first attribute access
+  (PEP 562), following the lazy-table pattern already used in
+  `aexp/trackers/__init__.py`. `import aexp`, `aexp.schema` and `aexp.utils.*` now import
+  neither signac nor numpy.
+
+  **The installed hooks are the biggest beneficiary.** They run as
+  `python -m aexp.hooks.<mod>`, and `kb_write_guard` is wired to `Write|Edit|MultiEdit`,
+  so it fires on every file edit an agent makes. Each of those short-lived processes paid
+  the full package-init cost, meaning it was paid **per edit rather than per session**.
+  Hooks have no launcher environment, so a BLAS thread cap cannot reach them -- and this
+  removes the import entirely rather than merely capping it. `tests/test_lazy_init.py` pins that by
+  *discovering* the modules in `aexp/hooks/` rather than listing them, so a newly added
+  hook is covered without anyone remembering to register it, and `aexp/hooks/__init__.py`
+  now documents the constraint where a hook author will actually see it.
+
+  It does not help the MCP server or the CLI, both of which import `aexp.runs` directly
+  and so bypass the package init. What it removes elsewhere is a trap: a consumer
+  importing one file-write helper no longer has to either pay for the numerical stack or
+  independently know to set an OpenBLAS environment variable.
+
+  **No API change.** `from aexp import create_run`, `import aexp; aexp.create_run`,
+  `aexp.runs` as a submodule attribute, `from aexp.runs import create_run`, `dir(aexp)`
+  and `__all__` all behave exactly as before; a `TYPE_CHECKING` block preserves strict
+  typing and IDE autocomplete. Error timing is preserved too: a genuinely missing optional
+  dependency (`wandb`) still raises `ImportError` rather than being flattened into a
+  misleading `AttributeError`, which `tests/test_lazy_init.py` pins along with the
+  no-signac/no-numpy contract. That contract is asserted as "these modules are not
+  imported" rather than as a megabyte ceiling, which would be machine-dependent.
+
+  *Figures below are from a single development machine* (Windows 11, 16 cores, Python
+  3.12, numpy installed, BLAS thread caps off) and are one observation, not a guarantee:
+  `import aexp` 506 -> 5 MB of private commit, `aexp.utils.atomic` 506 -> 4 MB,
+  `aexp.hooks.kb_write_guard` 506 -> 6 MB, `session_start` 506 -> 4 MB, `stop_validate`
+  506 -> 6 MB. Most of that is an OpenBLAS arena sized from the core count, so fewer cores
+  means proportionally less; an environment **without numpy installed** (signac does not
+  require it) never paid that part and sees only the signac import removed. The invariant
+  the tests assert is that signac and numpy are not imported -- deliberately not a
+  number.
+
 
 
 - **`atomic_write` no longer corrupts a destination that two processes write at once.**
