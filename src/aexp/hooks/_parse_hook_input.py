@@ -1,6 +1,6 @@
 """Shared JSON parser for Claude Code hook payloads.
 
-Handles ``Write``, ``Edit``, and ``MultiEdit`` tool payloads uniformly —
+Handles ``Write``, ``Edit``, and ``MultiEdit`` tool payloads uniformly --
 returns the ``(file_path, post_edit_content)`` that the hook logic needs to
 inspect. ``Edit`` simulates the single-replace; ``MultiEdit`` applies all
 edits in sequence.

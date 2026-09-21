@@ -3,7 +3,7 @@
 Fires whenever the agent calls any Jupyter MCP server's
 ``connect_to_jupyter`` tool. Emits a high-salience instruction telling the
 agent to immediately re-run :func:`aexp.jupyter.init` via the live Jupyter
-MCP. This closes the "re-init blind spot" — an agent that switches ports
+MCP. This closes the "re-init blind spot" -- an agent that switches ports
 mid-session would otherwise carry stale identity beliefs into subsequent
 ``execute_code`` / ``execute_cell`` calls.
 
@@ -29,7 +29,7 @@ def _extract_jupyter_url(payload: dict[str, Any]) -> str:
 def _summarize_response(payload: dict[str, Any]) -> str:
     """Return a one-line summary of the tool response, or ``""`` if uninformative.
 
-    Defensive — different MCP servers shape their responses differently.
+    Defensive -- different MCP servers shape their responses differently.
     """
     resp = payload.get("tool_response")
     if isinstance(resp, dict):

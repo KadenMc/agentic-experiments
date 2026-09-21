@@ -16,9 +16,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Any
-
-import signac
+from typing import TYPE_CHECKING, Any
 
 from aexp.runs import find_runs, open_run
 from aexp.schema import (
@@ -30,6 +28,9 @@ from aexp.schema import (
     read_run_link,
     write_run_link,
 )
+
+if TYPE_CHECKING:
+    import signac
 
 # ---------------------------------------------------------------------------
 # Query helpers

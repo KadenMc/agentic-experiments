@@ -18,9 +18,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from time import perf_counter
-from typing import Any
-
-import signac
+from typing import TYPE_CHECKING, Any
 
 from aexp.schema import RunLink, RunStatus, iso_utc_now, read_run_link, write_run_link
 from aexp.utils.atomic import doc_op_with_retry
@@ -29,6 +27,9 @@ from aexp.utils.paths import (
     find_repo_root,
     resolve_run_store_path,
 )
+
+if TYPE_CHECKING:
+    import signac
 
 # Default heartbeat interval (seconds). 30 is a good middle ground:
 # - signac's atomic-write doc store handles 30s writes without contention.
@@ -64,6 +65,8 @@ def init_run_store(repo_root: str | Path, path: str = ".runs") -> signac.Project
 
     Safe to call repeatedly: existing projects are returned as-is.
     """
+    import signac
+
     root = Path(repo_root)
     store = (root / path).resolve()
     store.mkdir(parents=True, exist_ok=True)
@@ -80,6 +83,8 @@ def get_run_store(repo_root: str | Path | None = None) -> signac.Project:
     ``.git`` dir or an install marker. Reads the configured run-store path
     out of ``.aexp/installed.json`` if present.
     """
+    import signac
+
     root = Path(repo_root).resolve() if repo_root else find_repo_root()
     store = resolve_run_store_path(root)
     if not store.is_dir():

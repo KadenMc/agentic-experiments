@@ -51,10 +51,24 @@ def _in_fresh_interpreter(body: str) -> str:
 
 @pytest.mark.parametrize(
     "module",
-    ["aexp", "aexp.utils.atomic", "aexp.utils.paths", "aexp.schema", *_HOOK_MODULES],
+    [
+        "aexp",
+        "aexp.cli",
+        "aexp.utils.atomic",
+        "aexp.utils.paths",
+        "aexp.schema",
+        *_HOOK_MODULES,
+    ],
 )
 def test_importing_does_not_pull_the_numerical_stack(module: str) -> None:
-    """The actual contract. ``aexp.utils.atomic`` is the motivating case."""
+    """The actual contract. ``aexp.utils.atomic`` is the motivating case.
+
+    ``aexp.cli`` is the other one worth naming: it transitively imports
+    ``install``, ``linking``, ``queue``, ``runs`` and ``trackers.base`` --
+    every leaf module that talks to signac -- so it is the surface most
+    likely to regress if one of those five goes back to a module-scope
+    ``import signac``.
+    """
     loaded = _in_fresh_interpreter(
         f"""
         import sys

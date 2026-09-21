@@ -13,15 +13,16 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
-
-import signac
+from typing import TYPE_CHECKING, Any
 
 from aexp.kb_io import (
     load_experiment,
     load_hypothesis,
 )
 from aexp.schema import TrackerBinding, batch_slug, read_run_link
+
+if TYPE_CHECKING:
+    import signac
 
 # ---------------------------------------------------------------------------
 # Handle / Record

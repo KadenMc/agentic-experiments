@@ -14,7 +14,7 @@ from aexp.kb_validate import format_text, validate_kb
 
 def main() -> int:
     # Drain stdin (safe if empty; matches the `exec 0</dev/null` redirect in
-    # the upstream shell version — no hook input is needed for stop-hook work).
+    # the upstream shell version -- no hook input is needed for stop-hook work).
     try:
         _ = sys.stdin.read()
     except Exception:
