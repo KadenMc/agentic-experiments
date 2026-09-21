@@ -385,7 +385,14 @@ def run_lifecycle(
         # interval — important for tests and for fast-failing runs.
         while stop_event is not None and not stop_event.wait(interval):
             try:
-                job.doc["heartbeat_at"] = iso_utc_now()
+                # Retry first: on Windows signac's atomic-rename doc write
+                # collides with any overlapping open handle, and an external
+                # liveness probe reading this very key is the expected
+                # concurrent reader. Reaching the except below now means the
+                # retries were exhausted, not that a single blip occurred.
+                doc_op_with_retry(
+                    lambda: job.doc.__setitem__("heartbeat_at", iso_utc_now())
+                )
             except Exception:
                 # Doc-store contention (Windows file-lock against the
                 # main thread's reads), workspace deletion, or other
@@ -417,7 +424,9 @@ def run_lifecycle(
         # Touch once on enter so consumers don't have to wait an interval
         # for the first liveness signal.
         try:
-            job.doc["heartbeat_at"] = iso_utc_now()
+            doc_op_with_retry(
+                lambda: job.doc.__setitem__("heartbeat_at", iso_utc_now())
+            )
         except Exception:
             pass
         hb_thread = threading.Thread(

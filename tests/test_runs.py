@@ -18,6 +18,7 @@ from aexp.runs import (
     open_run,
     run_lifecycle,
 )
+from aexp.utils.atomic import doc_op_with_retry
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -331,7 +332,10 @@ def test_run_lifecycle_writes_heartbeat_during_run(
     with run_lifecycle(job, heartbeat_s=0.15):
         deadline = time.monotonic() + 6.0
         while time.monotonic() < deadline and len(seen) < 2:
-            hb = job.doc.get("heartbeat_at")
+            # Same Windows rename-vs-open race the write side guards: this
+            # read can land while the heartbeat thread is replacing the doc.
+            # This is the call that raised PermissionError in CI.
+            hb = doc_op_with_retry(lambda: job.doc.get("heartbeat_at"))
             if hb and (not seen or hb != seen[-1]):
                 seen.append(hb)
             time.sleep(0.15)

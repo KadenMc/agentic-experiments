@@ -78,6 +78,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A run's heartbeat now retries on Windows document-store contention instead of silently
+  dropping a tick.** The heartbeat thread updates `doc["heartbeat_at"]` on an interval, and
+  signac's doc write renames a temp file over the target. On Windows -- unlike POSIX, where
+  `rename` is atomic against open handles -- that rename collides with any overlapping open
+  handle, so a concurrent reader or writer gets `PermissionError`. The whole point of the
+  heartbeat is for something *outside* the runner process to poll it, so that concurrent
+  reader is the feature's expected use case, not an edge case.
+
+  The heartbeat write and the enter-touch now go through `doc_op_with_retry` -- the helper
+  `runs.py` already used for every other `job.doc` mutation. It was added a day after the
+  heartbeat landed and never backfilled here, so a collision quietly skipped that interval's
+  update: exactly the signal an external liveness probe reads. The regression test's own
+  polling read is guarded the same way, and that unguarded *read*, not the production write,
+  is what intermittently failed CI on Windows (the write side already swallowed its
+  exception and continued).
+
+  This reduces rather than eliminates contention loss: if all retries exhaust, the tick is
+  still dropped and the next interval carries on. Unrelated `job.doc` access elsewhere in
+  the package remains unguarded and is not addressed here.
+
+
 - **MCP server no longer reserves a per-core BLAS thread-pool arena.** The generated
   `.mcp.json` entry for the `aexp` server now sets `OPENBLAS_NUM_THREADS=1` and
   `OMP_NUM_THREADS=1` on both launch forms (`uvx` and `--dev`). OpenBLAS reserves a
