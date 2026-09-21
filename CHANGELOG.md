@@ -78,6 +78,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`aexp queue stop` no longer crashes, or silently records the wrong reason, when it
+  races the run it is stopping.** Reads of a run's job document that can execute while
+  another thread or process is writing it now go through `doc_op_with_retry`, and several
+  functions that read the same document 2-6 times in a row now take a single snapshot
+  instead. On Windows -- unlike POSIX, where `rename` is atomic against open handles -- a
+  document write collides with any overlapping open handle and raises `PermissionError`;
+  signac also disables its own in-process lock there, so two threads in one interpreter
+  race exactly as two processes do.
+
+  An instrumented 100-run reproduction of the stop path attributed its failures to three
+  distinct mechanisms, all now addressed: `_finalize_stopped` read the document with no
+  protection at all, so a collision crashed the stop command outright before it could
+  confirm; `_record_running_proc` was unguarded while its sibling `_clear_running_proc`
+  was already guarded; and the test's own polling read raced the production write.
+
+  `_clear_running_proc` got a different fix on purpose. It read the `queue` key into a
+  snapshot and wrote the whole key back, so an operator-stop record written in between was
+  silently reverted -- and because its *write* was already wrapped in `doc_op_with_retry`,
+  retrying made the bad write land more reliably. It now re-reads and skips its write when
+  an operator stop is already recorded, mirroring the guard `run_queued` already used.
+
+  **Not fixed here:** a rarer mode where a run's `status` reverts after a successful stop,
+  because `mark_status` writes status and finish-time as two separate round trips against
+  a whole-document, last-writer-wins store. Closing that needs either a single atomic
+  multi-field write or a real per-job lock; it is designed but deliberately not
+  implemented in this change. These fixes narrow its window without closing it.
+
+  Effect on the flaky regression test, on one development machine and offered as one
+  observation rather than a guarantee: it failed roughly 1 in 9 runs on an idle machine
+  before, and passed 30 of 30 after. That is consistent with a real improvement but does
+  not prove the race is gone, particularly with the mode above still open.
+
+
 - **A run's heartbeat now retries on Windows document-store contention instead of silently
   dropping a tick.** The heartbeat thread updates `doc["heartbeat_at"]` on an interval, and
   signac's doc write renames a temp file over the target. On Windows -- unlike POSIX, where

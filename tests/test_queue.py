@@ -34,6 +34,7 @@ from aexp.queue import (
     stop_queued,
 )
 from aexp.runs import create_run, mark_status, open_run
+from aexp.utils.atomic import doc_op_with_retry
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -1578,10 +1579,20 @@ def test_stop_queued_kills_running_subprocess_via_sigterm(
     thread.start()
     try:
         # Wait for the subprocess to record its pid AND become alive.
+        # This read races the runner thread's `_record_running_proc` write
+        # for the same doc file on Windows, exactly like the production
+        # race this test exists to exercise -- route it through
+        # doc_op_with_retry too so a transient PermissionError here doesn't
+        # fail the test independently of what we're actually testing.
         deadline = time.monotonic() + 10.0
         while time.monotonic() < deadline:
             job = open_run(job_id, repo_root=installed_repo)
-            if (job.doc.get("queue") or {}).get("proc"):
+            try:
+                queue_doc = doc_op_with_retry(lambda: job.doc.get("queue")) or {}  # noqa: B023
+            except PermissionError:
+                time.sleep(0.1)
+                continue
+            if queue_doc.get("proc"):
                 if (tmp_path / "started.flag").exists():
                     break
             time.sleep(0.1)

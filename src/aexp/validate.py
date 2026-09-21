@@ -32,6 +32,7 @@ from aexp.kb_validate import validate_kb
 from aexp.linking import list_batches
 from aexp.runs import get_run_store
 from aexp.schema import Issue, RunStatus, read_run_link
+from aexp.utils.atomic import doc_op_with_retry
 from aexp.utils.paths import find_repo_root
 
 VALID_STATUSES: set[RunStatus] = {
@@ -159,7 +160,14 @@ def _check_run_links(repo_root: Path) -> list[Issue]:
 
     for job in project:
         rel = f".runs/workspace/{job.id}"
-        status = job.doc.get("status")
+        # One doc snapshot per job instead of two separate `job.doc`
+        # round trips (status, run-link) -- `validate_repo` walks every
+        # job including live ones, so both reads can otherwise race a
+        # running job's heartbeat thread on Windows. Safe to capture the
+        # loop variable: doc_op_with_retry calls this closure immediately,
+        # before `job` is rebound by the next iteration.
+        doc = doc_op_with_retry(lambda: job.doc())  # noqa: B023
+        status = doc.get("status")
         if status is not None and status not in VALID_STATUSES:
             issues.append(
                 Issue(
@@ -172,7 +180,7 @@ def _check_run_links(repo_root: Path) -> list[Issue]:
                 )
             )
 
-        link = read_run_link(job.doc)
+        link = read_run_link(doc)
         if not link:
             issues.append(
                 Issue(

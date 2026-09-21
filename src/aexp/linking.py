@@ -28,6 +28,7 @@ from aexp.schema import (
     read_run_link,
     write_run_link,
 )
+from aexp.utils.atomic import doc_op_with_retry
 
 if TYPE_CHECKING:
     import signac
@@ -47,9 +48,20 @@ def runs_for_experiment(
 
 
 def summarize_run(job: signac.job.Job) -> RunSummary:
-    """Flatten a signac job into a :class:`RunSummary` row."""
-    link = read_run_link(job.doc)
-    tracker = dict(job.doc.get("tracker", {}))
+    """Flatten a signac job into a :class:`RunSummary` row.
+
+    Reads the job's doc once -- via ``job.doc()``, signac's own "give me
+    an unsynced plain-dict copy" call -- instead of five separate
+    ``job.doc.get(...)`` round trips. Each of those was its own
+    open-read-parse of ``signac_job_document.json`` and its own chance to
+    collide with a live heartbeat thread on Windows; one snapshot cuts
+    both the I/O and the race surface, at the cost of the five fields
+    now reflecting one coherent instant rather than five independent
+    ones (an improvement for a projection like this, not a regression).
+    """
+    doc = doc_op_with_retry(lambda: job.doc())
+    link = read_run_link(doc)
+    tracker = dict(doc.get("tracker", {}))
     hyp = job.sp.get("hypothesis_id") or link.get("hypothesis_id")
     exp = job.sp.get("experiment_id") or link.get("experiment_id")
     condition = job.sp.get("condition")
@@ -63,12 +75,12 @@ def summarize_run(job: signac.job.Job) -> RunSummary:
         job_id=job.id,
         experiment_id=exp,
         hypothesis_id=hyp,
-        status=job.doc.get("status"),
+        status=doc.get("status"),
         batch_slug=slug,
         tracker_url=tracker.get("url"),
         sp=dict(job.sp),
-        started_at=job.doc.get("started_at"),
-        ended_at=job.doc.get("ended_at"),
+        started_at=doc.get("started_at"),
+        ended_at=doc.get("ended_at"),
     )
 
 
@@ -106,10 +118,27 @@ def list_batches(
     """
     jobs = find_runs(experiment_id=experiment_id, repo_root=repo_root)
 
+    # One doc snapshot per job, taken up front and reused for every read
+    # below (grouping, status tally, tracker-group lookup) instead of
+    # re-opening signac_job_document.json on each `.doc.get(...)` call.
+    # Same trade as `summarize_run`: fewer disk round trips and less
+    # Windows heartbeat-race surface, in exchange for each job's fields
+    # reflecting one coherent instant instead of whichever instant each
+    # separate read happened to land on.
+    # doc_op_with_retry calls the closure immediately, before `job` is
+    # rebound by the next comprehension step, so capturing the loop
+    # variable is safe here.
+    docs: dict[str, dict[str, Any]] = {
+        job.id: doc_op_with_retry(lambda: job.doc())  # noqa: B023
+        for job in jobs
+    }
+
     # Group by (experiment_id, *selector_values)
     groups: dict[tuple, list[signac.job.Job]] = defaultdict(list)
     for job in jobs:
-        exp = job.sp.get("experiment_id") or read_run_link(job.doc).get("experiment_id")
+        exp = job.sp.get("experiment_id") or read_run_link(docs[job.id]).get(
+            "experiment_id"
+        )
         if exp is None:
             continue
         key = (exp,) + _selector_key(job, selector_keys)
@@ -120,7 +149,9 @@ def list_batches(
         exp = key[0]
         sel = dict(zip(selector_keys, key[1:], strict=True))
         first = batch_jobs[0]
-        hyp = first.sp.get("hypothesis_id") or read_run_link(first.doc).get("hypothesis_id")
+        hyp = first.sp.get("hypothesis_id") or read_run_link(docs[first.id]).get(
+            "hypothesis_id"
+        )
         cond = sel.get("condition")
         slug = batch_slug(
             hypothesis_id=hyp,
@@ -130,10 +161,10 @@ def list_batches(
         )
         status_counts: Counter[RunStatus] = Counter()
         for j in batch_jobs:
-            status_counts[j.doc.get("status") or "created"] += 1
+            status_counts[docs[j.id].get("status") or "created"] += 1
         tracker_group: str | None = None
         for j in batch_jobs:
-            tgroup = j.doc.get("tracker", {}).get("group")
+            tgroup = (docs[j.id].get("tracker") or {}).get("group")
             if tgroup:
                 tracker_group = tgroup
                 break
@@ -195,13 +226,18 @@ def link_to_experiment(
         hypothesis_id=hypothesis_id,
         sub_hypothesis_id=sub_hypothesis_id,
     )
-    write_run_link(job.doc, link.model_dump())
+    # `aex link` can be pointed at a job while it's still running (e.g.
+    # fixing a mislinked run mid-flight), so both the write and the
+    # status read below can race a live heartbeat thread on Windows.
+    # write_run_link does a setitem + a pop; wrapping the whole call
+    # is safe to retry as a unit since both of its steps are idempotent.
+    doc_op_with_retry(lambda: write_run_link(job.doc, link.model_dump()))
     # If the job is already terminal, re-promote so the ledger entry's
     # run_link field reflects the new linkage. Without this, the ledger
     # projection would lag the on-disk job.doc until the next backfill.
     # Idempotent — re-promotion overwrites the entry.
     from aexp.runs import TERMINAL_STATUSES
-    if job.doc.get("status") in TERMINAL_STATUSES:
+    if doc_op_with_retry(lambda: job.doc.get("status")) in TERMINAL_STATUSES:
         try:
             from aexp.ledger import promote_to_ledger
             promote_to_ledger(job, repo_root=repo_root)

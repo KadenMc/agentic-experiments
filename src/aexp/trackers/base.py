@@ -20,6 +20,7 @@ from aexp.kb_io import (
     load_hypothesis,
 )
 from aexp.schema import TrackerBinding, batch_slug, read_run_link
+from aexp.utils.atomic import doc_op_with_retry
 
 if TYPE_CHECKING:
     import signac
@@ -236,7 +237,11 @@ class TrackerContext:
             project=self.project,
             group=self.group,
         )
-        self.job.doc["tracker"] = binding.model_dump()
+        # Runs inside a live run_lifecycle, so the heartbeat thread may be
+        # rewriting this same doc concurrently on Windows.
+        doc_op_with_retry(
+            lambda: self.job.doc.__setitem__("tracker", binding.model_dump())
+        )
         return binding
 
 
@@ -563,7 +568,10 @@ def bind_tracker(
         project=project,
         group=group,
     )
-    job.doc["tracker"] = binding.model_dump()
+    # Documented to run inside a live run_lifecycle, so this races the
+    # heartbeat thread's doc writes on Windows exactly like
+    # TrackerContext.bind above.
+    doc_op_with_retry(lambda: job.doc.__setitem__("tracker", binding.model_dump()))
     return handle
 
 
