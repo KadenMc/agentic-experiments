@@ -8,9 +8,16 @@ repo -- they live here and upgrade with ``pip install -U agentic-experiments``.
 Design notes
 ------------
 
-- Hooks derive the repo root from ``os.getcwd()``. Claude Code invokes hooks
-  with ``cwd`` set to the project root. ``aexp.utils.paths.find_repo_root``
-  is used as a fallback when that assumption does not hold.
+- **Hooks find their checkout from the event, not from ``os.getcwd()``.**
+  Claude Code runs a hook in the session's current directory, which can be a
+  subfolder or a worktree. In a desktop-app worktree session it is the main
+  checkout, and the worktree arrives only in the input's ``cwd``.
+  :mod:`aexp.hooks._project` resolves the checkout an event concerns (the
+  session's current directory for Stop and SessionStart, the edited file for
+  writes) and accepts it only when it belongs to the session's own
+  repository, named by ``CLAUDE_PROJECT_DIR``, worktrees included. A
+  session-level hook otherwise checks the project, and a write hook leaves a
+  file from another repository alone.
 - Hooks never subprocess into ``scripts/`` files. Validation calls
   :func:`aexp.kb_validate.validate_kb` in-process.
 - The upstream harness's telemetry has been intentionally stripped -- ``aexp``

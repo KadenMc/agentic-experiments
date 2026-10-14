@@ -1,27 +1,23 @@
 """Stop hook: run a full KB validation before Claude finishes the turn.
 
 Runs :func:`aexp.kb_validate.validate_kb` over the full ``kb/`` tree of the
-current repo (derived from ``cwd``). Exit code ``2`` blocks the turn from
-closing cleanly when structural validation fails.
+checkout the session is working in: the one holding the session's current
+directory when it belongs to the session's own repository, a worktree
+included, and otherwise the project the session started in. See
+:mod:`aexp.hooks._project`. Exit code ``2`` blocks the turn from closing
+cleanly when structural validation fails.
 """
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 
+from aexp.hooks._project import read_event, read_stdin, session_checkout
 from aexp.kb_validate import format_text, validate_kb
 
 
 def main() -> int:
-    # Drain stdin (safe if empty; matches the `exec 0</dev/null` redirect in
-    # the upstream shell version -- no hook input is needed for stop-hook work).
-    try:
-        _ = sys.stdin.read()
-    except Exception:
-        pass
-
-    repo_root = Path.cwd()
-    kb_root = repo_root / "kb"
+    event = read_event(read_stdin())
+    kb_root = session_checkout(event) / "kb"
 
     if not kb_root.is_dir():
         return 0

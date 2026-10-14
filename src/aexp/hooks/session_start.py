@@ -1,7 +1,9 @@
 """SessionStart hook: inject ``kb/ACTIVE.md`` + ``kb/mission/CHALLENGE.md``.
 
-Claude Code invokes this with ``cwd`` set to the consumer repo root. We read
-the two reference files (if present) and print them to stdout wrapped in
+The files come from the checkout the session is working in, resolved by
+:func:`aexp.hooks._project.session_checkout`, which in a desktop-app worktree
+session is the worktree rather than the main checkout. We read the two
+reference files (if present) and print them to stdout wrapped in
 ``=== <label> ===`` headers -- Claude Code surfaces stdout from SessionStart
 hooks as additional context for the session.
 """
@@ -9,6 +11,8 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+
+from aexp.hooks._project import read_event, read_stdin, session_checkout
 
 
 def emit_file(label: str, path: Path) -> None:
@@ -30,7 +34,7 @@ def emit_file(label: str, path: Path) -> None:
 
 
 def main() -> int:
-    repo_root = Path.cwd()
+    repo_root = session_checkout(read_event(read_stdin()))
     emit_file("kb/mission/CHALLENGE.md", repo_root / "kb" / "mission" / "CHALLENGE.md")
     emit_file("kb/ACTIVE.md", repo_root / "kb" / "ACTIVE.md")
     return 0

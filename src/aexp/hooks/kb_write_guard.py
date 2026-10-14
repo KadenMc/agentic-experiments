@@ -4,6 +4,10 @@ Runs :func:`aexp.kb_validate.validate_kb` in-process against the single file
 the agent just wrote/edited. Exit code ``2`` surfaces the validation error
 back to Claude Code so invalid KB edits do not go unnoticed.
 
+The file is validated against the ``kb/`` of the checkout it belongs to,
+which can be a worktree of the session's repository (see
+:mod:`aexp.hooks._project`).
+
 Skipped paths:
 
 - non-``.md`` files
@@ -11,6 +15,7 @@ Skipped paths:
 - files under ``kb/research/data/`` or ``kb/lessons/`` (carve-outs
   preserved from the upstream shell version)
 - any path containing a dot-prefixed segment (hidden files)
+- files in another repository, whose ``kb/`` is not this project's to validate
 """
 from __future__ import annotations
 
@@ -19,6 +24,7 @@ import sys
 from pathlib import Path
 
 from aexp.hooks._parse_hook_input import parse_hook_input
+from aexp.hooks._project import checkout_for, file_path_for, is_within, read_event
 from aexp.kb_validate import format_text, validate_kb
 
 CARVE_OUT_RE = re.compile(r"(^|/)kb/(research/data|lessons)/")
@@ -49,10 +55,14 @@ def main() -> int:
     if HIDDEN_SEGMENT_RE.search(normalized):
         return 0
 
-    repo_root = Path.cwd()
-    kb_root = repo_root / "kb"
-
-    abs_path = Path(fp) if Path(fp).is_file() else (repo_root / fp)
+    event = read_event(raw)
+    abs_path = file_path_for(fp, event)
+    checkout = checkout_for(abs_path, event)
+    if checkout is None:
+        return 0
+    kb_root = checkout / "kb"
+    if not is_within(abs_path, kb_root):
+        return 0
 
     try:
         result = validate_kb(kb_root, check_file=abs_path)

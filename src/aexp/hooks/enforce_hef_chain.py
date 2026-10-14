@@ -8,8 +8,9 @@ Blocks:
   experiment file to back it)
 
 Exit code ``2`` tells Claude Code to block the tool use and surface the
-stderr message to the agent. Claude Code invokes this hook with ``cwd`` set
-to the consumer repo root.
+stderr message to the agent. The referenced hypothesis or experiment is
+looked up in the ``kb/`` of the checkout the edited file belongs to (see
+:mod:`aexp.hooks._project`), and a file in another repository is left alone.
 """
 from __future__ import annotations
 
@@ -18,6 +19,7 @@ import sys
 from pathlib import Path
 
 from aexp.hooks._parse_hook_input import parse_hook_input
+from aexp.hooks._project import checkout_for, file_path_for, is_within, read_event
 
 HYPOTHESIS_PATH_RE = re.compile(r"kb/research/hypotheses/H\d{3}-.*\.md$")
 EXPERIMENT_PATH_RE = re.compile(r"kb/research/experiments/E\d{3}-.*\.md$")
@@ -74,8 +76,12 @@ def main() -> int:
     if not fp:
         return 0
 
-    repo_root = Path.cwd()
-    kb_root = repo_root / "kb"
+    event = read_event(raw)
+    abs_path = file_path_for(fp, event)
+    checkout = checkout_for(abs_path, event)
+    if checkout is None or not is_within(abs_path, checkout / "kb"):
+        return 0
+    kb_root = checkout / "kb"
 
     # Normalize to forward slashes for pattern matching.
     normalized = fp.replace("\\", "/")
