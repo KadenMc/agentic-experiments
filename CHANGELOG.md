@@ -78,6 +78,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Hooks check the checkout an event concerns, not their own working directory.** The
+  hooks assumed Claude Code runs them in the project root. It runs them in the session's
+  current directory, which follows `cd` into subfolders and worktrees, and in a worktree
+  session started from the desktop app it is the main checkout, with the worktree named
+  only in the hook input's `cwd`. So:
+  - `stop_validate` skipped validation from a subfolder, which has no `kb/` of its own.
+  - It validated another repository's `kb/` when the session's directory was there.
+  - In a desktop worktree session it validated the main checkout, so a broken worktree
+    passed and a main checkout broken by other work blocked a session that never touched it.
+  - `kb_write_guard` blocked any edit to another repository's `kb/`, and in a desktop
+    worktree session every `kb/` edit, as "not part of the validated research graph".
+  - `enforce_hef_chain` looked an edited file's hypothesis or experiment up in the wrong `kb/`.
+
+  The new `aexp.hooks._project` resolves the checkout from the event: the input's `cwd`
+  for `stop_validate` and `session_start`, the edited file for the two write hooks. It
+  accepts that checkout only when it belongs to the session's own repository, named by
+  `CLAUDE_PROJECT_DIR`, where a worktree counts as the same repository. Otherwise the
+  session hooks use the project, and the write hooks leave the file alone. Repository
+  identity comes from reading the `.git` entries, not from running git, since
+  `kb_write_guard` runs on every edit. Without `CLAUDE_PROJECT_DIR`, as under another
+  harness, the hooks behave as before apart from the subfolder fix.
+  `tests/test_hook_checkout.py` builds real repositories and worktrees, and its
+  behavioural tests fail on the previous code.
+
 - **`aexp queue stop` no longer crashes, or silently records the wrong reason, when it
   races the run it is stopping.** Reads of a run's job document that can execute while
   another thread or process is writing it now go through `doc_op_with_retry`, and several

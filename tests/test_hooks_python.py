@@ -7,14 +7,16 @@ Covers:
 - ``aexp.hooks.kb_write_guard`` carve-outs + delegation to kb_validate.
 - ``aexp.hooks.stop_validate`` full-KB validation.
 
-Strategy: hooks derive the repo root from ``os.getcwd()``. Each test
-constructs a project directory (via the ``scaffold_project`` fixture) and
-invokes the hook as ``python -m aexp.hooks.<name>`` with ``cwd`` set to
-that directory.
+Strategy: with no ``CLAUDE_PROJECT_DIR`` and no ``cwd`` in the payload, a
+hook falls back to its working directory. Each test constructs a project
+directory (via the ``scaffold_project`` fixture) and invokes the hook as
+``python -m aexp.hooks.<name>`` with ``cwd`` set to that directory.
+``test_hook_checkout.py`` covers subfolders, worktrees and other repositories.
 """
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -30,8 +32,13 @@ def _run_hook(
     python_exe: str,
     timeout: float = 15,
 ) -> subprocess.CompletedProcess[str]:
-    """Execute ``python -m aexp.hooks.<hook_name>`` with cwd set to ``project``."""
+    """Execute ``python -m aexp.hooks.<hook_name>`` with cwd set to ``project``.
+
+    ``CLAUDE_PROJECT_DIR`` is removed so a test run from inside a Claude Code
+    session cannot point the hook at that session's project.
+    """
     stdin = json.dumps(payload) if payload is not None else ""
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDE_PROJECT_DIR"}
     return subprocess.run(
         [python_exe, "-m", f"aexp.hooks.{hook_name}"],
         input=stdin,
@@ -40,6 +47,7 @@ def _run_hook(
         check=False,
         timeout=timeout,
         cwd=str(project),
+        env=env,
     )
 
 
