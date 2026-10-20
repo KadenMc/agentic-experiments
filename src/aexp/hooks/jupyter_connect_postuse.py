@@ -15,6 +15,8 @@ import json
 import sys
 from typing import Any
 
+from aexp.hooks._stdio import use_utf8
+
 
 def _extract_jupyter_url(payload: dict[str, Any]) -> str:
     tool_input = payload.get("tool_input") or {}
@@ -48,6 +50,7 @@ def _summarize_response(payload: dict[str, Any]) -> str:
 
 
 def main() -> int:
+    use_utf8()
     try:
         raw = sys.stdin.read()
     except Exception:

@@ -78,6 +78,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Every hook reads its payload as UTF-8, and writes UTF-8 to stderr as well as stdout.**
+  Claude Code writes a hook's JSON payload to stdin as UTF-8, with non-ASCII characters
+  left unescaped, and decodes the hook's stdout and stderr as UTF-8; both were observed with
+  Claude Code 2.1.269 on Windows. Python gave those pipes cp1252 there, with
+  `surrogateescape`, so reading the payload never failed: non-ASCII text simply arrived as
+  mojibake, and the hooks acted on it without a word.
+  - `kb_write_guard` and `enforce_hef_chain` skipped any file whose path held a non-ASCII
+    character, an accented user folder for instance, because the mangled path matched no
+    checkout.
+  - `session_start` and `stop_validate` used the project instead of a worktree whose path
+    held one.
+  - `enforce_hef_chain` could not match an `Edit`'s non-ASCII `old_string` against the file,
+    so it checked the file as it was before the edit. An edit that removed an experiment's
+    hypothesis reference got through that way.
+  - `jupyter_connect_postuse` could relay half a character: a UTF-8 byte read as cp1252 can
+    be a no-break space, which `strip()` removes.
+
+  The new `aexp.hooks._stdio.use_utf8()` switches stdin, stdout and stderr to UTF-8, and
+  every hook calls it before any I/O. It subsumes the stdout-only fix in the next entry.
+  Stderr has to follow stdin: once a non-ASCII file name is read correctly, a BLOCKED
+  message naming it would otherwise reach Claude Code as cp1252, which is not valid UTF-8.
+  `tests/test_hook_input_encoding.py` drives each hook with a payload written the way Claude
+  Code writes it, under `PYTHONIOENCODING=cp1252:surrogateescape`, which imposes the Windows
+  default on any platform. Each test fails on the previous code.
+
 - **`session_start` writes UTF-8, so it no longer crashes on Windows when a file it relays
   holds a character cp1252 lacks.** The hook prints `kb/mission/CHALLENGE.md` and
   `kb/ACTIVE.md` verbatim, and Claude Code adds that output to the session's context. On
