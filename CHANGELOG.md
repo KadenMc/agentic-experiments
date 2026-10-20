@@ -78,6 +78,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`session_start` writes UTF-8, so it no longer crashes on Windows when a file it relays
+  holds a character cp1252 lacks.** The hook prints `kb/mission/CHALLENGE.md` and
+  `kb/ACTIVE.md` verbatim, and Claude Code adds that output to the session's context. On
+  Windows a piped stdout defaults to cp1252, so the first character outside it, such as the
+  warning-sign emoji (U+26A0 U+FE0F) or a greater-than-or-equal sign (U+2265), raised
+  `UnicodeEncodeError` just after the first `=== ... ===` header: the hook exited 1 and the
+  session received neither file. For a consumer whose `CHALLENGE.md` used such characters,
+  that was nearly every Windows session start. `main()` now reconfigures stdout to UTF-8
+  before printing anything, and Claude Code reads hook output as UTF-8. Keeping hook
+  *source* ASCII (`tests/test_hooks_ascii.py`) still guards what a hook says itself, but it
+  could never cover text a hook relays. `tests/test_hook_output_encoding.py` runs the hook
+  with `PYTHONIOENCODING=cp1252`, which imposes the Windows default on any platform, and
+  fails on the previous code.
+
 - **Hooks check the checkout an event concerns, not their own working directory.** The
   hooks assumed Claude Code runs them in the project root. It runs them in the session's
   current directory, which follows `cd` into subfolders and worktrees, and in a worktree
