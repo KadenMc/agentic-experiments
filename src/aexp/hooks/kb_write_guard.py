@@ -25,6 +25,7 @@ from pathlib import Path
 
 from aexp.hooks._parse_hook_input import parse_hook_input
 from aexp.hooks._project import checkout_for, file_path_for, is_within, read_event
+from aexp.hooks._stdio import use_utf8
 from aexp.kb_validate import format_text, validate_kb
 
 CARVE_OUT_RE = re.compile(r"(^|/)kb/(research/data|lessons)/")
@@ -36,6 +37,7 @@ def _in_kb(normalized_fp: str) -> bool:
 
 
 def main() -> int:
+    use_utf8()
     try:
         raw = sys.stdin.read()
     except Exception:

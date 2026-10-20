@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 from aexp.hooks._project import read_event, read_stdin, session_checkout
+from aexp.hooks._stdio import use_utf8
 
 
 def emit_file(label: str, path: Path) -> None:
@@ -34,12 +35,7 @@ def emit_file(label: str, path: Path) -> None:
 
 
 def main() -> int:
-    # Write UTF-8 whatever the pipe's default (cp1252 on Windows). The rule
-    # that hook source be ASCII (tests/test_hooks_ascii.py) cannot keep this
-    # output ASCII, since it relays two files verbatim, and Claude Code reads
-    # hook output as UTF-8. Guarded in case stdout has been replaced.
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8")
+    use_utf8()
     repo_root = session_checkout(read_event(read_stdin()))
     emit_file("kb/mission/CHALLENGE.md", repo_root / "kb" / "mission" / "CHALLENGE.md")
     emit_file("kb/ACTIVE.md", repo_root / "kb" / "ACTIVE.md")

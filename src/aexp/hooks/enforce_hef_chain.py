@@ -20,6 +20,7 @@ from pathlib import Path
 
 from aexp.hooks._parse_hook_input import parse_hook_input
 from aexp.hooks._project import checkout_for, file_path_for, is_within, read_event
+from aexp.hooks._stdio import use_utf8
 
 HYPOTHESIS_PATH_RE = re.compile(r"kb/research/hypotheses/H\d{3}-.*\.md$")
 EXPERIMENT_PATH_RE = re.compile(r"kb/research/experiments/E\d{3}-.*\.md$")
@@ -68,6 +69,7 @@ def _find_existing_artifact(directory: Path, artifact_id: str) -> Path | None:
 
 
 def main() -> int:
+    use_utf8()
     try:
         raw = sys.stdin.read()
     except Exception:

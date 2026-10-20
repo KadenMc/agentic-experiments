@@ -18,6 +18,11 @@ Design notes
   repository, named by ``CLAUDE_PROJECT_DIR``, worktrees included. A
   session-level hook otherwise checks the project, and a write hook leaves a
   file from another repository alone.
+- **Hooks read and write UTF-8.** Claude Code sends a hook's payload as UTF-8
+  and decodes its stdout and stderr as UTF-8, while Python would give those
+  pipes cp1252 on Windows. Every hook's ``main()`` calls
+  :func:`aexp.hooks._stdio.use_utf8` before any I/O, so a non-ASCII path in a
+  payload, or a non-ASCII line in a file a hook relays, arrives intact.
 - Hooks never subprocess into ``scripts/`` files. Validation calls
   :func:`aexp.kb_validate.validate_kb` in-process.
 - The upstream harness's telemetry has been intentionally stripped -- ``aexp``

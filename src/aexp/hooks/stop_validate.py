@@ -12,10 +12,12 @@ from __future__ import annotations
 import sys
 
 from aexp.hooks._project import read_event, read_stdin, session_checkout
+from aexp.hooks._stdio import use_utf8
 from aexp.kb_validate import format_text, validate_kb
 
 
 def main() -> int:
+    use_utf8()
     event = read_event(read_stdin())
     kb_root = session_checkout(event) / "kb"
 
